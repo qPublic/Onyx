@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Onyx</string>
+	<key>CFBundleExecutable</key>
+	<string>Onyx</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>local.onyx.notch</string>
+	<key>CFBundleName</key>
+	<string>Onyx</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Onyx shows and controls what's playing in Spotify and Apple Music.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Onyx lets you connect paired Bluetooth devices quickly.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Onyx shows your upcoming events in the notch and lets the AI agent add events.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Mirror shows your camera so you can check how you look.</string>
+	<key>NSFocusStatusUsageDescription</key>
+	<string>Onyx shows whether a Focus is on in the notch.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>The AI agent can add reminders for you.</string>
+</dict>
+</plist>

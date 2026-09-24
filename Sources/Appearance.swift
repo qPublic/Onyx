@@ -71,6 +71,7 @@ enum AP {
     static let snapLayouts = "ap.snapLayouts"
     static let clearBlur = "ap.clearBlur"
     static let clearDropBelow = "ap.clearDropBelow"
+    static let musicCow = "ap.musicCow"
     static let tabs = "ap.tabs"
     static let defaultTab = "ap.defaultTab"
     static let homeAfterIdle = "ap.homeAfterIdle"
@@ -117,6 +118,7 @@ enum AP {
         snapLayouts: true,
         clearBlur: true,
         clearDropBelow: false,
+        musicCow: false,
         tabs: NotchTab.allCases.map(\.rawValue).joined(separator: ","),
         defaultTab: "last",
         homeAfterIdle: true,

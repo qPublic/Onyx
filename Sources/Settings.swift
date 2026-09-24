@@ -466,6 +466,7 @@ struct WidgetsSettings: View {
     @AppStorage(AP.collMid) var collMid = ""
     @AppStorage(AP.collRight) var collRight = "weather"
     @AppStorage(AP.bookshelf) var bookshelf = true
+    @AppStorage(AP.musicCow) var musicCow = false
 
     var body: some View {
         Form {
@@ -524,6 +525,7 @@ struct WidgetsSettings: View {
                         Button { home.toggle(p) } label: { Label(p.title, systemImage: home.contains(p) ? "checkmark" : p.icon) }
                     }
                 }
+                Toggle("Dancing cow under Now Playing", isOn: $musicCow)
             } header: { Text("Home boxes") }
 
             Section("File Shelf") {
@@ -580,6 +582,7 @@ struct LiveSettings: View {
 
     var body: some View {
         Form {
+            CanvasSettingsSection()
             Section("Live activities in the notch") {
                 Toggle("Live games for favorite teams", isOn: $sportsActivity)
                 Toggle("Stock ticker", isOn: $tickerActivity)

@@ -9,6 +9,7 @@ swiftc -sdk "$SDK" -target arm64-apple-macosx26.0 -swift-version 5 -O \
   -o "$APP/Contents/MacOS/Onyx" Sources/*.swift
 cp Resources/Info.plist "$APP/Contents/"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+cp Resources/*.gif "$APP/Contents/Resources/" 2>/dev/null || true
 # Sign with a stable local identity if one exists, so Accessibility grants survive rebuilds.
 # (Ad-hoc signatures change every build, and macOS then treats Onyx as a new app.)
 IDENTITY="Onyx Local Signing"

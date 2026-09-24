@@ -72,7 +72,7 @@ struct RemoteImage: View {
 // MARK: - Header widgets you can add / reorder in the expanded notch top bar
 
 enum NotchWidget: String, CaseIterable, Identifiable, Codable {
-    case clock, date, weather, battery, music, stock, nextEvent, focus, mirror, cpu, moon, coffee, btBattery, focusStatus
+    case clock, date, weather, battery, music, stock, nextEvent, focus, mirror, cpu, moon, coffee, btBattery, focusStatus, canvas
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -90,6 +90,7 @@ enum NotchWidget: String, CaseIterable, Identifiable, Codable {
         case .coffee: "Caffeinate"
         case .btBattery: "AirPods Battery"
         case .focusStatus: "Focus Status"
+        case .canvas: "Canvas To-Do"
         }
     }
     var icon: String {
@@ -108,6 +109,7 @@ enum NotchWidget: String, CaseIterable, Identifiable, Codable {
         case .coffee: "cup.and.saucer"
         case .btBattery: "airpods"
         case .focusStatus: "moon.fill"
+        case .canvas: "graduationcap.fill"
         }
     }
 }
@@ -125,6 +127,7 @@ extension NotchWidget {
         case .stock: 78
         case .btBattery: 72
         case .focusStatus: 58
+        case .canvas: 50
         }
     }
 }
@@ -175,6 +178,7 @@ struct HeaderWidgetView: View {
         case .coffee: CoffeeWidget()
         case .btBattery: BTBatteryWidget()
         case .focusStatus: FocusStatusWidget()
+        case .canvas: CanvasWidget()
         }
     }
 }
@@ -410,6 +414,7 @@ struct CollapsedGlance: View {
         case .coffee: CGCoffee()
         case .btBattery: CGBTBattery()
         case .focusStatus: CGFocusStatus()
+        case .canvas: CanvasGlance()
         case .moon: Image(systemName: MoonWidget.phase().0)
         case .mirror: Image(systemName: "camera.fill").foregroundStyle(.secondary)
         }

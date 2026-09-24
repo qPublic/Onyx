@@ -1,4 +1,6 @@
 import SwiftUI
+import Combine
+import ImageIO
 import AVFoundation
 import EventKit
 import UniformTypeIdentifiers
@@ -14,44 +16,89 @@ struct MusicCard: View {
         return NSWorkspace.shared.icon(forFile: u.path)
     }
 
+    @AppStorage(AP.musicCow) private var cow = false
+
     var body: some View {
         Card {
-            if media.hasTrack {
-                HStack(spacing: 12) {
-                    Group {
-                        if Fun.has(Fun.vinyl) { VinylView(size: 96) } else { AlbumArt(size: 92, radius: 12) }
+            GeometryReader { geo in
+                // No cow: centre the player and let the artwork grow to use the box's height (no blank strip).
+                let narrow = geo.size.width < 260
+                let art: CGFloat = narrow ? 44 : (cow ? 92 : min(max(geo.size.height - 6, 92), 150))
+                VStack(spacing: 6) {
+                    player(art: art, narrow: narrow)
+                    if cow { DancingCow().frame(maxWidth: .infinity, maxHeight: .infinity) }
+                }
+                .frame(width: geo.size.width, height: geo.size.height, alignment: cow ? .top : .center)
+            }
+        }
+        .background(media.artworkColor.opacity(0.30), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func artwork(_ art: CGFloat) -> some View {
+        Group {
+            if Fun.has(Fun.vinyl) { VinylView(size: art + 4) } else { AlbumArt(size: art, radius: art > 60 ? 12 : 7) }
+        }
+        .onTapGesture { media.openPlayer() }
+        .shadow(color: .black.opacity(0.5), radius: 6)
+    }
+
+    private var titleLine: some View {
+        HStack(spacing: 5) {
+            if let icon = sourceIcon { Image(nsImage: icon).resizable().frame(width: 14, height: 14) }
+            Text(media.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+        }
+    }
+
+    private var artistLine: some View {
+        Text(media.artist).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+    }
+
+    private var scrubber: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
+            let pos = scrub ?? media.currentPosition(at: ctx.date)
+            VStack(spacing: 2) {
+                Slider(value: Binding(get: { pos }, set: { scrub = $0 }), in: 0...max(media.duration, 1)) { editing in
+                    if !editing, let s = scrub { media.seek(s); scrub = nil }
+                }
+                .controlSize(.mini)
+                .tint(Color.primary)
+                HStack { Text(format(pos)); Spacer(); Text("-" + format(max(0, media.duration - pos))) }
+                    .font(.system(size: 9.5).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+    }
+
+    private func controls(size: CGFloat, play: CGFloat, spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            Button { media.previous() } label: { Image(systemName: "backward.fill") }
+            Button { media.playPause() } label: { Image(systemName: media.isPlaying ? "pause.fill" : "play.fill").font(.system(size: play)) }
+            Button { media.next() } label: { Image(systemName: "forward.fill") }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: size))
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder private func player(art: CGFloat, narrow: Bool) -> some View {
+            if media.hasTrack && narrow {
+                // Compact layout for narrow boxes (e.g. three Home boxes): nothing wraps.
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 8) {
+                        artwork(art)
+                        VStack(alignment: .leading, spacing: 1) { titleLine; artistLine }
+                        Spacer(minLength: 0)
                     }
-                        .onTapGesture { media.openPlayer() }
-                        .shadow(color: .black.opacity(0.5), radius: 6)
+                    scrubber
+                    controls(size: 13, play: 17, spacing: 18)
+                }
+            } else if media.hasTrack {
+                HStack(spacing: 12) {
+                    artwork(art)
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 5) {
-                            if let icon = sourceIcon { Image(nsImage: icon).resizable().frame(width: 14, height: 14) }
-                            Text(media.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                        }
-                        Text(media.artist).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
-                        TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
-                            let pos = scrub ?? media.currentPosition(at: ctx.date)
-                            VStack(spacing: 2) {
-                                Slider(value: Binding(get: { pos }, set: { scrub = $0 }),
-                                       in: 0...max(media.duration, 1)) { editing in
-                                    if !editing, let s = scrub { media.seek(s); scrub = nil }
-                                }
-                                .controlSize(.mini)
-                                .tint(Color.primary)
-                                HStack {
-                                    Text(format(pos)); Spacer(); Text("-" + format(max(0, media.duration - pos)))
-                                }
-                                .font(.system(size: 9.5).monospacedDigit()).foregroundStyle(.secondary)
-                            }
-                        }
-                        HStack(spacing: 22) {
-                            Button { media.previous() } label: { Image(systemName: "backward.fill") }
-                            Button { media.playPause() } label: { Image(systemName: media.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 20)) }
-                            Button { media.next() } label: { Image(systemName: "forward.fill") }
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 15))
-                        .frame(maxWidth: .infinity)
+                        titleLine
+                        artistLine
+                        scrubber
+                        controls(size: 15, play: 20, spacing: 22)
                     }
                 }
             } else {
@@ -67,10 +114,53 @@ struct MusicCard: View {
                         }
                     }.controlSize(.small)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+            }
+    }
+}
+
+/// The dancing cow (optional, fills the space under Now Playing). Transparent background, so the
+/// notch's own style shows through. Dances while music plays; when it stops, it finishes the current
+/// dance cycle and settles on frame 0 (standing) instead of freezing mid-move.
+final class CowAnimator: ObservableObject {
+    static let frames: [NSImage] = {
+        guard let u = Bundle.main.url(forResource: "cow", withExtension: "gif"),
+              let src = CGImageSourceCreateWithURL(u as CFURL, nil) else { return [] }
+        return (0..<CGImageSourceGetCount(src)).compactMap { i in
+            CGImageSourceCreateImageAtIndex(src, i, nil).map { NSImage(cgImage: $0, size: .zero) }
+        }
+    }()
+    @Published var frame = 0
+    private var timer: Timer?
+    private var sub: AnyCancellable?
+
+    init() {
+        sub = MediaController.shared.$isPlaying.removeDuplicates().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.sync() }
+    }
+    func sync() {
+        if (MediaController.shared.isPlaying || frame != 0), timer == nil, Self.frames.count > 1 {
+            timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in self?.tick() }
+        }
+    }
+    private func tick() {
+        frame = (frame + 1) % Self.frames.count
+        if frame == 0 && !MediaController.shared.isPlaying { stop() }   // back to standing: rest here
+    }
+    func stop() { timer?.invalidate(); timer = nil }
+    deinit { timer?.invalidate() }
+}
+
+struct DancingCow: View {
+    @StateObject private var anim = CowAnimator()
+    var body: some View {
+        Group {
+            if !CowAnimator.frames.isEmpty {
+                Image(nsImage: CowAnimator.frames[anim.frame]).resizable().interpolation(.medium).scaledToFit()
             }
         }
-        .background(media.artworkColor.opacity(0.30), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onAppear { anim.sync() }
+        .onDisappear { anim.stop() }
     }
 }
 

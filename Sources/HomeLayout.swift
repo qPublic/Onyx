@@ -1,9 +1,10 @@
 import SwiftUI
+import WebKit
 
 // MARK: - Customizable Home board (the big boxes: Music, Calendar, Weather, …)
 
 enum HomePanel: String, CaseIterable, Identifiable, Codable {
-    case music, calendar, weather, clock, notes, clipboard, stocks, events, shelf, mirror, bluetooth, timer, capture, system, fun, focusStatus
+    case music, calendar, weather, clock, notes, clipboard, stocks, events, shelf, mirror, bluetooth, timer, capture, system, fun, focusStatus, canvas, aquarium
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -23,6 +24,8 @@ enum HomePanel: String, CaseIterable, Identifiable, Codable {
         case .system: "System"
         case .fun: "Fun"
         case .focusStatus: "Focus Status"
+        case .canvas: "Canvas To-Do"
+        case .aquarium: "Aquarium Live"
         }
     }
     var icon: String {
@@ -43,6 +46,8 @@ enum HomePanel: String, CaseIterable, Identifiable, Codable {
         case .system: "bolt.fill"
         case .fun: "party.popper.fill"
         case .focusStatus: "moon.fill"
+        case .canvas: "graduationcap.fill"
+        case .aquarium: "fish.fill"
         }
     }
 }
@@ -165,6 +170,8 @@ struct PanelContent: View {
         case .system: Card { SystemView() }
         case .fun: FunPanel()
         case .focusStatus: FocusStatusPanel()
+        case .canvas: CanvasPanel()
+        case .aquarium: AquariumPanel()
         }
     }
 }
@@ -357,5 +364,87 @@ struct FocusStatusPanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear { f.start() }
+    }
+}
+
+// MARK: - Monterey Bay Aquarium live cam
+
+/// Small, muted live stream from the Monterey Bay Aquarium's YouTube channel. The web view only
+/// exists while the box is on screen (it's torn down when the notch closes), and YouTube picks a
+/// low resolution for a player this small, which keeps memory down.
+struct AquariumPanel: View {
+    var body: some View {
+        Card {
+            AquariumStream()
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(alignment: .bottomLeading) {
+                    Label("Monterey Bay Aquarium · Live", systemImage: "fish.fill")
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(.black.opacity(0.45), in: Capsule())
+                        .padding(6)
+                        .allowsHitTesting(false)
+                }
+        }
+    }
+}
+
+struct AquariumStream: NSViewRepresentable {
+    static let channel = "UCnM5iMGiKsZg-iOlIO2ZkdQ"   // Monterey Bay Aquarium
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        func webView(_ w: WKWebView, didFinish navigation: WKNavigation!) {
+            // Muted autoplay: nudge the player if it's waiting on a play button.
+            let js = "var v=document.querySelector('video'); if(v){v.muted=true; v.play();} var b=document.querySelector('.ytp-large-play-button'); if(b && (!v || v.paused)){b.click();}"
+            for delay in [0.5, 2.0, 5.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { w.evaluateJavaScript(js) }
+            }
+        }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let c = WKWebViewConfiguration()
+        c.mediaTypesRequiringUserActionForPlayback = []
+        c.websiteDataStore = .nonPersistent()             // no cookies or history kept
+        let w = WKWebView(frame: .zero, configuration: c)
+        w.setValue(false, forKey: "drawsBackground")
+        w.wantsLayer = true
+        w.layer?.cornerRadius = 10
+        w.layer?.masksToBounds = true
+        w.navigationDelegate = context.coordinator
+        // The aquarium runs several cams, so ask YouTube which video the channel has live right now.
+        Self.currentLiveVideo { id in
+            let src = "https://www.youtube-nocookie.com/embed/\(id)"
+                + "?autoplay=1&mute=1&controls=0&playsinline=1&modestbranding=1&rel=0&iv_load_policy=3&disablekb=1"
+            var req = URLRequest(url: URL(string: src)!)
+            req.setValue("https://www.youtube-nocookie.com/", forHTTPHeaderField: "Referer")   // embeds need a referrer
+            w.load(req)
+        }
+        return w
+    }
+
+    func updateNSView(_ w: WKWebView, context: Context) {}
+
+    static let fallbackVideo = "zL68biE6wAs"   // Live Moon Jelly Cam
+
+    static func currentLiveVideo(_ done: @escaping (String) -> Void) {
+        var r = URLRequest(url: URL(string: "https://www.youtube.com/channel/\(channel)/live")!)
+        r.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+                   forHTTPHeaderField: "User-Agent")
+        r.timeoutInterval = 8
+        URLSession.shared.dataTask(with: r) { d, _, _ in
+            var id = fallbackVideo
+            if let d, let html = String(data: d, encoding: .utf8),
+               let m = html.range(of: #"<link rel="canonical" href="https://www\.youtube\.com/watch\?v=([\w-]{11})""#, options: .regularExpression) {
+                id = String(html[m].suffix(12).prefix(11))
+            }
+            DispatchQueue.main.async { done(id) }
+        }.resume()
+    }
+
+    static func dismantleNSView(_ w: WKWebView, coordinator: Coordinator) {
+        w.stopLoading()
+        w.loadHTMLString("", baseURL: nil)   // stop the video right away
     }
 }

@@ -277,6 +277,7 @@ struct FlashcardButton: View {
 }
 
 enum FlashcardMaker {
+    static var lastRaw = ""   // last model reply (for debugging)
     /// On-device Apple Intelligence when available; otherwise a simple "term: definition" parser.
     static func make(from text: String) async throws -> [Flashcard] {
         if Assistant.shared.unavailableReason == nil {
@@ -286,6 +287,7 @@ enum FlashcardMaker {
                 Q: <short question> || A: <short answer>
                 """)
             let r = try await s.respond(to: "Notes:\n\"\"\"\n\(text.prefix(3500))\n\"\"\"")
+            lastRaw = r.content
             let cards = parse(r.content)
             if !cards.isEmpty { return cards }
         }
@@ -293,7 +295,21 @@ enum FlashcardMaker {
     }
 
     static func parse(_ out: String) -> [Flashcard] {
-        out.split(separator: "\n").compactMap { line in
+        var cards: [Flashcard] = []
+        var pendingQ: String?
+        func strip(_ s: Substring, _ prefixes: [String]) -> String? {
+            var t = s.trimmingCharacters(in: .whitespaces)
+            while let f = t.first, "0123456789.)-*• ".contains(f) { t.removeFirst() }   // "1. Q:" / "- Q:"
+            for p in prefixes where t.lowercased().hasPrefix(p) { return String(t.dropFirst(p.count)).trimmingCharacters(in: .whitespaces) }
+            return nil
+        }
+        for line in out.split(separator: "\n") where !line.contains("||") {
+            if let q = strip(line, ["q:", "question:"]) { pendingQ = q }
+            else if let a = strip(line, ["a:", "answer:"]), let q = pendingQ, !q.isEmpty, !a.isEmpty {
+                cards.append(Flashcard(q: q, a: a)); pendingQ = nil
+            }
+        }
+        return cards + out.split(separator: "\n").compactMap { line in
             let l = line.trimmingCharacters(in: .whitespaces)
             guard let sep = l.range(of: "||") else { return nil }
             var q = String(l[..<sep.lowerBound]).trimmingCharacters(in: .whitespaces)

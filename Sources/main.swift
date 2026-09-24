@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         BluetoothService.shared.start()
         FunController.shared.start()
         BackdropSampler.shared.start()
+        CanvasService.shared.start()
 
         notch = NotchController()
         notch.show()
@@ -213,6 +214,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Debug: ONYX_EXPANDPERF=<file> opens the notch under several styles and records main-thread frame gaps.
         if let path = ProcessInfo.processInfo.environment["ONYX_EXPANDPERF"] {
             ExpandPerf.run(notch: self.notch, path: path)
+        }
+        // Debug: ONYX_BIGTEST=<dir> checks flashcards, Canvas error handling, and the aquarium/cow boxes.
+        if let dir = ProcessInfo.processInfo.environment["ONYX_BIGTEST"] {
+            func write(_ name: String, _ s: String) { try? s.write(toFile: dir + "/" + name, atomically: true, encoding: .utf8) }
+            Task { @MainActor in
+                let sample = """
+                Cell Biology
+                Mitochondria: the powerhouse of the cell, makes ATP through cellular respiration.
+                Ribosomes build proteins by reading mRNA.
+                The nucleus stores DNA and controls the cell.
+                Photosynthesis happens in chloroplasts and turns light, water and CO2 into glucose and oxygen.
+                """
+                do {
+                    let cards = try await FlashcardMaker.make(from: sample)
+                    write("raw.txt", FlashcardMaker.lastRaw)
+                    write("cards.txt", "AI available: \(Assistant.shared.unavailableReason == nil)\n" + cards.map { "Q: \($0.q)\n   A: \($0.a)" }.joined(separator: "\n"))
+                } catch { write("cards.txt", "error: \(error.localizedDescription)") }
+                await CanvasService.shared.connect(url: "canvas.instructure.com", token: "not-a-real-token")
+                write("canvas.txt", "status=\(CanvasService.shared.status ?? "nil") connected=\(CanvasService.shared.connected) savedBase=\(Prefs.string(CanvasService.baseKey))")
+            }
+            let d = UserDefaults.standard
+            let oldCow = d.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "")?[AP.musicCow]
+            let oldHide = d.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "")?[AP.hideFromCapture]
+            let oldPanels = HomeLayout.shared.panels
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                d.set(true, forKey: AP.musicCow)
+                d.set(false, forKey: AP.hideFromCapture)
+                HomeLayout.shared.panels = ProcessInfo.processInfo.environment["ONYX_BIGTEST_THREE"] != nil ? [.aquarium, .music, .clock] : [.aquarium, .music]
+                NotchModel.shared.pinned = true
+                SoundBoard.testLog = { _, _ in }
+                self.notch.expand(tab: .home)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 14) {
+                let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                p.arguments = ["-x", dir + "/aqua.png"]; try? p.run(); p.waitUntilExit()
+                self.notch.collapse()
+                NotchModel.shared.pinned = false; SoundBoard.testLog = nil
+                HomeLayout.shared.panels = oldPanels
+                if let oldCow { d.set(oldCow, forKey: AP.musicCow) } else { d.removeObject(forKey: AP.musicCow) }
+                if let oldHide { d.set(oldHide, forKey: AP.hideFromCapture) } else { d.removeObject(forKey: AP.hideFromCapture) }
+                write("done.txt", "ok")
+            }
         }
         if let p = ProcessInfo.processInfo.environment["ONYX_AXDEBUG"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {

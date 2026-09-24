@@ -303,7 +303,7 @@ private struct TokenDetailsMock: View {
                     .font(.system(size: 10)).foregroundStyle(.black.opacity(0.65))
                 HStack {
                     Text("Token").font(.system(size: 11)).foregroundStyle(.black.opacity(0.7)).frame(width: 44, alignment: .leading)
-                    Text("7~aB3dEfGh1JkLmN0pQrStUvWxYz…").font(.system(size: 11, design: .monospaced)).foregroundStyle(.black)
+                    Text("7~XXXXXXXXXXXXXXXXXXXXXXXX…").font(.system(size: 11, design: .monospaced)).foregroundStyle(.black)
                         .padding(5).background(Color.yellow.opacity(0.25))
                         .highlight("Select all · ⌘C", edge: .bottom)
                 }

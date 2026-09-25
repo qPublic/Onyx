@@ -15,7 +15,11 @@ enum Opt {
     static let lastCleanBytes = "opt.lastCleanBytes"  // Int64
     static let lastAutoClean = "opt.lastAutoClean"
     static let tweaked = "opt.tweaked"                // ["domain|key"] Onyx changed, for Reset all
-    static let defaults: [String: Any] = [lowDiskAlert: true, autoClean: false]
+    static let autoQuit = "opt.autoQuit"
+    static let autoQuitMinutes = "opt.autoQuitMinutes"
+    static let autoQuitKeep = "opt.autoQuitKeep"      // bundle IDs never auto-quit
+    static let defaults: [String: Any] = [lowDiskAlert: true, autoClean: false, autoQuit: false, autoQuitMinutes: 10.0,
+                                          autoQuitKeep: ["com.spotify.client", "com.apple.Music"]]
 }
 
 // MARK: Shell
@@ -544,12 +548,101 @@ final class OptimizeService {
     }
 }
 
+// MARK: - Auto-quit apps with no windows
+
+@_silgen_name("CGSMainConnectionID") private func CGSMainConnectionID() -> Int32
+@_silgen_name("CGSCopySpacesForWindows") private func CGSCopySpacesForWindows(_ cid: Int32, _ mask: Int32, _ wids: CFArray) -> Unmanaged<CFArray>?
+
+/// Quits regular apps that have had no windows for a while (like closing the last window on Windows).
+/// Never touches Finder, Onyx, the app you're using, apps on the keep list, or the music app while it plays.
+final class AutoQuit {
+    static let shared = AutoQuit()
+    static let alwaysKeep: Set<String> = ["com.apple.finder", Bundle.main.bundleIdentifier ?? "local.onyx.notch"]
+    private var since: [pid_t: Date] = [:]
+    private var timer: Timer?
+
+    func start() {
+        timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in self?.tick() }.tolerant()
+    }
+
+    /// Apps that have at least one real window: minimized and on other desktops count; the invisible
+    /// helper windows apps keep around (which belong to no desktop) don't.
+    static func appsWithWindows() -> Set<pid_t> {
+        guard let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
+        let cid = CGSMainConnectionID()
+        var pids = Set<pid_t>()
+        for w in list {
+            guard (w[kCGWindowLayer as String] as? Int) == 0, let pid = w[kCGWindowOwnerPID as String] as? pid_t, !pids.contains(pid),
+                  let wid = w[kCGWindowNumber as String] as? UInt32,
+                  let b = w[kCGWindowBounds as String] as? [String: CGFloat], (b["Width"] ?? 0) >= 60, (b["Height"] ?? 0) >= 40 else { continue }
+            let spaces = (CGSCopySpacesForWindows(cid, 7, [NSNumber(value: wid)] as CFArray)?.takeRetainedValue() as? [NSNumber]) ?? []
+            if !spaces.isEmpty { pids.insert(pid) }
+        }
+        return pids
+    }
+
+    /// Second opinion from Accessibility. Any doubt (no permission, timeout) counts as "has windows".
+    private static func axHasWindows(_ pid: pid_t) -> Bool {
+        guard AXIsProcessTrusted() else { return true }
+        var v: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXWindowsAttribute as CFString, &v) == .success else { return true }
+        return ((v as? [AnyObject])?.count ?? 1) > 0
+    }
+
+    private func tick() {
+        guard Prefs.bool(Opt.autoQuit), !NotchModel.shared.animating else { if !Prefs.bool(Opt.autoQuit) { since = [:] }; return }
+        let delay = max(1, Prefs.double(Opt.autoQuitMinutes)) * 60
+        let keep = Set(UserDefaults.standard.stringArray(forKey: Opt.autoQuitKeep) ?? []).union(Self.alwaysKeep)
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let playing = MediaController.shared.isPlaying ? MediaController.shared.source?.rawValue : nil
+        let windowed = Self.appsWithWindows()
+        var alive = Set<pid_t>()
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && app.isFinishedLaunching {
+            let pid = app.processIdentifier
+            alive.insert(pid)
+            // Reset the clock whenever it has a window, is in front, is protected, or is playing music.
+            guard let id = app.bundleIdentifier, !keep.contains(id), id != playing, pid != front,
+                  !windowed.contains(pid), !Self.axHasWindows(pid) else { since[pid] = nil; continue }
+            let start = since[pid] ?? Date()
+            since[pid] = start
+            guard Date().timeIntervalSince(start) >= delay else { continue }
+            since[pid] = nil
+            let name = app.localizedName ?? id
+            if Shell.dryRun { Shell.log("autoquit: \(name)") }
+            else if app.terminate() {   // a normal Quit, never a force quit
+                NotchModel.shared.flash(.message(icon: "xmark.app", text: "Quit \(name)", tint: .secondary), for: 2.5)
+            }
+        }
+        since = since.filter { alive.contains($0.key) }
+    }
+}
+
 // MARK: - Settings UI
 
 enum OptimizePage: String, CaseIterable, Identifiable {
     case overview, clean, maintain, tweaks, startup, storage
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
+}
+
+/// The Optimization window's content.
+struct OptimizeWindowView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                IconTile(symbol: SettingsSection.optimize.icon, colors: SettingsSection.optimize.tint)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Optimization").font(.system(size: 17, weight: .bold))
+                    Text("Clean, maintain and tweak your Mac").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 4)
+            OptimizeSettings()
+        }
+        .frame(minWidth: 640, minHeight: 520)
+        .background(DetailBackground())
+    }
 }
 
 struct OptimizeSettings: View {
@@ -812,8 +905,47 @@ private struct TweakRow: View {
 struct OptStartup: View {
     @ObservedObject var m = StartupModel.shared
     @State private var byMemory = false
+    @AppStorage(Opt.autoQuit) private var autoQuit = false
+    @AppStorage(Opt.autoQuitMinutes) private var autoQuitMinutes = 10.0
+    @State private var keep = UserDefaults.standard.stringArray(forKey: Opt.autoQuitKeep) ?? []
+
     var body: some View {
         Form {
+            Section("Quit apps with no windows") {
+                Toggle("Quit apps after their last window is closed", isOn: $autoQuit)
+                if autoQuit {
+                    Picker("After", selection: $autoQuitMinutes) {
+                        ForEach([1.0, 2, 5, 10, 15, 30, 60], id: \.self) { Text("\(Int($0)) minute\($0 == 1 ? "" : "s")").tag($0) }
+                    }
+                    LabeledContent("Never quit") {
+                        HStack(spacing: 6) {
+                            ForEach(keep, id: \.self) { id in
+                                HStack(spacing: 3) {
+                                    if let u = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+                                        Image(nsImage: NSWorkspace.shared.icon(forFile: u.path)).resizable().frame(width: 14, height: 14)
+                                    }
+                                    Text(Self.appName(id)).lineLimit(1)
+                                    Button { keep.removeAll { $0 == id }; saveKeep() } label: { Image(systemName: "xmark.circle.fill") }
+                                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                                }
+                                .font(.caption).padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.primary.opacity(0.08), in: Capsule())
+                            }
+                            Menu {
+                                let running = NSWorkspace.shared.runningApplications
+                                    .filter { $0.activationPolicy == .regular }
+                                    .compactMap(\.bundleIdentifier)
+                                    .filter { !keep.contains($0) && !AutoQuit.alwaysKeep.contains($0) }
+                                ForEach(Array(Set(running)).sorted { Self.appName($0) < Self.appName($1) }, id: \.self) { id in
+                                    Button(Self.appName(id)) { keep.append(id); saveKeep() }
+                                }
+                            } label: { Image(systemName: "plus.circle") }
+                                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                        }
+                    }
+                }
+                Caption("Once an app has had no windows for this long, Onyx quits it normally, just like pressing ⌘Q. Minimized windows and windows on other desktops count as open. Finder, the app you're using and music that's playing are never quit.")
+            }
             Section("Using the most right now") {
                 Picker("", selection: $byMemory) { Text("CPU").tag(false); Text("Memory").tag(true) }
                     .pickerStyle(.segmented).labelsHidden()
@@ -860,6 +992,11 @@ struct OptStartup: View {
         }
         .formStyle(.grouped)
         .task { await m.refresh() }
+    }
+
+    private func saveKeep() { UserDefaults.standard.set(keep, forKey: Opt.autoQuitKeep) }
+    static func appName(_ id: String) -> String {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { $0.deletingPathExtension().lastPathComponent } ?? id
     }
 }
 
@@ -947,6 +1084,10 @@ enum OptimizeSelfTest {
         await st.scan()
         for f in st.large.prefix(5) { Shell.log("large \(Sys.bytes(f.bytes)) \(f.url.path)") }
         Shell.log("forgotten downloads: \(st.forgotten.count), \(Sys.bytes(st.forgotten.reduce(0) { $0 + $1.bytes }))")
+        let windowed = AutoQuit.appsWithWindows()
+        for a in NSWorkspace.shared.runningApplications where a.activationPolicy == .regular {
+            Shell.log("auto-quit check \(a.localizedName ?? "?"): \(windowed.contains(a.processIdentifier) ? "has windows" : "no windows")")
+        }
         Shell.log("== done")
         NSApp.terminate(nil)
     }

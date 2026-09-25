@@ -66,7 +66,7 @@ struct SettingsView: View {
                 SettingsSearchField(text: $query) { if let first = results.first { open(first) } }
                     .padding(.horizontal, 4).padding(.bottom, 6)
                 if query.trimmingCharacters(in: .whitespaces).isEmpty {
-                    ForEach(SettingsSection.allCases) { section in
+                    ForEach(SettingsSection.allCases.filter { $0 != .optimize }) { section in   // Optimization has its own window
                         SidebarRow(section: section, selected: selection == section) {
                             withAnimation(.smooth(duration: 0.28)) { selection = section; found = nil }
                         }
@@ -125,9 +125,12 @@ struct SettingsView: View {
     private var results: [SettingEntry] { SettingsIndex.search(query) }
 
     private func open(_ e: SettingEntry) {
-        // Optimization has sub-pages; jump to the one the setting is on.
-        if e.section == .optimize, let p = OptimizePage.allCases.first(where: { $0.title == e.group }) {
-            UserDefaults.standard.set(p.rawValue, forKey: Opt.page)
+        // Optimization has its own window: open it on the page the setting is on.
+        if e.section == .optimize {
+            if let p = OptimizePage.allCases.first(where: { $0.title == e.group }) { UserDefaults.standard.set(p.rawValue, forKey: Opt.page) }
+            query = ""
+            (NSApp.delegate as? AppDelegate)?.openOptimization()
+            return
         }
         withAnimation(.smooth(duration: 0.28)) { selection = e.section; found = e }
         query = ""

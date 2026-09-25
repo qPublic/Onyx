@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0
 
 ### New
 - **AI effort.** Choose how hard Onyx AI works with the new gauge button in the AI tab (also in **Settings › Privacy › AI**):

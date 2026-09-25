@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Settings shows the right version number.** It said "Version 1.0" no matter which version was installed.
+
 ## 1.2.0
 
 ### New

@@ -44,6 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Cap every Accessibility call (snap layouts, fullscreen check, menu dodge) so a frozen app
         // can't stall Onyx for the 6s default.
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)
+        OptimizeService.shared.start()          // low-disk alert + optional weekly clean
+        // Debug: ONYX_OPTIMIZE_TEST=1 dry-runs every Optimization action into optimize-dryrun.log, then quits.
+        if ProcessInfo.processInfo.environment["ONYX_OPTIMIZE_TEST"] != nil {
+            Task { @MainActor in try? await Task.sleep(for: .seconds(2)); await OptimizeSelfTest.run() }
+        }
         // Debug: ONYX_CAPTURETEST=screen|record takes a full-screen shot / 3s recording shortly after launch.
         if let t = ProcessInfo.processInfo.environment["ONYX_CAPTURETEST"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {

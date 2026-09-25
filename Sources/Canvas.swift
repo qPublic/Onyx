@@ -114,7 +114,8 @@ final class CanvasService: ObservableObject {
     @MainActor
     func connect(url: String, token: String) async {
         let base = Self.normalize(url), tok = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !base.isEmpty, !tok.isEmpty else { status = "Enter your school's Canvas address and a token."; return }
+        guard !base.isEmpty else { status = "Type your school's Canvas address first (the grey example text doesn't count)."; return }
+        guard !tok.isEmpty else { status = "Paste your access token into the token field."; return }
         loading = true; defer { loading = false }
         do {
             let d = try await request("/api/v1/users/self/profile", base: base, token: tok)
@@ -296,7 +297,7 @@ struct CanvasSettingsSection: View {
                 SecureField("Access token", text: $token, prompt: Text("Paste your token"))
                 HStack {
                     Button("Connect") { Task { await canvas.connect(url: url, token: token); if canvas.connected { token = "" } } }
-                        .disabled(url.isEmpty || token.isEmpty || canvas.loading)
+                        .disabled(canvas.loading)
                     if canvas.loading { ProgressView().controlSize(.small) }
                     Spacer()
                     Button("How do I get a token?") { CanvasGuide.show() }

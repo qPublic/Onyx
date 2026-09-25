@@ -41,6 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         MenuBarDodger.shared.promptIfNeeded()   // ask for Accessibility if a feature that needs it is on
         MediaKeys.shared.start()                // replace the native volume slider (when granted + enabled)
         SnapController.shared.start()           // drag a window to the notch → snap layouts
+        // Cap every Accessibility call (snap layouts, fullscreen check, menu dodge) so a frozen app
+        // can't stall Onyx for the 6s default.
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)
         // Debug: ONYX_CAPTURETEST=screen|record takes a full-screen shot / 3s recording shortly after launch.
         if let t = ProcessInfo.processInfo.environment["ONYX_CAPTURETEST"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {

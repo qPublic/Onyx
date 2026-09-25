@@ -18,7 +18,7 @@ final class BackdropSampler: ObservableObject {
     static var enabled: Bool { AP.notchStyle == .glass && Prefs.string(AP.glassVariant) == "clear" }
 
     func start() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }.tolerant()
     }
 
     private func tick() {

@@ -42,7 +42,7 @@ final class MenuBarDodger {
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
                                                           object: nil, queue: .main) { [weak self] _ in self?.refresh() }
         // Menus can change while an app is frontmost (e.g. Chrome adding menus), so re-check periodically.
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }.tolerant()
         refresh()
     }
 

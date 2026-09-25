@@ -64,7 +64,7 @@ final class MediaController: ObservableObject {
         dnc.addObserver(self, selector: #selector(changed), name: .init("com.apple.Music.playerInfo"), object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(changed),
                                                           name: NSWorkspace.didTerminateApplicationNotification, object: nil)
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refresh() }
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refresh() }.tolerant()
         refresh()
     }
 
@@ -294,7 +294,7 @@ final class CalendarService: ObservableObject {
         NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: store, queue: .main) { [weak self] _ in
             self?.reload()
         }
-        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.reload() }
+        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.reload() }.tolerant()
         reload()
     }
 
@@ -369,7 +369,7 @@ final class WeatherService: ObservableObject {
 
     func start() {
         Task { await refresh() }
-        Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { _ in Task { await self.refresh() } }
+        Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { _ in Task { await self.refresh() } }.tolerant()
     }
 
     private func json(_ s: String) async -> [String: Any]? {
@@ -468,7 +468,7 @@ final class ClipboardHistory: ObservableObject {
 
     func start() {
         if let d = try? Data(contentsOf: file), let c = try? JSONDecoder().decode([Clip].self, from: d) { clips = c }
-        Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in self?.poll() }
+        Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in self?.poll() }.tolerant()
     }
 
     private func poll() {
@@ -524,24 +524,28 @@ final class FocusTimer: ObservableObject {
     }
 
     func start() {
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.tick() }
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.tick() }.tolerant(0.1)
     }
 
     func begin(minutes: Double) {
         total = minutes * 60
         pausedRemaining = nil
-        endDate = Date().addingTimeInterval(total)
+        now = Date()
+        endDate = now.addingTimeInterval(total)
     }
 
     func togglePause() {
-        if let p = pausedRemaining { endDate = Date().addingTimeInterval(p); pausedRemaining = nil }
+        if let p = pausedRemaining { now = Date(); endDate = now.addingTimeInterval(p); pausedRemaining = nil }
         else if endDate != nil { pausedRemaining = remaining; endDate = nil }
     }
 
     func cancel() { endDate = nil; pausedRemaining = nil }
 
     private func tick() {
-        now = Date()
+        // Only publish the clock while counting down: the whole notch observes this object,
+        // so updating `now` all the time redrew it twice a second for nothing.
+        let now = Date()
+        if endDate != nil { self.now = now }
         if let e = endDate, now >= e {
             endDate = nil
             if Fun.has(Fun.bomb) {
@@ -635,7 +639,7 @@ final class BluetoothService: ObservableObject {
         // Battery comes from system_profiler (no Bluetooth permission). IOBluetooth enumeration is
         // deferred to when the Bluetooth tool is actually opened, so just running Onyx never asks for Bluetooth.
         refreshBattery()
-        batteryTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in self?.refreshBattery() }
+        batteryTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in self?.refreshBattery() }.tolerant()
     }
 
     private var lastRefresh = Date.distantPast

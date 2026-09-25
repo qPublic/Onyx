@@ -2,6 +2,11 @@ import AppKit
 import SwiftUI
 import Carbon.HIToolbox
 
+extension Timer {
+    /// Give background timers some slack so macOS can batch their wake-ups (saves battery).
+    @discardableResult func tolerant(_ fraction: Double = 0.2) -> Timer { tolerance = timeInterval * fraction; return self }
+}
+
 // MARK: - Preferences
 
 enum Prefs {

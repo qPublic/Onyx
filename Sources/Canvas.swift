@@ -76,7 +76,7 @@ final class CanvasService: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
             guard let self, self.connected else { return }
             Task { await self.refresh() }
-        }
+        }.tolerant()
     }
 
     /// "school.instructure.com" or a full URL → "https://school.instructure.com"

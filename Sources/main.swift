@@ -47,7 +47,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)
         OptimizeService.shared.start()          // low-disk alert + optional weekly clean
         AutoQuit.shared.start()                 // optional: quit apps that have no windows
-        MemoryWatch.shared.start()              // optional: per-app memory limit (warn or quit)
         OnyxReminders.shared.start()            // AI-set reminders that ring in the notch
         // Debug: ONYX_REMINDER_TEST=1 sets a reminder 5 seconds out to exercise the ringing notch.
         if ProcessInfo.processInfo.environment["ONYX_REMINDER_TEST"] != nil {

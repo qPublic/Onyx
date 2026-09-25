@@ -360,6 +360,7 @@ struct BehaviorSettings: View {
     @AppStorage(AP.haptics) var haptics = true
     @AppStorage(AP.hideFullscreen) var hideFullscreen = true
     @AppStorage(AP.hideFromCapture) var hideFromCapture = true
+    @AppStorage(AP.snapLayouts) var snapLayouts = true
     @AppStorage(AP.hudPopup) var hudPopup = true
     @AppStorage(AP.userHidden) var userHidden = false
     @AppStorage(AP.dodgeMenus) var dodgeMenus = true
@@ -398,6 +399,11 @@ struct BehaviorSettings: View {
             }
             Section("System") {
                 Toggle("Hide while an app is fullscreen", isOn: $hideFullscreen)
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Snap layouts", isOn: $snapLayouts)
+                    Text("Drag a window up to the notch to pick a layout: halves, top/bottom, thirds, quarters and more. Needs Accessibility.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Toggle("Hide from screen recordings & shares", isOn: $hideFromCapture)
                     Text("You still see the notch, but it's left out of screenshots, recordings, and screen sharing (Zoom, Meet, etc.).")

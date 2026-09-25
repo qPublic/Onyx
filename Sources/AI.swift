@@ -63,6 +63,9 @@ struct AgentTool: Tool {
     let name: String
     let description: String
     let params: [(name: String, info: String, optional: Bool)]
+    /// The tool only runs if the user's message mentions one of these (the small on-device model
+    /// sometimes calls tools nobody asked for, like making up a calendar event for a math question).
+    var requires: [String] = []
     let run: @Sendable (GeneratedContent) async throws -> String
 
     var parameters: GenerationSchema {
@@ -74,6 +77,10 @@ struct AgentTool: Tool {
     }
 
     func call(arguments: GeneratedContent) async throws -> String {
+        let request = Assistant.currentRequest.lowercased()
+        if !requires.isEmpty && !requires.contains(where: request.contains) {
+            return "Not done: the user didn't ask for this. Don't use tools for this message; answer it directly in words."
+        }
         let out = try await run(arguments)
         await MainActor.run { Assistant.shared.log(tool: name, result: out) }
         return out
@@ -112,27 +119,27 @@ private func findApp(_ name: String) -> URL? {
 enum AgentTools {
     static var all: [AgentTool] {
         [
-            AgentTool(name: "open_app", description: "Launch or switch to a Mac app by name", params: [("name", "App name, e.g. Safari", false)]) { a in
+            AgentTool(name: "open_app", description: "Launch or switch to a Mac app by name", params: [("name", "App name, e.g. Safari", false)], requires: ["open", "launch", "start", "switch to"]) { a in
                 guard let n = arg(a, "name") else { return "Missing app name" }
                 guard let u = findApp(n) else { return "Couldn't find an app named \(n)" }
                 await MainActor.run { NSWorkspace.shared.openApplication(at: u, configuration: .init()) }
                 return "Opened \(u.deletingPathExtension().lastPathComponent)"
             },
-            AgentTool(name: "open_url", description: "Open a website in the default browser", params: [("url", "Full URL", false)]) { a in
+            AgentTool(name: "open_url", description: "Open a website in the default browser", params: [("url", "Full URL", false)], requires: ["open", "go to", "website", "site", "http", ".com", "visit", "link"]) { a in
                 guard var s = arg(a, "url") else { return "Missing URL" }
                 if !s.contains("://") { s = "https://" + s }
                 guard let u = URL(string: s) else { return "Invalid URL" }
                 await MainActor.run { _ = NSWorkspace.shared.open(u) }
                 return "Opened \(s)"
             },
-            AgentTool(name: "web_search", description: "Search the web in the browser", params: [("query", "Search terms", false)]) { a in
+            AgentTool(name: "web_search", description: "Search the web in the browser", params: [("query", "Search terms", false)], requires: ["search", "google", "look up", "lookup", "web", "online"]) { a in
                 guard let q = arg(a, "query"),
                       let u = URL(string: "https://www.google.com/search?q=" + (q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q))
                 else { return "Missing query" }
                 await MainActor.run { _ = NSWorkspace.shared.open(u) }
                 return "Searched the web for \(q)"
             },
-            AgentTool(name: "find_files", description: "Find files in the user's home folder by name; returns paths", params: [("query", "Part of the file name", false)]) { a in
+            AgentTool(name: "find_files", description: "Find files in the user's home folder by name; returns paths", params: [("query", "Part of the file name", false)], requires: ["file", "folder", "find", "document", "where is", "locate"]) { a in
                 guard let q = arg(a, "query") else { return "Missing query" }
                 let p = Process(), pipe = Pipe()
                 p.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
@@ -143,7 +150,7 @@ enum AgentTools {
                     .split(separator: "\n").filter { !$0.contains("/Library/") }.prefix(8)
                 return lines.isEmpty ? "No files found for \(q)" : lines.joined(separator: "\n")
             },
-            AgentTool(name: "open_file", description: "Open a file or folder at a path (reveal=yes to show it in Finder)", params: [("path", "Absolute path", false), ("reveal", "yes to reveal in Finder", true)]) { a in
+            AgentTool(name: "open_file", description: "Open a file or folder at a path (reveal=yes to show it in Finder)", params: [("path", "Absolute path", false), ("reveal", "yes to reveal in Finder", true)], requires: ["file", "folder", "open", "reveal", "document", "show"]) { a in
                 guard let p = arg(a, "path"), FileManager.default.fileExists(atPath: (p as NSString).expandingTildeInPath) else { return "File not found" }
                 let u = URL(fileURLWithPath: (p as NSString).expandingTildeInPath)
                 await MainActor.run {
@@ -152,36 +159,38 @@ enum AgentTools {
                 }
                 return "Opened \(u.lastPathComponent)"
             },
-            AgentTool(name: "create_reminder", description: "Add a reminder to the Reminders app", params: [("title", "What to remember", false), ("due", "Due date/time as yyyy-MM-dd HH:mm", true)]) { a in
+            AgentTool(name: "create_reminder", description: "Add a reminder to the Reminders app", params: [("title", "What to remember", false), ("due", "Due date/time as yyyy-MM-dd HH:mm", true)], requires: ["remind", "reminder", "to-do", "todo", "to do", "task"]) { a in
                 guard let t = arg(a, "title") else { return "Missing title" }
+                guard Assistant.grounded(t) else { return Assistant.ungrounded }
                 return try await CalendarService.shared.createReminder(title: t, due: arg(a, "due").flatMap(parseDate))
             },
-            AgentTool(name: "create_event", description: "Add an event to the calendar", params: [("title", "Event title", false), ("start", "Start as yyyy-MM-dd HH:mm", false), ("minutes", "Duration in minutes", true)]) { a in
+            AgentTool(name: "create_event", description: "Add an event to the calendar", params: [("title", "Event title", false), ("start", "Start as yyyy-MM-dd HH:mm", false), ("minutes", "Duration in minutes", true)], requires: ["calendar", "event", "meeting", "schedule", "appointment", "book"]) { a in
                 guard let t = arg(a, "title"), let s = arg(a, "start"), let d = parseDate(s) else { return "Need a title and a valid start time" }
+                guard Assistant.grounded(t) else { return Assistant.ungrounded }
                 let m = Int(arg(a, "minutes") ?? "") ?? 60
                 return try await MainActor.run { try CalendarService.shared.createEvent(title: t, start: d, minutes: m) }
             },
-            AgentTool(name: "compose_email", description: "Open a pre-filled email draft for the user to review and send", params: [("to", "Recipient email", true), ("subject", "Subject", false), ("body", "Email body", false)]) { a in
+            AgentTool(name: "compose_email", description: "Open a pre-filled email draft for the user to review and send", params: [("to", "Recipient email", true), ("subject", "Subject", false), ("body", "Email body", false)], requires: ["email", "e-mail", "mail"]) { a in
                 var c = URLComponents(); c.scheme = "mailto"; c.path = arg(a, "to") ?? ""
                 c.queryItems = [URLQueryItem(name: "subject", value: arg(a, "subject") ?? ""), URLQueryItem(name: "body", value: arg(a, "body") ?? "")]
                 guard let u = c.url else { return "Couldn't build email" }
                 await MainActor.run { _ = NSWorkspace.shared.open(u) }
                 return "Opened an email draft (not sent — the user will review it)"
             },
-            AgentTool(name: "set_timer", description: "Start a countdown timer in the notch", params: [("minutes", "Number of minutes", false)]) { a in
+            AgentTool(name: "set_timer", description: "Start a countdown timer in the notch", params: [("minutes", "Number of minutes", false)], requires: ["timer", "countdown", "minute", "min", "hour", "second"]) { a in
                 guard let m = Double(arg(a, "minutes") ?? ""), m > 0 else { return "Invalid minutes" }
                 await MainActor.run { FocusTimer.shared.begin(minutes: m) }
                 return "Started a \(Int(m))-minute timer"
             },
-            AgentTool(name: "copy_to_clipboard", description: "Copy text to the clipboard", params: [("text", "Text to copy", false)]) { a in
+            AgentTool(name: "copy_to_clipboard", description: "Copy text to the clipboard", params: [("text", "Text to copy", false)], requires: ["copy", "clipboard"]) { a in
                 guard let t = arg(a, "text") else { return "Nothing to copy" }
                 await MainActor.run { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(t, forType: .string) }
                 return "Copied to clipboard"
             },
-            AgentTool(name: "read_screen", description: "Read the text currently visible on the user's screen", params: []) { _ in
+            AgentTool(name: "read_screen", description: "Read the text currently visible on the user's screen", params: [], requires: ["screen", "on my", "this page", "this window", "looking at", "read", "see"]) { _ in
                 String(try await ScreenReader.screenText().prefix(2000))
             },
-            AgentTool(name: "control_music", description: "Control music playback", params: [("action", "play, pause, next, previous, or status", false)]) { a in
+            AgentTool(name: "control_music", description: "Control music playback", params: [("action", "play, pause, next, previous, or status", false)], requires: ["play", "pause", "skip", "next", "previous", "song", "music", "track", "resume", "stop", "listening"]) { a in
                 let act = arg(a, "action")?.lowercased() ?? "status"
                 return await MainActor.run {
                     let m = MediaController.shared
@@ -193,7 +202,7 @@ enum AgentTools {
                     }
                 }
             },
-            AgentTool(name: "get_schedule", description: "Get the user's upcoming calendar events", params: []) { _ in
+            AgentTool(name: "get_schedule", description: "Get the user's upcoming calendar events", params: [], requires: ["schedule", "calendar", "event", "meeting", "today", "tomorrow", "free", "busy", "week", "agenda", "plans"]) { _ in
                 await MainActor.run {
                     let c = CalendarService.shared
                     guard c.authorized else { return "Calendar access not granted" }
@@ -219,6 +228,27 @@ final class Assistant: ObservableObject {
     @Published var seeScreen = false
     private var session: LanguageModelSession?
     private var sessionIsAgent = true
+    /// The message being answered; tools check it before acting.
+    static var currentRequest = ""
+    static let ungrounded = "Not done: that title isn't something the user said. Ask the user what to call it instead of inventing one."
+
+    /// True if the title shares a real word with what the user asked (so the model didn't make it up).
+    static func grounded(_ title: String) -> Bool {
+        let req = Set(currentRequest.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
+        return title.lowercased().split { !$0.isLetter && !$0.isNumber }.contains { $0.count >= 3 && req.contains(String($0)) }
+    }
+
+    /// "what is 32/40", "15% of 80?", "5 ft in cm": answered instantly by the calculator, no model needed.
+    static func quickMath(_ text: String) -> String? {
+        var q = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = q.last, "?.!".contains(last) { q.removeLast() }
+        for lead in ["what is", "what's", "whats", "how much is", "calculate", "calc", "compute", "convert", "solve", "="] where q.hasPrefix(lead + " ") {
+            q = String(q.dropFirst(lead.count + 1)); break
+        }
+        q = q.trimmingCharacters(in: .whitespaces)
+        guard q.contains(where: \.isNumber), Double(q) == nil, let r = Calc.evaluate(q) else { return nil }
+        return "\(q) = \(r.display)"
+    }
     private var task: Task<Void, Never>?
 
     var unavailableReason: String? {
@@ -235,7 +265,7 @@ final class Assistant: ObservableObject {
         let now = Date().formatted(date: .complete, time: .shortened)
         var s = "You are Onyx, a friendly assistant built into the user's Mac notch. Now: \(now). Keep answers short (under 120 words) and use plain text."
         if agent {
-            s += " You can act on the Mac with tools. Use them when the user asks you to do something. Only say an action happened if a tool confirmed it. Emails are only drafted, never sent. Dates for tools use yyyy-MM-dd HH:mm."
+            s += " You can act on the Mac with tools, but only when the user explicitly asks for that action. For questions (math, facts, explanations, advice) answer directly in words and do not call any tool. Never invent names, people, titles, places or times; only use details the user gave you. Only say an action happened if a tool confirmed it. Emails are only drafted, never sent. Dates for tools use yyyy-MM-dd HH:mm."
         }
         return s
     }
@@ -252,9 +282,15 @@ final class Assistant: ObservableObject {
     func send(_ text: String, context: String? = nil) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy else { return }
+        if context == nil, let answer = Self.quickMath(text) {
+            messages.append(Msg(role: .user, text: text))
+            messages.append(Msg(role: .assistant, text: answer))
+            return
+        }
         if let r = unavailableReason { messages.append(Msg(role: .error, text: r)); return }
         messages.append(Msg(role: .user, text: text))
         busy = true
+        Self.currentRequest = text
         let agent = agentMode, look = seeScreen
         task = Task { @MainActor in
             defer { self.busy = false }
@@ -273,7 +309,8 @@ final class Assistant: ObservableObject {
                     sessionIsAgent = agent
                 }
                 var idx: Int?
-                for try await snap in session!.streamResponse(to: prompt) {
+                // Low temperature: steadier answers, far fewer made-up tool calls.
+                for try await snap in session!.streamResponse(to: prompt, options: GenerationOptions(temperature: 0.3)) {
                     if idx == nil { messages.append(Msg(role: .assistant, text: "")); idx = messages.count - 1 }
                     messages[idx!].text = snap.content
                 }

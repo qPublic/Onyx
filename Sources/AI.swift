@@ -66,6 +66,7 @@ struct AgentTool: Tool {
     /// The tool only runs if the user's message mentions one of these (the small on-device model
     /// sometimes calls tools nobody asked for, like making up a calendar event for a math question).
     var requires: [String] = []
+    var logs = true            // show the call in the chat (off for behind-the-scenes thinking)
     let run: @Sendable (GeneratedContent) async throws -> String
 
     var parameters: GenerationSchema {
@@ -77,14 +78,33 @@ struct AgentTool: Tool {
     }
 
     func call(arguments: GeneratedContent) async throws -> String {
+        // The small model can get stuck calling a tool over and over: answer repeats from memory and cap the total.
+        let key = name + "|" + arguments.jsonString
+        if let prev = ToolBudget.previous(key) { return prev + " (already done; now answer without calling tools again)" }
+        guard ToolBudget.spend() else { throw ToolBudget.Exhausted() }
         let request = Assistant.currentRequest.lowercased()
         if !requires.isEmpty && !requires.contains(where: request.contains) {
             return "Not done: the user didn't ask for this. Don't use tools for this message; answer it directly in words."
         }
         let out = try await run(arguments)
-        await MainActor.run { Assistant.shared.log(tool: name, result: out) }
+        ToolBudget.record(key, out)
+        if logs { await MainActor.run { Assistant.shared.log(tool: name, result: out) } }
         return out
     }
+}
+
+/// Tool calls allowed per model request (reset before each one). Locked: the model can call tools in parallel.
+enum ToolBudget {
+    struct Exhausted: Error {}
+    static let limit = 8
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var calls = 0
+    nonisolated(unsafe) private static var done: [String: String] = [:]
+    static func reset() { lock.withLock { calls = 0; done = [:] } }
+    static func previous(_ key: String) -> String? { lock.withLock { done[key] } }
+    /// Counts a call; false once the budget is used up.
+    static func spend() -> Bool { lock.withLock { calls += 1; return calls <= limit } }
+    static func record(_ key: String, _ result: String) { lock.withLock { done[key] = result } }
 }
 
 private func arg(_ a: GeneratedContent, _ k: String) -> String? {
@@ -117,8 +137,54 @@ private func findApp(_ name: String) -> URL? {
 }
 
 enum AgentTools {
+    /// Exact math, so the small model doesn't have to do arithmetic in its head (available in Ask and Agent).
+    static let calculator = makeCalculator(logs: true)
+    static let quietCalculator = makeCalculator(logs: false)   // for the hidden thinking passes
+
+    private static func makeCalculator(logs: Bool) -> AgentTool {
+        AgentTool(name: "calculate", description: "Exact arithmetic, unit conversion, or solving a linear equation with one unknown. Use it instead of doing math in your head, e.g. 180-(45+60), 15% of 80, sqrt(144), 5 ft in cm, 3x + 10 + 2x + 20 = 180",
+                  params: [("expression", "The calculation or equation", false)], logs: logs) { a in
+            guard let raw = arg(a, "expression") else { return "Missing expression" }
+            // The model often writes "180° - 35°" or "= ?"; keep just the math.
+            var e = raw.replacingOccurrences(of: "°", with: "").replacingOccurrences(of: "degrees", with: "")
+            if let solved = solveLinear(e) { return solved }
+            e = e.components(separatedBy: "=").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? e
+            // "3x + 10" has a variable (the calculator would read x as ×); unit conversions like "5 ft in cm" are fine.
+            let converting = e.range(of: #"\s(in|to|as|into)\s"#, options: [.regularExpression, .caseInsensitive]) != nil
+            if !converting, e.lowercased().range(of: #"\d\s*[a-df-z]\b|\b[a-df-z]\b"#, options: .regularExpression) != nil {
+                return "TOOL ERROR: the calculator needs plain numbers, or an equation with one unknown like 5x + 30 = 180."
+            }
+            if let r = Calc.evaluate(e) { return "\(e.trimmingCharacters(in: .whitespaces)) = \(r.display)" }
+            return "TOOL ERROR: couldn't calculate that. Work it out step by step without the tool."
+        }
+    }
+
+    /// "3x + 10 + 2x + 20 = 180" → "x = 30". One unknown, linear only.
+    static func solveLinear(_ eq: String) -> String? {
+        let sides = eq.components(separatedBy: "=")
+        guard sides.count == 2, !sides[1].trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        let pattern = #"(?<![a-z])[a-df-z](?![a-z])"#   // a single-letter unknown (not e, which is Euler's number)
+        let lower = eq.lowercased()
+        let vars = Set((try? NSRegularExpression(pattern: pattern)).map { re in
+            re.matches(in: lower, range: NSRange(lower.startIndex..., in: lower)).compactMap { Range($0.range, in: lower).map { String(lower[$0]) } }
+        } ?? [])
+        guard vars.count == 1, let v = vars.first else { return nil }
+        func f(_ x: Double) -> Double? {
+            func side(_ s: String) -> Double? {
+                let sub = s.lowercased().replacingOccurrences(of: #"(?<![a-z])\#(v)(?![a-z])"#, with: "(\(x))", options: .regularExpression)
+                return Calc.evaluate(sub).flatMap { Double($0.copy) }
+            }
+            guard let l = side(sides[0]), let r = side(sides[1]) else { return nil }
+            return l - r
+        }
+        guard let f0 = f(0), let f1 = f(1), let f2 = f(2), abs(f2 - 2 * f1 + f0) < 1e-9 * max(1, abs(f1)), f1 != f0 else { return nil }
+        let x = -f0 / (f1 - f0)
+        return "\(v) = \(Calc.format(x, grouped: false))"
+    }
+
     static var all: [AgentTool] {
         [
+            calculator,
             AgentTool(name: "open_app", description: "Launch or switch to a Mac app by name", params: [("name", "App name, e.g. Safari", false)], requires: ["open", "launch", "start", "switch to"]) { a in
                 guard let n = arg(a, "name") else { return "Missing app name" }
                 guard let u = findApp(n) else { return "Couldn't find an app named \(n)" }
@@ -209,7 +275,7 @@ enum AgentTools {
                 return "Copied to clipboard"
             },
             AgentTool(name: "read_screen", description: "Read the text currently visible on the user's screen", params: [], requires: ["screen", "on my", "this page", "this window", "looking at", "read", "see"]) { _ in
-                String(try await ScreenReader.screenText().prefix(2000))
+                await ImageReader.analyze(try await ScreenReader.capture(), effort: AIEffort.current).prompt(limit: 2000)
             },
             AgentTool(name: "control_music", description: "Control music playback", params: [("action", "play, pause, next, previous, or status", false)], requires: ["play", "pause", "skip", "next", "previous", "song", "music", "track", "resume", "stop", "listening"]) { a in
                 let act = arg(a, "action")?.lowercased() ?? "status"
@@ -241,14 +307,17 @@ enum AgentTools {
 final class Assistant: ObservableObject {
     static let shared = Assistant()
     enum Role { case user, assistant, tool, error }
-    struct Msg: Identifiable { let id = UUID(); let role: Role; var text: String }
+    struct Msg: Identifiable { let id = UUID(); let role: Role; var text: String; var image: NSImage? = nil }
 
     @Published var messages: [Msg] = []
     @Published var busy = false
     @Published var agentMode = true
     @Published var seeScreen = false
+    @Published var status: String?            // "Reading your screen…", "Thinking…"
+    @Published var attachment: CGImage?       // an image to ask about
     private var session: LanguageModelSession?
     private var sessionIsAgent = true
+    private var sessionEffort = AIEffort.medium
     /// The message being answered; tools check it before acting.
     static var currentRequest = ""
     static let ungrounded = "Not done: that title isn't something the user said. Ask the user what to call it instead of inventing one."
@@ -282,19 +351,27 @@ final class Assistant: ObservableObject {
         }
     }
 
-    private func instructions(agent: Bool) -> String {
+    private func instructions(agent: Bool, effort: AIEffort) -> String {
         let now = Date().formatted(date: .complete, time: .shortened)
-        var s = "You are Onyx, a friendly assistant built into the user's Mac notch. Now: \(now). Keep answers short (under 120 words) and use plain text."
+        var s = "You are Onyx, a friendly assistant built into the user's Mac notch. Now: \(now). Use plain text, never LaTeX: write math like 5x + 30 = 180."
+        switch effort {
+        case .low: s += " Give just the answer, with at most one short line of working."
+        case .medium: s += " Keep answers short (under 120 words)."
+        case .high, .max: s += " Be accurate. For math and problems, show the key steps briefly, then the answer (under 200 words)."
+        }
+        if agent || effort == .high || effort == .max { s += " Use the calculate tool for arithmetic with plain numbers." }
+        else { s += " For math, work step by step and double-check the arithmetic." }
+        s += " When the user shares an image or their screen, you get a description made by image recognition and OCR; answer about it directly."
         if agent {
             s += " You can act on the Mac with tools, but only when the user explicitly asks for that action. For questions (math, facts, explanations, advice) answer directly in words and do not call any tool. Never invent names, people, titles, places or times; only use details the user gave you. Only say an action happened if a tool confirmed it. Emails are only drafted, never sent. Dates for tools use yyyy-MM-dd HH:mm."
         }
         return s
     }
 
-    func reset() { task?.cancel(); session = nil; messages = []; busy = false }
+    func reset() { task?.cancel(); session = nil; messages = []; busy = false; status = nil; attachment = nil }
     /// Free the on-device model session while idle to reclaim memory; the chat log stays.
     func releaseIfIdle() { if !busy { session = nil } }
-    func stop() { task?.cancel(); busy = false }
+    func stop() { task?.cancel(); busy = false; status = nil }
 
     func log(tool: String, result: String) {
         messages.append(Msg(role: .tool, text: "\(tool.replacingOccurrences(of: "_", with: " ")): \(result.prefix(140))"))
@@ -309,35 +386,39 @@ final class Assistant: ObservableObject {
             return
         }
         if let r = unavailableReason { messages.append(Msg(role: .error, text: r)); return }
-        messages.append(Msg(role: .user, text: text))
+        let image = attachment
+        attachment = nil
+        messages.append(Msg(role: .user, text: text, image: image.map { NSImage(cgImage: $0, size: .zero) }))
         busy = true
         Self.currentRequest = text
-        let agent = agentMode, look = seeScreen
+        let agent = agentMode, look = seeScreen, effort = AIEffort.current
         task = Task { @MainActor in
-            defer { self.busy = false }
+            defer { self.busy = false; self.status = nil }
             do {
-                var prompt = text
-                if let context {
-                    prompt = "Selected content:\n\"\"\"\n\(context.prefix(2500))\n\"\"\"\n\n\(text)"
+                // 1. Turn what the user shared into text the model can read.
+                var shared: [String] = []
+                if let context { shared.append("Selected content:\n\"\"\"\n\(context.prefix(effort.contextChars))\n\"\"\"") }
+                if let image {
+                    status = "Looking at the image…"
+                    let r = await ImageReader.analyze(image, effort: effort)
+                    shared.append(r.isEmpty ? "The user attached an image, but nothing in it could be recognized." : "The user attached an image. " + r.prompt(limit: effort.contextChars))
                 } else if look {
-                    let screen = try await ScreenReader.screenText()
-                    prompt = "Text visible on my screen right now:\n\"\"\"\n\(screen.prefix(2500))\n\"\"\"\n\nMy request: \(text)"
+                    status = "Reading your screen…"
+                    let r = await ImageReader.analyze(try await ScreenReader.capture(), effort: effort)
+                    shared.append("This is what's on the user's screen right now. " + r.prompt(limit: effort.contextChars))
                 }
-                if session == nil || sessionIsAgent != agent {
-                    session = agent
-                        ? LanguageModelSession(tools: AgentTools.all, instructions: instructions(agent: true))
-                        : LanguageModelSession(instructions: instructions(agent: false))
-                    sessionIsAgent = agent
+                let request = shared.isEmpty ? text : shared.joined(separator: "\n\n") + "\n\nMy request: " + text
+
+                // 2. High / Max: work it out first in a scratch session, then answer with those notes.
+                var notes: String?
+                if effort == .high || effort == .max {
+                    status = effort == .max ? "Thinking it through three ways…" : "Thinking…"
+                    do { notes = try await Self.think(request, effort: effort) }
+                    catch is CancellationError { throw CancellationError() }
+                    catch { notes = nil }   // answer anyway, just without the extra thinking
                 }
-                var idx: Int?
-                // Low temperature: steadier answers, far fewer made-up tool calls.
-                for try await snap in session!.streamResponse(to: prompt, options: GenerationOptions(temperature: 0.3)) {
-                    if idx == nil { messages.append(Msg(role: .assistant, text: "")); idx = messages.count - 1 }
-                    messages[idx!].text = snap.content
-                }
-            } catch LanguageModelSession.GenerationError.exceededContextWindowSize {
-                session = nil
-                messages.append(Msg(role: .error, text: "That conversation got too long, so I started a fresh one. Please ask again."))
+                status = "Writing…"
+                try await answer(request, notes: notes, agent: agent, effort: effort)
             } catch is CancellationError {
             } catch {
                 messages.append(Msg(role: .error, text: error.localizedDescription))
@@ -345,16 +426,192 @@ final class Assistant: ObservableObject {
         }
     }
 
-    /// One-shot question used by Circle to Search.
-    static func quickAnswer(about content: String, question: String) -> AsyncThrowingStream<String, Error> {
+    private func makeSession(agent: Bool, effort: AIEffort) -> LanguageModelSession {
+        // In Ask mode the calculator only helps with a thinking pass behind it (High / Max); at Low and Medium the
+        // small model tends to feed it things like "m∠A + m∠B" and then guess, so it reasons in plain text instead.
+        LanguageModelSession(tools: agent ? AgentTools.all : (effort == .high || effort == .max) ? [AgentTools.calculator] : [],
+                             instructions: instructions(agent: agent, effort: effort))
+    }
+
+    private static func options(_ effort: AIEffort) -> GenerationOptions {
+        switch effort {
+        case .low: GenerationOptions(sampling: .greedy, maximumResponseTokens: 300)   // fastest, most predictable
+        case .medium: GenerationOptions(temperature: 0.3)   // steady answers, far fewer made-up tool calls
+        case .high, .max: GenerationOptions(temperature: 0.2)
+        }
+    }
+
+    /// Streams the final answer. If the chat has grown too big for the model, starts fresh once with a trimmed prompt.
+    @MainActor private func answer(_ request: String, notes: String?, agent: Bool, effort: AIEffort) async throws {
+        func prompt(_ limit: Int) -> String {
+            let r = request.count > limit ? String(request.prefix(limit)) + "…" : request
+            guard let notes else { return r }
+            return r + "\n\nYour own working notes (check them for mistakes, then give your answer; don't mention the notes):\n" + notes.prefix(limit / 2)
+        }
+        for attempt in 0..<3 {
+            if session == nil || sessionIsAgent != agent || sessionEffort != effort {
+                session = makeSession(agent: agent, effort: effort)
+                sessionIsAgent = agent; sessionEffort = effort
+            }
+            do {
+                var idx: Int?
+                ToolBudget.reset()
+                for try await snap in session!.streamResponse(to: prompt(attempt == 0 ? 6000 : 2500), options: Self.options(effort)) {
+                    if idx == nil { status = nil; messages.append(Msg(role: .assistant, text: "")); idx = messages.count - 1 }
+                    messages[idx!].text = Self.plain(snap.content)
+                }
+                // It parroted a tool error instead of answering: drop that and answer once more without tools.
+                if let i = idx, messages[i].text.contains("TOOL ERROR") {
+                    messages.remove(at: i)
+                    throw ToolBudget.Exhausted()
+                }
+                return
+            } catch is ToolBudget.Exhausted {
+                session = nil
+                try await answerWithoutTools(prompt(3000), effort: effort)
+                return
+            } catch LanguageModelSession.GenerationError.exceededContextWindowSize {
+                session = nil   // forget the earlier conversation and try again, shorter
+                if attempt == 2 { messages.append(Msg(role: .error, text: "That was too much for the on-device model at once. Try a shorter question or a smaller part of the screen.")) }
+            } catch let e as LanguageModelSession.GenerationError where Self.isBusy(e) && attempt < 2 {
+                try await Task.sleep(for: .seconds(1.5 * Double(attempt + 1)))   // macOS limits background apps' model use; wait and retry
+            } catch let e as LanguageModelSession.ToolCallError where e.underlyingError is ToolBudget.Exhausted {
+                session = nil   // stuck calling tools: answer once more with no tools at all
+                try await answerWithoutTools(prompt(3000), effort: effort)
+                return
+            }
+        }
+    }
+
+    @MainActor private func answerWithoutTools(_ prompt: String, effort: AIEffort) async throws {
+        let s = LanguageModelSession(instructions: instructions(agent: false, effort: effort) + " Answer directly; you have no tools.")
+        var idx: Int?
+        for try await snap in s.streamResponse(to: prompt, options: Self.options(effort)) {
+            if idx == nil { status = nil; messages.append(Msg(role: .assistant, text: "")); idx = messages.count - 1 }
+            messages[idx!].text = Self.plain(snap.content)
+        }
+    }
+
+    /// High: one careful step-by-step pass. Max: three independent attempts, then a pass that compares them.
+    private static func think(_ request: String, effort: AIEffort) async throws -> String {
+        let instructions = "You work problems out carefully. Restate what is asked, list the facts given, then reason step by step. Use the calculate tool for arithmetic. Be concise, plain text, no LaTeX. End with a line starting 'Answer:'."
+        func attempt(_ temperature: Double) async throws -> String {
+            try await retrying {
+                ToolBudget.reset()
+                let s = LanguageModelSession(tools: [AgentTools.quietCalculator], instructions: instructions)
+                return try await s.respond(to: String(request.prefix(5000)), options: GenerationOptions(temperature: temperature, maximumResponseTokens: 600)).content
+            }
+        }
+        if effort != .max { return String(try await attempt(0.2).prefix(1600)) }
+        // Max: three independent attempts (one at a time: the on-device model runs one request best).
+        var drafts: [String] = []
+        for t in [0.2, 0.4, 0.6] { drafts.append(try await attempt(t)) }
+        // Majority vote: if two attempts reach the same answer, trust it. The small model is a worse judge than a vote.
+        let answers = drafts.map(finalAnswer)
+        for (i, a) in answers.enumerated() {
+            guard let a, answers.filter({ $0 == a }).count >= 2 else { continue }
+            return String(drafts[i].prefix(1500)) + "\n(Two of three independent attempts reached this same answer.)"
+        }
+        let judge = LanguageModelSession(tools: [AgentTools.quietCalculator], instructions: "You compare several attempts at the same problem, spot mistakes, and settle on the correct answer. Be concise.")
+        let compare = "Problem:\n\(request.prefix(1800))\n\n" + drafts.enumerated().map { "Attempt \($0.offset + 1):\n\($0.element.prefix(800))" }.joined(separator: "\n\n")
+            + "\n\nWhich attempt is right? Point out mistakes, then give the correct reasoning and a final line starting 'Answer:'."
+        return String(try await retrying { ToolBudget.reset(); return try await judge.respond(to: compare, options: GenerationOptions(temperature: 0.1, maximumResponseTokens: 600)).content }.prefix(1600))
+    }
+
+    /// The model is rate-limited (macOS throttles background apps) or already busy: worth waiting and retrying.
+    static func isBusy(_ e: LanguageModelSession.GenerationError) -> Bool {
+        switch e {
+        case .rateLimited, .concurrentRequests: true
+        default: false
+        }
+    }
+
+    static func retrying<T>(_ op: () async throws -> T) async throws -> T {
+        for attempt in 0..<3 {
+            do { return try await op() }
+            catch let e as LanguageModelSession.GenerationError where isBusy(e) && attempt < 2 {
+                try await Task.sleep(for: .seconds(1.5 * Double(attempt + 1)))
+            }
+        }
+        return try await op()
+    }
+
+    /// The chat shows plain text, so turn any LaTeX the model slips in into readable math.
+    static func plain(_ s: String) -> String {
+        var t = s
+        for (a, b) in [("\\[", ""), ("\\]", ""), ("\\(", ""), ("\\)", ""), ("\\times", "×"), ("\\cdot", "·"), ("\\div", "÷"),
+                       ("\\angle", "∠"), ("^\\circ", "°"), ("\\circ", "°"), ("\\leq", "≤"), ("\\geq", "≥"), ("\\neq", "≠"),
+                       ("\\pi", "π"), ("\\theta", "θ"), ("\\sqrt", "√"), ("\\left", ""), ("\\right", ""), ("\\quad", " "), ("\\,", " ")] {
+            t = t.replacingOccurrences(of: a, with: b)
+        }
+        t = t.replacingOccurrences(of: #"\\(begin|end)\{[^}]*\}"#, with: "", options: .regularExpression)
+        t = t.replacingOccurrences(of: "&=", with: "=").replacingOccurrences(of: "\\\\", with: "\n")
+        t = t.replacingOccurrences(of: #"\\frac\{([^{}]*)\}\{([^{}]*)\}"#, with: "($1)/($2)", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"\\text\{([^{}]*)\}"#, with: "$1", options: .regularExpression)
+        return t
+    }
+
+    /// The "Answer: …" line of a worked attempt, normalized so two attempts can be compared.
+    static func finalAnswer(_ s: String) -> String? {
+        guard let line = s.components(separatedBy: "\n").last(where: { $0.range(of: "answer:", options: .caseInsensitive) != nil }),
+              let r = line.range(of: "answer:", options: [.caseInsensitive, .backwards]) else { return nil }
+        let a = line[r.upperBound...].lowercased().filter { $0.isNumber || $0.isLetter || "=.-/".contains($0) }
+        return a.isEmpty ? nil : a
+    }
+
+    // MARK: Attaching images
+
+    func attach(_ image: NSImage) {
+        var r = CGRect(origin: .zero, size: image.size)
+        attachment = image.cgImage(forProposedRect: &r, context: nil, hints: nil)
+    }
+
+    func attachFromClipboard() -> Bool {
+        guard let img = NSImage(pasteboard: .general) else { return false }
+        attach(img); return true
+    }
+
+    func chooseImage() {
+        let p = NSOpenPanel()
+        p.allowedContentTypes = [.image]
+        p.canChooseDirectories = false
+        NSApp.activate(ignoringOtherApps: true)
+        if p.runModal() == .OK, let u = p.url, let img = NSImage(contentsOf: u) { attach(img) }
+    }
+
+    /// macOS's own area picker (crosshair), then back to the AI tab with the picture attached.
+    func captureArea() {
+        NotchController.current?.collapse()
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("onyx-ai-capture-\(UUID().uuidString).png")
+        Task.detached {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            p.arguments = ["-i", "-x", file.path]
+            try? p.run(); p.waitUntilExit()
+            await MainActor.run {
+                if let img = NSImage(contentsOf: file) { self.attach(img) }
+                try? FileManager.default.removeItem(at: file)
+                (NSApp.delegate as? AppDelegate)?.askAI()
+            }
+        }
+    }
+
+    /// One-shot question used by Circle to Search: reads the circled picture, thinks first on High / Max.
+    static func quickAnswer(image: CGImage, question: String) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { cont in
             Task {
                 do {
                     if let r = Assistant.shared.unavailableReason { throw NSError(domain: "Onyx", code: 4, userInfo: [NSLocalizedDescriptionKey: r]) }
-                    let s = LanguageModelSession(instructions: "You explain things a user circled on their screen. Be concise: at most 90 words, plain text.")
-                    for try await snap in s.streamResponse(to: "\(question)\n\nCircled content:\n\"\"\"\n\(content.prefix(2500))\n\"\"\"") {
-                        cont.yield(snap.content)
+                    let effort = AIEffort.current
+                    let report = await ImageReader.analyze(image, effort: effort)
+                    let request = "\(question)\n\nThe user circled part of their screen. " + report.prompt(limit: effort.contextChars)
+                    var prompt = request
+                    if effort == .high || effort == .max {
+                        cont.yield("Thinking…")
+                        prompt += "\n\nYour own working notes (check them, then answer):\n" + (try await think(request, effort: effort))
                     }
+                    let s = LanguageModelSession(tools: [AgentTools.calculator], instructions: "You explain or solve what a user circled on their screen. Use the calculate tool for arithmetic. Be concise: at most \(effort == .low ? 50 : 120) words, plain text.")
+                    for try await snap in s.streamResponse(to: prompt, options: options(effort)) { cont.yield(snap.content) }
                     cont.finish()
                 } catch { cont.finish(throwing: error) }
             }
@@ -489,9 +746,10 @@ struct CircleOverlayView: View {
         let s = CGFloat(image.width) / screenSize.width
         crop = image.cropping(to: CGRect(x: r.minX * s, y: r.minY * s, width: r.width * s, height: r.height * s))
         guard let crop else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let t = ScreenReader.ocr(crop), l = ScreenReader.labels(crop)
-            DispatchQueue.main.async { text = t; labels = l }
+        Task { @MainActor in
+            let r = await ImageReader.analyze(crop, effort: .medium)   // math symbols repaired, labels, codes
+            text = r.text.isEmpty ? (r.codes.first ?? "") : r.text
+            labels = r.labels
         }
     }
 
@@ -532,6 +790,11 @@ struct CircleOverlayView: View {
                     open("https://images.google.com/")
                 }
                 chip("character.book.closed", "Translate") { open("https://translate.google.com/?sl=auto&tl=en&op=translate&text=\(enc(text))") }
+                chip("sparkles", "Ask AI") {
+                    if let crop { Assistant.shared.attachment = crop }
+                    close()
+                    (NSApp.delegate as? AppDelegate)?.askAI()
+                }
                 chip(copied ? "checkmark" : "doc.on.doc", copied ? "Copied" : "Copy") {
                     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string); copied = true
                 }
@@ -566,10 +829,10 @@ struct CircleOverlayView: View {
 
     private func ask() {
         thinking = true
-        let content = text.isEmpty ? "An image that looks like: \(labels.joined(separator: ", "))" : text
+        guard let crop else { thinking = false; return }
         Task { @MainActor in
             do {
-                for try await s in Assistant.quickAnswer(about: content, question: "Explain what this is and anything useful to know about it.") { answer = s }
+                for try await s in Assistant.quickAnswer(image: crop, question: "Explain what this is and anything useful to know about it. If it's a problem or question, solve it.") { answer = s }
             } catch { answer = error.localizedDescription }
             thinking = false
         }
@@ -587,4 +850,54 @@ struct KeyCatcher: NSViewRepresentable {
     }
     func makeNSView(context: Context) -> V { let v = V(); v.onEscape = onEscape; return v }
     func updateNSView(_ v: V, context: Context) { v.onEscape = onEscape }
+}
+
+// MARK: - Self-test: ONYX_AI_TEST=1 asks about rendered geometry problems at every effort, logs answers + timings, quits.
+
+enum AISelfTest {
+    static func render(_ lines: [String]) -> CGImage? {
+        let w = 1100, h = 60 + 56 * lines.count
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        let font = CTFontCreateWithName("Times New Roman" as CFString, 30, nil)
+        for (i, l) in lines.enumerated() {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: l, attributes: [.font: font, .foregroundColor: NSColor.black]))
+            ctx.textPosition = CGPoint(x: 30, y: CGFloat(h - 60 - i * 56))
+            CTLineDraw(line, ctx)
+        }
+        return ctx.makeImage()
+    }
+
+    @MainActor static func run() async {
+        let file = Prefs.supportDir.appendingPathComponent("ai-test.log")
+        try? FileManager.default.removeItem(at: file)
+        func log(_ s: String) { Shell.log(s); if let d = (s + "\n").data(using: .utf8), let h = try? FileHandle(forWritingTo: file) { h.seekToEndOfFile(); h.write(d); try? h.close() } else { try? (s + "\n").write(to: file, atomically: true, encoding: .utf8) } }
+        let problems = [
+            ["In triangle ABC, m∠A = 35° and m∠B = 65°.", "Find m∠C."],
+            ["∠1 and ∠2 are supplementary angles.", "m∠1 = 3x + 10 and m∠2 = 2x + 20.", "Find x and m∠1."],
+        ]
+        let saved = UserDefaults.standard.string(forKey: AIEffort.key)
+        let ai = Assistant.shared
+        log("AI available: \(ai.unavailableReason ?? "yes")")
+        for p in problems {
+            guard let img = render(p) else { continue }
+            log("\n=== Problem: \(p.joined(separator: " "))")
+            log("What the AI is given:\n" + (await ImageReader.analyze(img, effort: .medium)).prompt(limit: 2500))
+            for e in AIEffort.allCases {
+                UserDefaults.standard.set(e.rawValue, forKey: AIEffort.key)
+                ai.reset(); ai.agentMode = false; ai.seeScreen = false
+                ai.attachment = img
+                let t0 = Date()
+                ai.send("Solve this")
+                while ai.busy { try? await Task.sleep(for: .milliseconds(200)) }
+                let out = ai.messages.dropFirst().map { "[\($0.role)] \($0.text)" }.joined(separator: "\n")
+                log("--- \(e.title) (\(String(format: "%.1f", Date().timeIntervalSince(t0)))s):\n\(out)")
+            }
+        }
+        if let saved { UserDefaults.standard.set(saved, forKey: AIEffort.key) } else { UserDefaults.standard.removeObject(forKey: AIEffort.key) }
+        ai.reset()
+        log("== done")
+        NSApp.terminate(nil)
+    }
 }

@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **AI effort.** Choose how hard Onyx AI works with the new gauge button in the AI tab (also in **Settings › Privacy › AI**):
+  - **Low:** fastest, short answers
+  - **Medium:** the default
+  - **High:** works the problem out step by step before answering
+  - **Max:** makes three separate attempts, and if two agree on the answer it uses that one
+  Higher effort is slower but gets harder questions right more often.
+- **Ask about any image.** Use the new 📎 button in the AI tab to capture an area of the screen, choose an image, or paste one, or just drag an image onto the AI tab. Onyx reads it with on-device image recognition:
+  - text in reading order
+  - tables, as rows and columns (High and Max)
+  - QR codes and barcodes
+  - what's in the picture, plus people, faces and animals
+- **Built-in calculator for the AI.** On High and Max effort, and in Agent mode, Onyx AI checks its arithmetic with an exact calculator. The calculator can also solve equations like 5x + 30 = 180, so math answers are right more often.
+- **Circle to Search → Ask AI.** Circling something now shows an **Ask AI** button that opens the AI tab with the image attached. "Explain this with AI" also solves circled problems, and uses your effort setting.
+
+### Improved
+- **Math symbols are read correctly.** Onyx checks the actual shape of symbols that screen text reading gets wrong, so ∠ is no longer mistaken for <, and ≤, ≥, ≅, √ and ° come through correctly. That means geometry problems on your screen or in images make sense to the AI.
+- **Answers are plain text.** They no longer include raw LaTeX like `\[ … \]`.
+- **Long conversations recover.** If a chat gets too long for the on-device model, Onyx retries automatically with a fresh, shorter request instead of giving up.
+
 ## 1.3.0
 
 ### New

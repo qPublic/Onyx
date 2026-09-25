@@ -407,10 +407,13 @@ struct AITab: View {
     @State private var input = ""
     @FocusState private var focused: Bool
 
+    @AppStorage(AIEffort.key) private var effortRaw = AIEffort.medium.rawValue
+    @State private var dropping = false
+
     let suggestions = [
         "What's on my screen? Summarize it",
+        "Solve the problem on my screen",
         "Remind me to study at 7pm",
-        "Find my resume",
         "Draft an email asking for an extension",
     ]
 
@@ -438,8 +441,11 @@ struct AITab: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(ai.messages) { m in bubble(m).id(m.id) }
-                            if ai.busy && ai.messages.last?.role != .assistant {
-                                ProgressView().controlSize(.small).id("spinner")
+                            if ai.busy && (ai.messages.last?.role != .assistant || ai.status != nil) {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small)
+                                    if let s = ai.status { Text(s).font(.system(size: 11)).foregroundStyle(.secondary) }
+                                }.id("spinner")
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -448,6 +454,17 @@ struct AITab: View {
                         if let id = ai.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
                     }
                 }
+            }
+            if let img = ai.attachment {
+                HStack(spacing: 8) {
+                    Image(decorative: img, scale: 1).resizable().scaledToFill()
+                        .frame(width: 34, height: 26).clipShape(RoundedRectangle(cornerRadius: 5))
+                    Text("Image attached. Ask about it.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button { ai.attachment = nil } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
             }
             HStack(spacing: 8) {
                 Picker("", selection: $ai.agentMode) {
@@ -460,6 +477,23 @@ struct AITab: View {
                     Image(systemName: ai.seeScreen ? "eye.fill" : "eye.slash").foregroundStyle(ai.seeScreen ? .cyan : .secondary)
                 }
                 .buttonStyle(.plain).help("Let the AI read your screen")
+                Menu {
+                    Button { ai.captureArea() } label: { Label("Capture an area of the screen…", systemImage: "viewfinder") }
+                    Button { ai.chooseImage() } label: { Label("Choose an image…", systemImage: "photo") }
+                    Button { _ = ai.attachFromClipboard() } label: { Label("Paste image", systemImage: "doc.on.clipboard") }
+                        .disabled(NSImage.canInit(with: .general) == false)
+                } label: { Image(systemName: "paperclip") }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Ask about an image")
+                Menu {
+                    Picker("Effort", selection: $effortRaw) {
+                        ForEach(AIEffort.allCases) { e in
+                            Label("\(e.title) — \(e.detail)", systemImage: e.icon).tag(e.rawValue)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: { Image(systemName: (AIEffort(rawValue: effortRaw) ?? .medium).icon) }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("Effort: \((AIEffort(rawValue: effortRaw) ?? .medium).title). Higher is slower but smarter.")
                 TextField(ai.agentMode ? "Tell Onyx what to do…" : "Ask Onyx…", text: $input)
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 10).padding(.vertical, 6)
@@ -481,6 +515,21 @@ struct AITab: View {
         }
         .onAppear { focused = true }
         .onChange(of: model.focusRequest) { _, _ in focused = true }
+        // Drop an image (or image file) here to ask about it; other drops still go to the Shelf.
+        .onDrop(of: [.image, .fileURL], isTargeted: $dropping) { providers in
+            guard let p = providers.first else { return false }
+            if p.canLoadObject(ofClass: NSImage.self) {
+                _ = p.loadObject(ofClass: NSImage.self) { img, _ in
+                    if let img = img as? NSImage { DispatchQueue.main.async { ai.attach(img) } }
+                }
+                return true
+            }
+            _ = p.loadObject(ofClass: URL.self) { u, _ in
+                if let u, let img = NSImage(contentsOf: u) { DispatchQueue.main.async { ai.attach(img) } }
+            }
+            return true
+        }
+        .overlay { if dropping { RoundedRectangle(cornerRadius: 14).strokeBorder(.cyan, style: StrokeStyle(lineWidth: 2, dash: [6])) } }
     }
 
     private func submit() {
@@ -492,6 +541,9 @@ struct AITab: View {
         switch m.role {
         case .user:
             HStack { Spacer(minLength: 60)
+                if let img = m.image {
+                    Image(nsImage: img).resizable().scaledToFit().frame(maxWidth: 70, maxHeight: 50).clipShape(RoundedRectangle(cornerRadius: 6))
+                }
                 Text(m.text).font(.system(size: 12)).padding(.horizontal, 10).padding(.vertical, 6)
                     .background(Color.blue.opacity(0.7), in: RoundedRectangle(cornerRadius: 12)).textSelection(.enabled)
             }

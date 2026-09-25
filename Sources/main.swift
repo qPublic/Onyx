@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         MemoryTrimmer.shared.observe()
         MenuBarDodger.shared.promptIfNeeded()   // ask for Accessibility if a feature that needs it is on
         MediaKeys.shared.start()                // replace the native volume slider (when granted + enabled)
+        SnapController.shared.start()           // drag a window to the notch → snap layouts
         // Debug: ONYX_CAPTURETEST=screen|record takes a full-screen shot / 3s recording shortly after launch.
         if let t = ProcessInfo.processInfo.environment["ONYX_CAPTURETEST"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {

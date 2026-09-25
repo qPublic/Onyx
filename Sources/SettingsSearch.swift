@@ -43,6 +43,7 @@ enum SettingsIndex {
         e(.behavior, "Motion", "Animation", "animation bouncy smooth snappy spring motion"),
         e(.behavior, "Motion", "Haptic feedback on open", "haptic vibration trackpad feedback"),
         e(.behavior, "System", "Hide while an app is fullscreen", "fullscreen full screen hide video"),
+        e(.behavior, "System", "Snap layouts", "snap window windows layout resize tile half halves thirds quarters top bottom split drag"),
         e(.behavior, "System", "Hide from screen recordings & shares", "privacy screen share zoom meet recording screenshot hide capture"),
         e(.behavior, "System", "Keep clear of app menus", "menu bar menus dodge chrome help overlap cover move accessibility"),
         e(.behavior, "System", "Replace the volume & brightness sliders", "volume brightness hud slider osd sound display keys accessibility"),

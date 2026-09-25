@@ -535,7 +535,9 @@ struct WidgetsSettings: View {
             }
 
             Section("Tabs") {
-                ForEach(NotchTab.allCases) { t in
+                let order = AP.enabledTabs + NotchTab.allCases.filter { !AP.enabledTabs.contains($0) }
+                ForEach(order) { t in
+                  HStack {
                     Toggle(isOn: Binding(
                         get: { Prefs.list(AP.tabs).contains(t.rawValue) || Prefs.string(AP.tabs).isEmpty },
                         set: { on in
@@ -546,7 +548,14 @@ struct WidgetsSettings: View {
                         })) {
                         Label(t.title, systemImage: t.icon)
                     }
+                    if let i = AP.enabledTabs.firstIndex(of: t) {
+                        Button { moveTab(i, by: -1) } label: { Image(systemName: "chevron.up") }.buttonStyle(.plain).disabled(i == 0)
+                        Button { moveTab(i, by: 1) } label: { Image(systemName: "chevron.down") }.buttonStyle(.plain).disabled(i == AP.enabledTabs.count - 1)
+                    }
+                  }
                 }
+                Text("You can also edit tabs right in the notch: ⋯ › Edit Tabs & Widgets, then drag tabs to reorder.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Picker("Default tab when opened", selection: $defaultTab) {
                     Text("Last used").tag("last")
                     ForEach(NotchTab.allCases) { Text($0.title).tag($0.rawValue) }
@@ -567,6 +576,13 @@ struct WidgetsSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func moveTab(_ i: Int, by d: Int) {
+        var t = AP.enabledTabs
+        guard t.indices.contains(i + d) else { return }
+        t.swapAt(i, i + d)
+        AP.setTabs(t)
     }
 }
 

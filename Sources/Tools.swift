@@ -22,6 +22,7 @@ final class DownloadMonitor: ObservableObject {
     private var partials: [String: URL] = [:]
     private var finished: [String: Date] = [:]
     private var timer: Timer?
+    private var lastScan = Date.distantPast
 
     var enabled: Bool { Prefs.bool(Prefs.downloadActivity) }
 
@@ -45,7 +46,7 @@ final class DownloadMonitor: ObservableObject {
                 }
             }
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }.tolerant()
     }
 
     private static func finalName(_ u: URL?) -> String? {
@@ -55,6 +56,9 @@ final class DownloadMonitor: ObservableObject {
 
     private func tick() {
         guard enabled else { if !items.isEmpty { items = [] }; return }
+        // Look at the folder every 3s when nothing is downloading, every second while something is.
+        if items.isEmpty && tracked.isEmpty && partials.isEmpty && Date().timeIntervalSince(lastScan) < 3 { return }
+        lastScan = Date()
         // Fallback: partial files the browser didn't publish progress for.
         let urls = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         var now: [String: URL] = [:]

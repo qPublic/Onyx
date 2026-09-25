@@ -368,7 +368,7 @@ final class CPUMonitor: ObservableObject {
     private var previous: (idle: Double, total: Double)?
     init() {
         sample()
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.sample() }
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.sample() }.tolerant()
     }
     deinit { timer?.invalidate() }
     private func sample() {
@@ -576,7 +576,7 @@ final class FocusMonitor: ObservableObject {
         INFocusStatusCenter.default.requestAuthorization { st in
             DispatchQueue.main.async { self.authorized = st == .authorized; self.refresh() }
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refresh() }
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refresh() }.tolerant()
     }
 
     private func refresh() {

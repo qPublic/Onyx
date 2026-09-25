@@ -495,6 +495,8 @@ struct TabBar: View {
     @State private var dragging: NotchTab?
     @State private var dragX: CGFloat = 0
     @State private var base: CGFloat = 0
+    @State private var hoverWork: DispatchWorkItem?
+    @State private var hoverTab: NotchTab?
     private let pitch: CGFloat = 48   // tab width + spacing
 
     var body: some View {
@@ -515,9 +517,18 @@ struct TabBar: View {
                 }
                 .buttonStyle(.plain)
                 .help(editing ? "Drag to reorder" : t.title)
-                // Hovering a tab switches to it (clicking still works, and focuses AI's text box).
+                // Resting on a tab briefly switches to it, so just passing over the bar doesn't
+                // (clicking still switches instantly, and focuses AI's text box).
                 .onHover { inside in
-                    if inside && !editing && model.tab != t { withAnimation(.snappy(duration: 0.2)) { model.tab = t } }
+                    if inside {
+                        hoverWork?.cancel(); hoverWork = nil; hoverTab = t
+                        guard !editing, model.tab != t else { return }
+                        let w = DispatchWorkItem { withAnimation(.snappy(duration: 0.2)) { model.tab = t } }
+                        hoverWork = w
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: w)
+                    } else if hoverTab == t {   // enter/exit can arrive in either order between neighbors
+                        hoverWork?.cancel(); hoverWork = nil; hoverTab = nil
+                    }
                 }
                 .overlay(alignment: .topTrailing) {
                     if editing && tabs.count > 1 {

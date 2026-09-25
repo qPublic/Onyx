@@ -16,7 +16,7 @@ final class MediaKeys {
     func start() {
         refresh()
         // Pick up permission being granted (or the toggle changing) while running.
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refresh() }
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refresh() }.tolerant()
     }
 
     /// Install or remove the tap to match the current enabled + Accessibility state.

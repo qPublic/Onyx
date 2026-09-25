@@ -446,7 +446,8 @@ struct LiveTab: View {
                 Text("Markets").tag(1)
             }
             .pickerStyle(.segmented).labelsHidden().frame(width: 180)
-            if section == 0 { SportsView() } else { MarketsView() }
+            if section == 0 { SportsView().onAppear { SportsService.shared.refreshIfStale() } }
+            else { MarketsView().onAppear { MarketsService.shared.refreshIfStale() } }
         }
     }
 }

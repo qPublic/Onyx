@@ -84,12 +84,24 @@ final class SportsService: ObservableObject {
     func start() {
         selectedLeague = enabledLeagues.first?.id ?? "nfl"
         refreshAll()
-        timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.refreshAll() }
+        timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if self.wantsFast || Date().timeIntervalSince(self.lastRefresh) > 300 { self.refreshAll() }
+        }.tolerant()
+    }
+
+    private var lastRefresh = Date.distantPast
+    /// Every 30s only while scores are on screen or a favorite team is playing; otherwise every 5 minutes.
+    private var wantsFast: Bool {
+        let m = NotchModel.shared
+        return (m.expanded && m.tab == .live) || (Prefs.bool(Prefs.sportsActivity) && favoriteLiveGame != nil)
     }
 
     func refreshAll() {
+        lastRefresh = Date()
         for l in enabledLeagues { Task { await load(l) } }
     }
+    func refreshIfStale() { if Date().timeIntervalSince(lastRefresh) > 30 { refreshAll() } }
 
     private func fetch(_ s: String) async -> [String: Any]? {
         guard let u = URL(string: s), let (d, _) = try? await URLSession.shared.data(from: u) else { return nil }
@@ -225,10 +237,22 @@ final class MarketsService: ObservableObject {
 
     func start() {
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refresh() }
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            if self?.wanted == true { self?.refresh() }
+        }.tolerant()
     }
 
+    /// Only fetch prices while something shows them.
+    private var wanted: Bool {
+        let m = NotchModel.shared
+        return Prefs.bool(Prefs.tickerActivity) || HomeLayout.shared.contains(.stocks) || WidgetLayout.shared.contains(.stock)
+            || [AP.collapsedLeft, AP.collapsedMid, AP.collapsedRight].contains(.stock) || (m.expanded && m.tab == .live)
+    }
+    private var lastRefresh = Date.distantPast
+    func refreshIfStale() { if Date().timeIntervalSince(lastRefresh) > 60 { refresh() } }
+
     func refresh() {
+        lastRefresh = Date()
         let syms = Prefs.list(Prefs.watchlist)
         Task {
             var out: [Quote] = []

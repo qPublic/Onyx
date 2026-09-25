@@ -164,7 +164,7 @@ struct PanelContent: View {
         case .clock: ClockPanel()
         case .notes: Card { NotesView() }
         case .clipboard: Card { ClipboardView() }
-        case .stocks: StocksPanel()
+        case .stocks: StocksPanel().onAppear { MarketsService.shared.refreshIfStale() }
         case .events: EventsPanel()
         case .shelf: ShelfPanel()
         case .mirror: Card { MirrorView() }

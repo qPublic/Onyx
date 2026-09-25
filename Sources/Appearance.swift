@@ -221,7 +221,7 @@ final class FullscreenWatcher {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self?.check() }
             }
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.check() }
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.check() }.tolerant()
     }
 
     func check() {

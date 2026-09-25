@@ -33,9 +33,11 @@ final class SnapController {
     static let shared = SnapController()
     let model = SnapModel()
     private var panel: NSPanel?
+    private var preview: NSPanel?        // see-through outline of where the window will land
     private var monitors: [Any] = []
     private var candidate: AXUIElement?
     private var startPos: CGPoint?
+    private var downPoint: CGPoint?      // where the mouse went down; the window lookup waits for a real drag
     private var dragging = false
     private var hideWork: DispatchWorkItem?
 
@@ -57,10 +59,15 @@ final class SnapController {
         let p = NSEvent.mouseLocation
         switch type {
         case .leftMouseDown:
-            dragging = false
-            candidate = Self.window(at: p)
-            startPos = candidate.flatMap(Self.position)
+            // No Accessibility calls on a plain click; only once the mouse actually drags.
+            dragging = false; candidate = nil; startPos = nil
+            downPoint = p
         case .leftMouseDragged:
+            if let d = downPoint {
+                downPoint = nil
+                candidate = Self.window(at: d)
+                startPos = candidate.flatMap(Self.position)
+            }
             guard let w = candidate else { return }
             if !dragging {
                 // It's a window drag once the window itself starts moving (not a text selection etc.).
@@ -76,7 +83,7 @@ final class SnapController {
         case .leftMouseUp:
             if model.visible, let h = model.hover, let w = candidate { snap(w, to: h) }
             hide()
-            candidate = nil; dragging = false
+            candidate = nil; dragging = false; downPoint = nil
         default: break
         }
     }
@@ -125,6 +132,7 @@ final class SnapController {
     private func hide() {
         guard model.visible else { return }
         withAnimation(.easeOut(duration: 0.15)) { model.visible = false; model.hover = nil }
+        showPreview(nil)
         let w = DispatchWorkItem { [weak self] in self?.panel?.orderOut(nil) }
         hideWork = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: w)
@@ -147,19 +155,49 @@ final class SnapController {
                 hit = "\(l.id)/\(z.id)"; break outer
             }
         }
-        if hit != model.hover { withAnimation(.easeOut(duration: 0.1)) { model.hover = hit } }
+        if hit != model.hover {
+            withAnimation(.easeOut(duration: 0.1)) { model.hover = hit }
+            showPreview(hit.flatMap(targetRect))
+        }
+    }
+
+    private func showPreview(_ r: CGRect?) {
+        guard let r else { preview?.orderOut(nil); return }
+        let frame = r.insetBy(dx: 6, dy: 6)
+        if preview == nil {
+            let p = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false
+            p.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 1)   // under the picker
+            p.ignoresMouseEvents = true
+            p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+            p.isReleasedWhenClosed = false
+            p.contentView = NSHostingView(rootView: SnapPreviewView())
+            preview = p
+        }
+        guard let p = preview else { return }
+        if p.isVisible {
+            NSAnimationContext.runAnimationGroup { c in c.duration = 0.12; p.animator().setFrame(frame, display: true) }
+        } else {
+            p.setFrame(frame, display: true)
+            p.orderFrontRegardless()
+        }
     }
 
     // MARK: Snapping
 
-    private func snap(_ w: AXUIElement, to key: String) {
+    /// Where a zone ("layoutID/zoneID") puts the window, in screen coordinates.
+    private func targetRect(_ key: String) -> CGRect? {
         let parts = key.split(separator: "/").map(String.init)
         guard parts.count == 2, let l = SnapLayout.all.first(where: { $0.id == parts[0] }),
-              let z = l.zones.first(where: { $0.id == parts[1] }), let g = geometry else { return }
+              let z = l.zones.first(where: { $0.id == parts[1] }), let g = geometry else { return nil }
         let screen = NSScreen.screens.first { $0.frame == g.screenFrame } ?? NSScreen.main ?? NSScreen.screens[0]
         let vf = screen.visibleFrame
-        let r = CGRect(x: vf.minX + z.rect.minX * vf.width, y: vf.maxY - z.rect.maxY * vf.height,
-                       width: z.rect.width * vf.width, height: z.rect.height * vf.height)
+        return CGRect(x: vf.minX + z.rect.minX * vf.width, y: vf.maxY - z.rect.maxY * vf.height,
+                      width: z.rect.width * vf.width, height: z.rect.height * vf.height)
+    }
+
+    private func snap(_ w: AXUIElement, to key: String) {
+        guard let r = targetRect(key) else { return }
         // Let the window server finish the drag first, then place it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { Self.setFrame(w, r) }
     }
@@ -200,6 +238,15 @@ final class SnapController {
         AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pos)
         AXUIElementSetAttributeValue(w, kAXSizeAttribute as CFString, sz)
         AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pos)
+    }
+}
+
+struct SnapPreviewView: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(AP.accentColor.opacity(0.18))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(AP.accentColor.opacity(0.8), lineWidth: 2))
+            .background(VisualEffectBlur().clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous)).opacity(0.5))
     }
 }
 

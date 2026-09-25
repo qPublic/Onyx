@@ -43,7 +43,7 @@ enum Prefs {
             eyeBreak: false,
             hoverDelay: 0.12,
             notes: "",
-        ].merging(AP.defaults) { a, _ in a }.merging(Fun.defaults) { a, _ in a })
+        ].merging(AP.defaults) { a, _ in a }.merging(Fun.defaults) { a, _ in a }.merging(Opt.defaults) { a, _ in a })
     }
 
     static func bool(_ k: String) -> Bool { UserDefaults.standard.bool(forKey: k) }

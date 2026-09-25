@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case appearance, layout, behavior, widgets, live, fun, lock
+    case appearance, layout, behavior, widgets, live, optimize, fun, lock
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -11,6 +11,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .behavior: "Behavior"
         case .widgets: "Widgets & Tabs"
         case .live: "Live"
+        case .optimize: "Optimization"
         case .fun: "Fun Mode"
         case .lock: "Privacy"
         }
@@ -22,6 +23,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .behavior: "Opening, motion and system"
         case .widgets: "Boxes, header widgets and tabs"
         case .live: "Sports, markets and weather"
+        case .optimize: "Clean, maintain and tweak"
         case .fun: "Goose, sounds and silliness"
         case .lock: "Permissions and AI"
         }
@@ -33,6 +35,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .behavior: "hand.tap.fill"
         case .widgets: "square.grid.2x2.fill"
         case .live: "chart.line.uptrend.xyaxis"
+        case .optimize: "gauge.with.dots.needle.67percent"
         case .fun: "party.popper.fill"
         case .lock: "hand.raised.fill"
         }
@@ -44,6 +47,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .behavior: [Color(hex: "FF9F0A"), Color(hex: "FF6A00")]
         case .widgets: [Color(hex: "30D0C6"), Color(hex: "0AA6B8")]
         case .live: [Color(hex: "34C759"), Color(hex: "16A34A")]
+        case .optimize: [Color(hex: "0A84FF"), Color(hex: "5E5CE6")]
         case .fun: [Color(hex: "FFD60A"), Color(hex: "FF375F")]
         case .lock: [Color(hex: "8E8E93"), Color(hex: "5B5B60")]
         }
@@ -121,6 +125,10 @@ struct SettingsView: View {
     private var results: [SettingEntry] { SettingsIndex.search(query) }
 
     private func open(_ e: SettingEntry) {
+        // Optimization has sub-pages; jump to the one the setting is on.
+        if e.section == .optimize, let p = OptimizePage.allCases.first(where: { $0.title == e.group }) {
+            UserDefaults.standard.set(p.rawValue, forKey: Opt.page)
+        }
         withAnimation(.smooth(duration: 0.28)) { selection = e.section; found = e }
         query = ""
     }
@@ -156,6 +164,7 @@ struct SettingsView: View {
         case .behavior: BehaviorSettings()
         case .widgets: WidgetsSettings()
         case .live: LiveSettings()
+        case .optimize: OptimizeSettings()
         case .fun: FunSettings()
         case .lock: LockSettings()
         }

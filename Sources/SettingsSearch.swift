@@ -65,6 +65,10 @@ enum SettingsIndex {
         // Live
         e(.live, "Live activities in the notch", "Live games for favorite teams", "sports scores games teams nfl nba live"),
         e(.live, "Live activities in the notch", "Stock ticker", "stocks market ticker watchlist"),
+        e(.live, "Live activities in the notch", "Download progress", "download downloads progress safari chrome file browser"),
+        e(.live, "Live activities in the notch", "Put finished downloads on the Shelf", "download downloads shelf finished file"),
+        e(.widgets, "Home boxes", "Calculator box", "calculator calc math percent unit convert conversion"),
+        e(.widgets, "Home boxes", "Color Picker box", "color colour picker eyedropper hex rgb sample"),
         e(.live, "Leagues", "Leagues", "nfl nba mlb nhl soccer epl football basketball baseball hockey"),
         e(.live, "Favorites", "Favorite teams", "favorite team teams follow"),
         e(.live, "Watchlist", "Stock watchlist", "stocks symbols tickers crypto bitcoin"),

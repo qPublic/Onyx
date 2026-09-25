@@ -81,6 +81,7 @@ enum SettingsIndex {
         e(.widgets, "Home boxes", "Aquarium live stream box", "aquarium fish monterey bay live stream video youtube"),
         e(.live, "Weather", "Weather city", "weather city location forecast"),
         // Optimization
+        e(.lock, "AI", "AI effort", "ai effort smarter faster slower thinking reasoning quality speed think harder"),
         e(.optimize, "Overview", "Disk space and memory", "disk storage space free full memory ram usage pressure optimize"),
         e(.optimize, "Overview", "Quick Optimize", "quick optimize clean speed up fast one click"),
         e(.optimize, "Overview", "Low disk space warning", "low disk space warning alert full storage"),

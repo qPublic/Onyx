@@ -672,6 +672,7 @@ struct LiveSettings: View {
 // MARK: - Privacy & Lock
 
 struct LockSettings: View {
+    @AppStorage(AIEffort.key) private var effort = AIEffort.medium.rawValue
     var body: some View {
         Form {
             Section("Permissions") {
@@ -684,6 +685,11 @@ struct LockSettings: View {
             Section("AI") {
                 LabeledContent("Model", value: "Apple on-device (free, private)")
                 LabeledContent("Status", value: Assistant.shared.unavailableReason ?? "Ready")
+                Picker("Effort", selection: $effort) {
+                    ForEach(AIEffort.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                Text((AIEffort(rawValue: effort) ?? .medium).detail + " You can also change it in the AI tab.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

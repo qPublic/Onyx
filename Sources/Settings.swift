@@ -141,7 +141,7 @@ struct SettingsView: View {
                     Text("Onyx").font(.system(size: 15, weight: .bold))
                     Text("MacOS").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
                 }
-                Text("Version 1.0 · Everything free").font(.system(size: 10)).foregroundStyle(.secondary)
+                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · Everything free").font(.system(size: 10)).foregroundStyle(.secondary)
             }
             Spacer()
         }

@@ -59,7 +59,7 @@ enum SettingsIndex {
         e(.widgets, "Header widgets", "Focus status widget / box", "focus do not disturb dnd sleep work moon status"),
         e(.widgets, "Home boxes", "Home boxes", "home boxes panels cards music calendar layout dashboard"),
         e(.widgets, "File Shelf", "Bookshelf look", "shelf files books bookshelf drop"),
-        e(.widgets, "Tabs", "Tabs", "tabs home shelf ai live tools hide"),
+        e(.widgets, "Tabs", "Tabs", "tabs home shelf ai live tools hide reorder order move edit"),
         e(.widgets, "Tabs", "Default tab when opened", "default tab start open"),
         e(.widgets, "Tabs", "Go back to Home after being closed", "home reset return idle timeout seconds default tab reopen"),
         // Live

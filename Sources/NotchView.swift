@@ -406,25 +406,7 @@ struct ExpandedView: View {
         let g = model.geometry
         VStack(spacing: 8) {
             HStack(spacing: 4) {
-                ForEach(AP.enabledTabs) { t in
-                    Button {
-                        withAnimation(.snappy(duration: 0.2)) { model.tab = t }
-                        if t == .ai { NotchController.current?.panel.makeKey(); model.focusRequest += 1 }
-                    } label: {
-                        Image(systemName: t.icon)
-                            .font(.system(size: 13, weight: .semibold))
-                            .frame(width: 44, height: 26)
-                            .background(model.tab == t ? AP.accentColor.opacity(0.9) : .clear, in: Capsule())
-                            .foregroundStyle(model.tab == t ? Color.white : Color.primary.opacity(0.55))
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .help(t.title)
-                    // Hovering a tab switches to it (clicking still works, and focuses AI's text box).
-                    .onHover { inside in
-                        if inside && model.tab != t { withAnimation(.snappy(duration: 0.2)) { model.tab = t } }
-                    }
-                }
+                TabBar(editing: widgets.editing)
 
                 if g.avoidsCamera { Spacer(minLength: g.notchWidth) } else { Spacer(minLength: 8) }
 
@@ -459,7 +441,7 @@ struct ExpandedView: View {
                             Image(systemName: "gearshape").foregroundStyle(Color.primary.opacity(0.6))
                         }.buttonStyle(.plain).help("Settings")
                         Menu {
-                            Button { withAnimation { widgets.editing = true } } label: { Label("Edit Widgets", systemImage: "square.grid.2x2") }
+                            Button { withAnimation { widgets.editing = true } } label: { Label("Edit Tabs & Widgets", systemImage: "square.grid.2x2") }
                             if model.tab == .home {
                                 Button { withAnimation { HomeLayout.shared.editing = true } } label: { Label("Edit Home Boxes", systemImage: "rectangle.3.group") }
                             }
@@ -502,6 +484,87 @@ struct ExpandedView: View {
             model.tab = .shelf
             return ShelfStore.shared.handleDrop(providers)
         }
+    }
+}
+
+/// The tab buttons on the left of the expanded header. In edit mode: drag to reorder, − to hide, + to add back.
+struct TabBar: View {
+    let editing: Bool
+    @EnvironmentObject var model: NotchModel
+    @ObservedObject var appearance = AppearanceStore.shared
+    @State private var dragging: NotchTab?
+    @State private var dragX: CGFloat = 0
+    @State private var base: CGFloat = 0
+    private let pitch: CGFloat = 48   // tab width + spacing
+
+    var body: some View {
+        let tabs = AP.enabledTabs
+        HStack(spacing: 4) {
+            ForEach(tabs) { t in
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) { model.tab = t }
+                    if t == .ai { NotchController.current?.panel.makeKey(); model.focusRequest += 1 }
+                } label: {
+                    Image(systemName: t.icon)
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 44, height: 26)
+                        .background(model.tab == t ? AP.accentColor.opacity(0.9) : .clear, in: Capsule())
+                        .overlay { if editing { Capsule().strokeBorder(.cyan.opacity(0.7), style: StrokeStyle(lineWidth: 1, dash: [3])) } }
+                        .foregroundStyle(model.tab == t ? Color.white : Color.primary.opacity(0.55))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(editing ? "Drag to reorder" : t.title)
+                // Hovering a tab switches to it (clicking still works, and focuses AI's text box).
+                .onHover { inside in
+                    if inside && !editing && model.tab != t { withAnimation(.snappy(duration: 0.2)) { model.tab = t } }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if editing && tabs.count > 1 {
+                        Button { remove(t, from: tabs) } label: {
+                            Image(systemName: "minus.circle.fill").font(.system(size: 11)).foregroundStyle(.red)
+                        }.buttonStyle(.plain).offset(x: 4, y: -4).help("Hide \(t.title)")
+                    }
+                }
+                .offset(x: dragging == t ? dragX : 0)
+                .zIndex(dragging == t ? 1 : 0)
+                .gesture(DragGesture(minimumDistance: 3)
+                    .onChanged { v in drag(t, v.translation.width, tabs) }
+                    .onEnded { _ in withAnimation(.snappy(duration: 0.2)) { dragging = nil; dragX = 0 } },
+                    including: editing ? .all : .subviews)
+            }
+            let hidden = NotchTab.allCases.filter { !tabs.contains($0) }
+            if editing && !hidden.isEmpty {
+                Menu {
+                    ForEach(hidden) { t in
+                        Button { AP.setTabs(tabs + [t]) } label: { Label(t.title, systemImage: t.icon) }
+                    }
+                } label: { Image(systemName: "plus.circle.fill").foregroundStyle(.cyan) }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Add tab")
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: tabs)
+    }
+
+    private func remove(_ t: NotchTab, from tabs: [NotchTab]) {
+        let rest = tabs.filter { $0 != t }
+        AP.setTabs(rest)
+        if model.tab == t, let first = rest.first { withAnimation(.snappy(duration: 0.2)) { model.tab = first } }
+    }
+
+    /// Live reorder: once the dragged tab passes a neighbor's midpoint, swap them.
+    private func drag(_ t: NotchTab, _ w: CGFloat, _ tabs: [NotchTab]) {
+        if dragging != t { dragging = t; base = 0 }
+        let steps = Int(((w - base) / pitch).rounded())
+        if steps != 0, let i = tabs.firstIndex(of: t) {
+            let j = min(max(i + steps, 0), tabs.count - 1)
+            if j != i {
+                var n = tabs; n.remove(at: i); n.insert(t, at: j)
+                AP.setTabs(n)
+                base += CGFloat(j - i) * pitch
+            }
+        }
+        dragX = w - base
     }
 }
 

@@ -136,9 +136,11 @@ enum AP {
     static var placementValue: Placement { Placement(rawValue: Prefs.string(placement)) ?? .attached }
     static var openTrigger: OpenTrigger { OpenTrigger(rawValue: Prefs.string(openOn)) ?? .hover }
     static var enabledTabs: [NotchTab] {
-        let t = Prefs.list(tabs).compactMap(NotchTab.init(rawValue:))
-        return t.isEmpty ? [.home] : NotchTab.allCases.filter(t.contains)
+        var seen = Set<NotchTab>()
+        let t = Prefs.list(tabs).compactMap(NotchTab.init(rawValue:)).filter { seen.insert($0).inserted }
+        return t.isEmpty ? [.home] : t   // in the user's order
     }
+    static func setTabs(_ t: [NotchTab]) { d.set(t.map(\.rawValue).joined(separator: ","), forKey: tabs) }
     static var accentColor: Color { Color(hex: Prefs.string(accent)) }
     /// Widgets shown in the collapsed notch's ears when idle (nil = nothing on that side).
     static var collapsedLeft: NotchWidget? { NotchWidget(rawValue: Prefs.string(collLeft)) }

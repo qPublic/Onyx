@@ -108,6 +108,7 @@ enum SettingsIndex {
         e(.optimize, "Tweaks", "Full save and print dialogs", "save dialog print dialog expanded icloud"),
         e(.optimize, "Startup", "Background items and login items", "startup login items launch agents daemons background boot slow"),
         e(.optimize, "Startup", "Apps using the most CPU or memory", "cpu memory apps activity monitor heavy slow quit"),
+        e(.optimize, "Startup", "Memory limit per app", "ram memory limit cap max apps using too much slider warn quit heavy"),
         e(.optimize, "Startup", "Quit apps with no windows", "auto quit close apps no windows last window closed idle background windows like"),
         e(.optimize, "Storage", "Find large files", "large big files storage space find"),
         e(.optimize, "Storage", "Forgotten downloads", "old downloads unused forgotten files"),

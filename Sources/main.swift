@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)
         OptimizeService.shared.start()          // low-disk alert + optional weekly clean
         AutoQuit.shared.start()                 // optional: quit apps that have no windows
+        MemoryWatch.shared.start()              // optional: per-app memory limit (warn or quit)
         // Debug: ONYX_OPTIMIZE_TEST=1 dry-runs every Optimization action into optimize-dryrun.log, then quits.
         if ProcessInfo.processInfo.environment["ONYX_OPTIMIZE_TEST"] != nil {
             Task { @MainActor in try? await Task.sleep(for: .seconds(2)); await OptimizeSelfTest.run() }

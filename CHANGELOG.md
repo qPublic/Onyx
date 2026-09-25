@@ -10,6 +10,7 @@
   - **Tweaks:** hidden macOS settings for Finder, the Dock, screenshots, speed and save dialogs, such as showing hidden files, an instant Dock, screenshot format and location, or faster key repeat. Each shows its current value, and **Reset all tweaks** undoes everything you changed. Security settings are never touched.
   - **Startup:** see which apps use the most CPU or memory right now, and what runs in the background. You can turn your own background items off and on again.
   - **Quit apps with no windows:** Onyx can quit an app once it has had no windows for a time you choose (1–60 minutes), like closing the last window on Windows. Minimized windows and windows on other desktops count as open. Finder, the app you're using, music that's playing and apps on your "Never quit" list are never quit. It's off by default, and you'll find it under Optimization › Startup.
+  - **Memory limit per app:** set a limit with a slider (0.5 GB up to your Mac's total memory). When an app goes over it, Onyx warns you in the notch or, if you choose, quits it normally so it can ask you to save first. It never quits the app you're using. Memory is measured the way Activity Monitor does it, including each app's helper processes. "Using the most right now" now shows the same numbers.
   - **Storage:** find files over 500 MB and downloads you haven't opened in 90+ days, then show them in Finder or move them to the Trash.
 
 ## 1.2.1

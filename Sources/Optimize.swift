@@ -18,8 +18,12 @@ enum Opt {
     static let autoQuit = "opt.autoQuit"
     static let autoQuitMinutes = "opt.autoQuitMinutes"
     static let autoQuitKeep = "opt.autoQuitKeep"      // bundle IDs never auto-quit
+    static let memLimit = "opt.memLimit"
+    static let memLimitGB = "opt.memLimitGB"
+    static let memLimitQuit = "opt.memLimitQuit"      // false = warn in the notch, true = quit it
     static let defaults: [String: Any] = [lowDiskAlert: true, autoClean: false, autoQuit: false, autoQuitMinutes: 10.0,
-                                          autoQuitKeep: ["com.spotify.client", "com.apple.Music"]]
+                                          autoQuitKeep: ["com.spotify.client", "com.apple.Music"],
+                                          memLimit: false, memLimitGB: 4.0, memLimitQuit: false]
 }
 
 // MARK: Shell
@@ -450,17 +454,18 @@ final class StartupModel: ObservableObject {
 
     /// CPU and memory per app, counting its helper processes (grouped by the first ".app" in their path).
     @MainActor func refreshApps() async {
-        let out = await Shell.read("/bin/ps", ["-Ao", "pcpu=,rss=,comm="]).output
+        let out = await Shell.read("/bin/ps", ["-Ao", "pcpu=,comm="]).output
         var byApp: [String: AppUsage] = [:]
         for line in out.split(separator: "\n") {
-            let f = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
-            guard f.count == 3, let cpu = Double(f[0]), let rss = Int(f[1]) else { continue }
-            let comm = String(f[2])
-            guard let r = comm.range(of: ".app/") else { continue }
-            let path = String(comm[..<r.lowerBound]) + ".app"
+            let f = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard f.count == 2, let cpu = Double(f[0]), let path = AppMemory.appPath(String(f[1])) else { continue }
             let name = (path as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
             byApp[path, default: AppUsage(path: path, name: name, cpu: 0, memKB: 0)].cpu += cpu
-            byApp[path, default: AppUsage(path: path, name: name, cpu: 0, memKB: 0)].memKB += rss
+        }
+        // Memory the way Activity Monitor counts it (not RSS, which double-counts shared memory).
+        for (path, bytes) in await Task.detached { AppMemory.byApp() }.value {
+            let name = (path as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
+            byApp[path, default: AppUsage(path: path, name: name, cpu: 0, memKB: 0)].memKB = Int(bytes / 1024)
         }
         let mine = Bundle.main.bundlePath
         apps = byApp.values.filter { $0.path != mine && !$0.path.hasPrefix("/System/Library/CoreServices/Finder.app") }
@@ -544,6 +549,78 @@ final class OptimizeService {
                 let moved = await CleanModel.shared.clean(onlyDefaults: true)
                 if moved > 0 { NotchModel.shared.flash(.message(icon: "sparkles", text: "Cleaned \(Sys.bytes(moved)) (in Trash)", tint: .green), for: 4) }
             }
+        }
+    }
+}
+
+// MARK: - Per-app memory (Activity Monitor's "Memory": physical footprint, helpers included)
+
+enum AppMemory {
+    /// "/Applications/Google Chrome.app/…/Google Chrome Helper.app/…" → "/Applications/Google Chrome.app"
+    static func appPath(_ exe: String) -> String? {
+        guard let r = exe.range(of: ".app/") else { return nil }
+        return String(exe[..<r.lowerBound]) + ".app"
+    }
+
+    /// Bytes per app bundle path, summing each app's helper processes.
+    static func byApp() -> [String: UInt64] {
+        var pids = [pid_t](repeating: 0, count: 8192)
+        let n = Int(proc_listallpids(&pids, Int32(MemoryLayout<pid_t>.size * pids.count)))
+        var out: [String: UInt64] = [:]
+        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        for pid in pids.prefix(max(0, n)) where pid > 0 {
+            guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0, let app = appPath(String(cString: buf)) else { continue }
+            var info = rusage_info_v4()
+            let ok = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V4, $0) }
+            } == 0
+            if ok { out[app, default: 0] += info.ri_phys_footprint }
+        }
+        return out
+    }
+}
+
+// MARK: - Memory limit per app (macOS has no real cap, so: watch, then warn or quit politely)
+
+final class MemoryWatch {
+    static let shared = MemoryWatch()
+    private var timer: Timer?
+    private var lastWarned: [String: Date] = [:]
+
+    func start() {
+        timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.tick() }.tolerant()
+    }
+
+    private func tick() {
+        guard Prefs.bool(Opt.memLimit), !NotchModel.shared.animating else { return }
+        let limit = UInt64(max(0.5, Prefs.double(Opt.memLimitGB)) * 1_073_741_824)
+        let quit = Prefs.bool(Opt.memLimitQuit)
+        Task.detached(priority: .utility) {
+            let usage = AppMemory.byApp().filter { $0.value > limit }
+            guard !usage.isEmpty else { return }
+            await MainActor.run { self.act(on: usage, quit: quit) }
+        }
+    }
+
+    @MainActor private func act(on over: [String: UInt64], quit: Bool) {
+        let keep = Set(UserDefaults.standard.stringArray(forKey: Opt.autoQuitKeep) ?? []).union(AutoQuit.alwaysKeep)
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let playing = MediaController.shared.isPlaying ? MediaController.shared.source?.rawValue : nil
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            guard let path = app.bundleURL?.path, let bytes = over[path], let id = app.bundleIdentifier else { continue }
+            let name = app.localizedName ?? id
+            // Quit only in the background, never protected apps or the music that's playing; otherwise just warn.
+            if quit, app.processIdentifier != front, !keep.contains(id), id != playing {
+                if Shell.dryRun { Shell.log("memory limit: quit \(name) (\(Sys.bytes(Int64(bytes))))"); continue }
+                if app.terminate() {
+                    NotchModel.shared.flash(.message(icon: "memorychip", text: "Quit \(name) (\(Sys.bytes(Int64(bytes))))", tint: .orange), for: 3)
+                }
+                continue
+            }
+            if let t = lastWarned[id], Date().timeIntervalSince(t) < 30 * 60 { continue }   // once per half hour per app
+            lastWarned[id] = Date()
+            if Shell.dryRun { Shell.log("memory limit: warn \(name) (\(Sys.bytes(Int64(bytes))))"); continue }
+            NotchModel.shared.flash(.message(icon: "memorychip", text: "\(name) is using \(Sys.bytes(Int64(bytes)))", tint: .orange), for: 4)
         }
     }
 }
@@ -907,6 +984,9 @@ struct OptStartup: View {
     @State private var byMemory = false
     @AppStorage(Opt.autoQuit) private var autoQuit = false
     @AppStorage(Opt.autoQuitMinutes) private var autoQuitMinutes = 10.0
+    @AppStorage(Opt.memLimit) private var memLimit = false
+    @AppStorage(Opt.memLimitGB) private var memLimitGB = 4.0
+    @AppStorage(Opt.memLimitQuit) private var memLimitQuit = false
     @State private var keep = UserDefaults.standard.stringArray(forKey: Opt.autoQuitKeep) ?? []
 
     var body: some View {
@@ -945,6 +1025,23 @@ struct OptStartup: View {
                     }
                 }
                 Caption("Once an app has had no windows for this long, Onyx quits it normally, just like pressing ⌘Q. Minimized windows and windows on other desktops count as open. Finder, the app you're using and music that's playing are never quit.")
+            }
+            Section("Memory limit per app") {
+                Toggle("Watch how much memory each app uses", isOn: $memLimit)
+                if memLimit {
+                    let maxGB = max(2, (Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824).rounded(.down))
+                    LabeledContent("Limit") {
+                        HStack {
+                            Slider(value: $memLimitGB, in: 0.5...maxGB, step: 0.5)
+                            Text(String(format: "%g GB", memLimitGB)).monospacedDigit().frame(width: 48, alignment: .trailing)
+                        }
+                    }
+                    Picker("When an app goes over", selection: $memLimitQuit) {
+                        Text("Warn me in the notch").tag(false)
+                        Text("Quit it (unless I'm using it)").tag(true)
+                    }
+                }
+                Caption("macOS doesn't let one app hard-cap another's memory (the kernel would kill it and you'd lose unsaved work), so Onyx checks every 30 seconds and warns you or quits the app normally, letting it ask to save. Memory is counted like Activity Monitor does, helpers included. Finder, Onyx, music that's playing and your \"Never quit\" apps are only ever warned about.")
             }
             Section("Using the most right now") {
                 Picker("", selection: $byMemory) { Text("CPU").tag(false); Text("Memory").tag(true) }
@@ -1084,6 +1181,9 @@ enum OptimizeSelfTest {
         await st.scan()
         for f in st.large.prefix(5) { Shell.log("large \(Sys.bytes(f.bytes)) \(f.url.path)") }
         Shell.log("forgotten downloads: \(st.forgotten.count), \(Sys.bytes(st.forgotten.reduce(0) { $0 + $1.bytes }))")
+        for (path, b) in AppMemory.byApp().sorted(by: { $0.value > $1.value }).prefix(6) {
+            Shell.log("memory \((path as NSString).lastPathComponent): \(Sys.bytes(Int64(b)))")
+        }
         let windowed = AutoQuit.appsWithWindows()
         for a in NSWorkspace.shared.runningApplications where a.activationPolicy == .regular {
             Shell.log("auto-quit check \(a.localizedName ?? "?"): \(windowed.contains(a.processIdentifier) ? "has windows" : "no windows")")

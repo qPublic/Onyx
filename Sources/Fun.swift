@@ -414,13 +414,12 @@ struct GooseView: View {
 // MARK: - Mirror filters
 
 enum MirrorFilter: String, CaseIterable, Identifiable {
-    case none, catEars, noir, comic, thermal, xray, sepia, pixel, posterize, invert, bulge, pinch, twirl, kaleidoscope
+    case none, noir, comic, thermal, xray, sepia, pixel, posterize, invert, bulge, pinch, twirl, kaleidoscope
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .none: "Normal"
-        case .catEars: "Cat Ears"
         case .noir: "Noir"
         case .comic: "Comic"
         case .thermal: "Thermal"
@@ -438,7 +437,7 @@ enum MirrorFilter: String, CaseIterable, Identifiable {
 
     func make() -> CIFilter? {
         switch self {
-        case .none, .catEars: return nil   // cat ears are drawn over the face, not a Core Image filter
+        case .none: return nil
         case .noir: return CIFilter(name: "CIPhotoEffectNoir")
         case .comic: return CIFilter(name: "CIComicEffect")
         case .thermal: return CIFilter(name: "CIThermal")
@@ -471,6 +470,7 @@ enum MirrorFilter: String, CaseIterable, Identifiable {
 /// the plain mirror keeps using the cheaper preview layer).
 struct FilteredCamera: NSViewRepresentable {
     let filter: MirrorFilter
+    var catEars = false
 
     final class View: NSView, AVCaptureVideoDataOutputSampleBufferDelegate {
         let session = AVCaptureSession()
@@ -496,6 +496,9 @@ struct FilteredCamera: NSViewRepresentable {
             kind = f; ciFilter = f.make()
         }
 
+        private var catEars = false
+        func setCatEars(_ on: Bool) { lock.lock(); catEars = on; lock.unlock() }
+
         func start() {
             AVCaptureDevice.requestAccess(for: .video) { ok in
                 guard ok else { return }
@@ -518,15 +521,15 @@ struct FilteredCamera: NSViewRepresentable {
         func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer, from connection: AVCaptureConnection) {
             guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
             var img = CIImage(cvPixelBuffer: pb).oriented(.upMirrored)
-            let extent = img.extent
-            lock.lock(); let f = ciFilter, k = kind; lock.unlock()
+            let raw = img, extent = img.extent
+            lock.lock(); let f = ciFilter, k = kind, cat = catEars; lock.unlock()
             if let f {
                 f.setValue(img, forKey: kCIInputImageKey)
                 k.configure(f, extent: extent)
                 if let o = f.outputImage { img = o.cropped(to: extent) }
             }
             guard var cg = ctx.createCGImage(img, from: extent) else { return }
-            if k == .catEars { cg = drawCatEars(on: cg, source: img) ?? cg }
+            if cat { cg = drawCatEars(on: cg, source: raw) ?? cg }   // find the face on the unfiltered frame
             DispatchQueue.main.async { self.layer?.contents = cg }
         }
 
@@ -604,21 +607,22 @@ struct FilteredCamera: NSViewRepresentable {
         }
     }
 
-    func makeNSView(context: Context) -> View { let v = View(frame: .zero); v.setFilter(filter); v.start(); return v }
-    func updateNSView(_ v: View, context: Context) { v.setFilter(filter) }
+    func makeNSView(context: Context) -> View { let v = View(frame: .zero); v.setFilter(filter); v.setCatEars(catEars); v.start(); return v }
+    func updateNSView(_ v: View, context: Context) { v.setFilter(filter); v.setCatEars(catEars) }
     static func dismantleNSView(_ v: View, coordinator: ()) { v.stop() }
 }
 
 /// The mirror's camera: plain preview, or the filtered feed when Fun mode has a filter picked.
 struct MirrorCamera: View {
     @AppStorage(Fun.mirrorFilter) private var raw = "none"
+    @AppStorage(CatEarsCode.key) private var catEars = false
     @ObservedObject private var appearance = AppearanceStore.shared
     var showPicker = true
 
     var body: some View {
         let f = Fun.has(Fun.mirrorFilters) ? (MirrorFilter(rawValue: raw) ?? .none) : .none
         ZStack(alignment: .topLeading) {
-            if f == .none { CameraPreview() } else { FilteredCamera(filter: f) }
+            if f == .none && !catEars { CameraPreview() } else { FilteredCamera(filter: f, catEars: catEars) }
             if showPicker && Fun.has(Fun.mirrorFilters) {
                 HStack(spacing: 4) {
                     Menu {
@@ -638,5 +642,42 @@ struct MirrorCamera: View {
                 .padding(6)
             }
         }
+        .onAppear { CatEarsCode.shared.retain() }
+        .onDisappear { CatEarsCode.shared.release() }
+    }
+}
+
+/// Secret code: ← ← ↑ → ↓ while a mirror is on screen toggles cat ears.
+/// Listens only while a mirror is visible; the global monitor covers keys typed while another app is focused.
+final class CatEarsCode {
+    static let shared = CatEarsCode()
+    static let key = "mirror.catEars"
+    private static let code: [UInt16] = [123, 123, 126, 124, 125]   // left left up right down
+    private static let arrows: Set<UInt16> = [123, 124, 125, 126]
+    private var users = 0, monitors: [Any] = [], typed: [UInt16] = [], last = Date.distantPast
+
+    func retain() {
+        users += 1
+        guard users == 1 else { return }
+        if let l = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] e in self?.key(e); return e }) { monitors.append(l) }
+        if let g = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { [weak self] e in self?.key(e) }) { monitors.append(g) }
+    }
+
+    func release() {
+        users = max(0, users - 1)
+        guard users == 0 else { return }
+        monitors.forEach(NSEvent.removeMonitor); monitors = []; typed = []
+    }
+
+    private func key(_ e: NSEvent) {
+        guard !e.isARepeat else { return }
+        guard Self.arrows.contains(e.keyCode) else { typed = []; return }
+        if Date().timeIntervalSince(last) > 2 { typed = [] }   // too slow: start over
+        last = Date()
+        typed = Array((typed + [e.keyCode]).suffix(Self.code.count))
+        guard typed == Self.code else { return }
+        typed = []
+        UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.key), forKey: Self.key)
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
     }
 }

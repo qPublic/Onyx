@@ -442,6 +442,9 @@ struct ExpandedView: View {
                         Button { model.pinned.toggle() } label: {
                             Image(systemName: model.pinned ? "pin.fill" : "pin").foregroundStyle(model.pinned ? Color.yellow : Color.primary.opacity(0.6))
                         }.buttonStyle(.plain).help("Keep the notch open")
+                        Button { (NSApp.delegate as? AppDelegate)?.openOptimization() } label: {
+                            Image(systemName: "gauge.with.dots.needle.67percent").foregroundStyle(Color.primary.opacity(0.6))
+                        }.buttonStyle(.plain).help("Optimization")
                         Button { (NSApp.delegate as? AppDelegate)?.openSettings() } label: {
                             Image(systemName: "gearshape").foregroundStyle(Color.primary.opacity(0.6))
                         }.buttonStyle(.plain).help("Settings")

@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var hideItem: NSMenuItem?
     var settingsWindow: NSWindow?
+    var optimizeWindow: NSWindow?
     var onboardingWindow: NSWindow?
     private var bag = Set<AnyCancellable>()
 
@@ -45,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // can't stall Onyx for the 6s default.
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)
         OptimizeService.shared.start()          // low-disk alert + optional weekly clean
+        AutoQuit.shared.start()                 // optional: quit apps that have no windows
         // Debug: ONYX_OPTIMIZE_TEST=1 dry-runs every Optimization action into optimize-dryrun.log, then quits.
         if ProcessInfo.processInfo.environment["ONYX_OPTIMIZE_TEST"] != nil {
             Task { @MainActor in try? await Task.sleep(for: .seconds(2)); await OptimizeSelfTest.run() }
@@ -301,6 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item("Record Screen", #selector(toggleRecording), .toggleRecording))
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
+        menu.addItem(withTitle: "Optimization…", action: #selector(openOptimization), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Set Up Permissions…", action: #selector(showOnboarding), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Onyx", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -367,6 +370,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Optimization lives in its own window (opened from the notch header or the menu bar icon).
+    @objc func openOptimization() {
+        notch.collapse()
+        if optimizeWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 600),
+                             styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                             backing: .buffered, defer: false)
+            w.title = "Onyx Optimization"
+            w.titlebarAppearsTransparent = true
+            w.isReleasedWhenClosed = false
+            w.isRestorable = false
+            w.contentViewController = NSHostingController(rootView: OptimizeWindowView())
+            w.setContentSize(NSSize(width: 720, height: 600))
+            w.center()
+            optimizeWindow = w
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        optimizeWindow?.makeKeyAndOrderFront(nil)
     }
 
     @objc func showOnboarding() {

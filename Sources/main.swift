@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         FunController.shared.start()
         BackdropSampler.shared.start()
         CanvasService.shared.start()
+        DownloadMonitor.shared.start()
 
         notch = NotchController()
         notch.show()

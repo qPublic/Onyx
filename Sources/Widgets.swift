@@ -72,7 +72,7 @@ struct RemoteImage: View {
 // MARK: - Header widgets you can add / reorder in the expanded notch top bar
 
 enum NotchWidget: String, CaseIterable, Identifiable, Codable {
-    case clock, date, weather, battery, music, stock, nextEvent, focus, mirror, cpu, moon, coffee, btBattery, focusStatus, canvas
+    case clock, date, weather, battery, music, stock, nextEvent, focus, mirror, cpu, moon, coffee, btBattery, focusStatus, canvas, colorPicker
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -91,6 +91,7 @@ enum NotchWidget: String, CaseIterable, Identifiable, Codable {
         case .btBattery: "AirPods Battery"
         case .focusStatus: "Focus Status"
         case .canvas: "Canvas To-Do"
+        case .colorPicker: "Color Picker"
         }
     }
     var icon: String {
@@ -110,6 +111,7 @@ enum NotchWidget: String, CaseIterable, Identifiable, Codable {
         case .btBattery: "airpods"
         case .focusStatus: "moon.fill"
         case .canvas: "graduationcap.fill"
+        case .colorPicker: "eyedropper"
         }
     }
 }
@@ -118,7 +120,7 @@ extension NotchWidget {
     /// Approximate width this widget needs in a collapsed notch ear.
     var glanceWidth: CGFloat {
         switch self {
-        case .coffee, .moon, .mirror: 34
+        case .coffee, .moon, .mirror, .colorPicker: 34
         case .music: 52
         case .cpu: 56
         case .clock, .weather: 58
@@ -179,11 +181,12 @@ struct HeaderWidgetView: View {
         case .btBattery: BTBatteryWidget()
         case .focusStatus: FocusStatusWidget()
         case .canvas: CanvasWidget()
+        case .colorPicker: ColorPickerWidget()
         }
     }
 }
 
-private struct Pill<Content: View>: View {
+struct Pill<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         content
@@ -415,6 +418,7 @@ struct CollapsedGlance: View {
         case .btBattery: CGBTBattery()
         case .focusStatus: CGFocusStatus()
         case .canvas: CanvasGlance()
+        case .colorPicker: Image(systemName: "eyedropper").foregroundStyle(.secondary)
         case .moon: Image(systemName: MoonWidget.phase().0)
         case .mirror: Image(systemName: "camera.fill").foregroundStyle(.secondary)
         }

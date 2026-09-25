@@ -10,6 +10,8 @@ enum Prefs {
     static let musicActivity = "musicActivity"
     static let sportsActivity = "sportsActivity"
     static let tickerActivity = "tickerActivity"
+    static let downloadActivity = "downloadActivity"
+    static let downloadToShelf = "downloadToShelf"
     static let leagues = "leagues"
     static let favoriteTeams = "favoriteTeams"
     static let watchlist = "watchlist"
@@ -26,6 +28,8 @@ enum Prefs {
             musicActivity: true,
             sportsActivity: true,
             tickerActivity: false,
+            downloadActivity: true,
+            downloadToShelf: true,
             leagues: "nfl,nba,mlb,nhl,epl",
             favoriteTeams: "",
             watchlist: "AAPL,NVDA,^GSPC,BTC-USD",

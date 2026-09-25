@@ -4,7 +4,7 @@ import WebKit
 // MARK: - Customizable Home board (the big boxes: Music, Calendar, Weather, …)
 
 enum HomePanel: String, CaseIterable, Identifiable, Codable {
-    case music, calendar, weather, clock, notes, clipboard, stocks, events, shelf, mirror, bluetooth, timer, capture, system, fun, focusStatus, canvas, aquarium
+    case music, calendar, weather, clock, notes, clipboard, stocks, events, shelf, mirror, bluetooth, timer, capture, system, fun, focusStatus, canvas, aquarium, calculator, colorPicker
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -26,6 +26,8 @@ enum HomePanel: String, CaseIterable, Identifiable, Codable {
         case .focusStatus: "Focus Status"
         case .canvas: "Canvas To-Do"
         case .aquarium: "Aquarium Live"
+        case .calculator: "Calculator"
+        case .colorPicker: "Color Picker"
         }
     }
     var icon: String {
@@ -48,6 +50,8 @@ enum HomePanel: String, CaseIterable, Identifiable, Codable {
         case .focusStatus: "moon.fill"
         case .canvas: "graduationcap.fill"
         case .aquarium: "fish.fill"
+        case .calculator: "equal.square.fill"
+        case .colorPicker: "eyedropper.halffull"
         }
     }
 }
@@ -172,6 +176,8 @@ struct PanelContent: View {
         case .focusStatus: FocusStatusPanel()
         case .canvas: CanvasPanel()
         case .aquarium: AquariumPanel()
+        case .calculator: CalculatorPanel()
+        case .colorPicker: ColorPickerPanel()
         }
     }
 }

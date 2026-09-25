@@ -579,6 +579,8 @@ struct LiveSettings: View {
     @AppStorage(Prefs.fahrenheit) var fahrenheit = true
     @AppStorage(Prefs.sportsActivity) var sportsActivity = true
     @AppStorage(Prefs.tickerActivity) var tickerActivity = false
+    @AppStorage(Prefs.downloadActivity) var downloadActivity = true
+    @AppStorage(Prefs.downloadToShelf) var downloadToShelf = true
 
     var body: some View {
         Form {
@@ -586,6 +588,8 @@ struct LiveSettings: View {
             Section("Live activities in the notch") {
                 Toggle("Live games for favorite teams", isOn: $sportsActivity)
                 Toggle("Stock ticker", isOn: $tickerActivity)
+                Toggle("Download progress", isOn: $downloadActivity)
+                Toggle("Put finished downloads on the Shelf", isOn: $downloadToShelf)
                 Text("Now Playing no longer takes over the notch — add it as a collapsed-notch widget in Widgets to keep it in a fixed spot.")
                     .font(.caption).foregroundStyle(.secondary)
             }

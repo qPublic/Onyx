@@ -434,6 +434,11 @@ struct ExpandedView: View {
                             Text("Done").font(.system(size: 11, weight: .semibold)).foregroundStyle(.cyan)
                         }.buttonStyle(.plain)
                     } else {
+                        if model.tab == .shelf && Prefs.bool(AP.shelfStays) {
+                            Button { NotchController.current?.collapse() } label: {
+                                Image(systemName: "xmark.circle").foregroundStyle(Color.primary.opacity(0.6))
+                            }.buttonStyle(.plain).help("Close the Shelf")
+                        }
                         Button { model.pinned.toggle() } label: {
                             Image(systemName: model.pinned ? "pin.fill" : "pin").foregroundStyle(model.pinned ? Color.yellow : Color.primary.opacity(0.6))
                         }.buttonStyle(.plain).help("Keep the notch open")

@@ -68,6 +68,7 @@ enum AP {
     static let hideFromCapture = "ap.hideFromCapture"
     static let hudPopup = "ap.hudPopup"
     static let bookshelf = "ap.bookshelf"
+    static let shelfStays = "ap.shelfStays"
     static let snapLayouts = "ap.snapLayouts"
     static let clearBlur = "ap.clearBlur"
     static let clearDropBelow = "ap.clearDropBelow"
@@ -116,6 +117,7 @@ enum AP {
         hideFromCapture: true,
         hudPopup: true,
         bookshelf: true,
+        shelfStays: true,
         snapLayouts: true,
         clearBlur: true,
         clearDropBelow: false,

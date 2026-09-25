@@ -373,6 +373,7 @@ final class NotchController {
     /// collapses even while typing (panel key) or with close-on-leave off — but never mid-interaction.
     private var appSwitchSticky: Bool {
         model.pinned || WidgetLayout.shared.editing || HomeLayout.shared.editing || menuTracking
+            || (model.tab == .shelf && Prefs.bool(AP.shelfStays))   // the Shelf stays until you close it
     }
 
     private func handle(_ type: NSEvent.EventType) {

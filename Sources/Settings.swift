@@ -472,6 +472,7 @@ struct WidgetsSettings: View {
     @AppStorage(AP.collMid) var collMid = ""
     @AppStorage(AP.collRight) var collRight = "weather"
     @AppStorage(AP.bookshelf) var bookshelf = true
+    @AppStorage(AP.shelfStays) var shelfStays = true
     @AppStorage(AP.musicCow) var musicCow = false
     @AppStorage(AP.cowBeat) var cowBeat = true
 
@@ -544,6 +545,11 @@ struct WidgetsSettings: View {
 
             Section("File Shelf") {
                 Toggle("Bookshelf look", isOn: $bookshelf)
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Keep the Shelf open until you close it", isOn: $shelfStays)
+                    Text("Clicking somewhere else or switching apps won't close it. Close it with the × button at the top right of the notch.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text("Files you stash become books on a wooden shelf, filling in the empty slots as you add more.")
                     .font(.caption).foregroundStyle(.secondary)
             }

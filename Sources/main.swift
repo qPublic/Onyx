@@ -48,6 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         OptimizeService.shared.start()          // low-disk alert + optional weekly clean
         AutoQuit.shared.start()                 // optional: quit apps that have no windows
         MemoryWatch.shared.start()              // optional: per-app memory limit (warn or quit)
+        OnyxReminders.shared.start()            // AI-set reminders that ring in the notch
+        // Debug: ONYX_REMINDER_TEST=1 sets a reminder 5 seconds out to exercise the ringing notch.
+        if ProcessInfo.processInfo.environment["ONYX_REMINDER_TEST"] != nil {
+            OnyxReminders.shared.add(title: "Test reminder from Onyx", due: Date().addingTimeInterval(5))
+        }
         // Debug: ONYX_OPTIMIZE_TEST=1 dry-runs every Optimization action into optimize-dryrun.log, then quits.
         if ProcessInfo.processInfo.environment["ONYX_OPTIMIZE_TEST"] != nil {
             Task { @MainActor in try? await Task.sleep(for: .seconds(2)); await OptimizeSelfTest.run() }

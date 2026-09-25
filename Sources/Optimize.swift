@@ -602,7 +602,7 @@ final class MemoryWatch {
         }
     }
 
-    @MainActor private func act(on over: [String: UInt64], quit: Bool) {
+    @MainActor func act(on over: [String: UInt64], quit: Bool) {
         let keep = Set(UserDefaults.standard.stringArray(forKey: Opt.autoQuitKeep) ?? []).union(AutoQuit.alwaysKeep)
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let playing = MediaController.shared.isPlaying ? MediaController.shared.source?.rawValue : nil
@@ -1184,6 +1184,9 @@ enum OptimizeSelfTest {
         for (path, b) in AppMemory.byApp().sorted(by: { $0.value > $1.value }).prefix(6) {
             Shell.log("memory \((path as NSString).lastPathComponent): \(Sys.bytes(Int64(b)))")
         }
+        let heavy = AppMemory.byApp().filter { $0.value > 1_073_741_824 }   // memory limit check at 1 GB
+        MemoryWatch.shared.act(on: heavy, quit: false)
+        MemoryWatch.shared.act(on: heavy, quit: true)
         let windowed = AutoQuit.appsWithWindows()
         for a in NSWorkspace.shared.runningApplications where a.activationPolicy == .regular {
             Shell.log("auto-quit check \(a.localizedName ?? "?"): \(windowed.contains(a.processIdentifier) ? "has windows" : "no windows")")

@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### New
+- **Onyx reminders.** Ask Onyx AI things like "remind me to call mom in 20 minutes" or "remind me to study at 7". When a reminder is due, the notch shows a bouncing orange bell with the reminder and plays a sound. It stays until you open the notch and choose **Done** or **Snooze** (5 minutes to 1 hour). Reminders that came due while your Mac was asleep go off as soon as it wakes. You can also ask the AI to list or cancel your reminders. To add something to Apple's Reminders app instead, mention "Reminders app".
 - **Optimization**, inspired by OnyX, in its own window. Open it with the new gauge button in the notch (between the pin and the gear) or from the menu bar icon › **Optimization…**. Searching in Settings for things like "dns" or "hidden files" also opens it at the right page.
   - **Overview:** disk space and memory at a glance, plus **Quick Optimize**, which moves app caches and old logs to the Trash. You can also turn on a low-disk-space warning in the notch and a weekly clean.
   - **Clean:** scans caches, logs and Xcode build files and shows how big each one is. You choose what to remove, and it all goes to the Trash so you can put anything back. There's also an **Empty Trash** button.

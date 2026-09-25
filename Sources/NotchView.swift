@@ -26,7 +26,7 @@ struct NotchShape: Shape {
 }
 
 enum Activity: Equatable {
-    case none, hud(HUDEvent), timer, game(Game), music, ticker(Quote), recording, download
+    case none, hud(HUDEvent), timer, game(Game), music, ticker(Quote), recording, download, reminder(String)
 
     var key: String {
         switch self {
@@ -46,13 +46,14 @@ enum Activity: Equatable {
         case .ticker: "ticker"
         case .recording: "rec"
         case .download: "dl"
+        case .reminder: "rem"
         }
     }
 
     var earWidth: CGFloat {
         switch self {
         case .none: 0
-        case .hud(.message), .hud(.eyeBreak): 118
+        case .hud(.message), .hud(.eyeBreak), .reminder: 118
         case .game: 84
         case .ticker, .download: 84
         default: 70
@@ -67,6 +68,7 @@ struct NotchRootView: View {
     @ObservedObject var markets = MarketsService.shared
     @ObservedObject var capture = QuickCapture.shared
     @ObservedObject var downloads = DownloadMonitor.shared
+    @ObservedObject var reminders = OnyxReminders.shared
     @AppStorage(Prefs.sportsActivity) var sportsActivity = true
     @AppStorage(Prefs.tickerActivity) var tickerActivity = false
     @ObservedObject var appearance = AppearanceStore.shared
@@ -80,6 +82,7 @@ struct NotchRootView: View {
     // Now Playing no longer auto-takes-over the notch; pick it as a collapsed widget to keep it in place.
     var activity: Activity {
         if let h = model.hud { return .hud(h) }
+        if let r = reminders.ringing.first { return .reminder(r.title) }   // stays until Done / Snooze
         if capture.recording { return .recording }
         if !downloads.items.isEmpty { return .download }
         if timer.running { return .timer }
@@ -187,6 +190,7 @@ struct CollapsedView: View {
         case .game(let g): HStack(spacing: 5) { Logo(url: g.away.logo, size: 18); Text(g.away.score).monospacedDigit() }
         case .ticker(let q): Text(q.id).lineLimit(1)
         case .recording: Image(systemName: "record.circle.fill").foregroundStyle(.red).symbolEffect(.pulse)
+        case .reminder: Image(systemName: "bell.fill").foregroundStyle(.orange).symbolEffect(.bounce, options: .repeating)
         case .download:
             HStack(spacing: 4) {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(.cyan)
@@ -221,6 +225,7 @@ struct CollapsedView: View {
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 Text(format(ctx.date.timeIntervalSince(QuickCapture.shared.startedAt ?? ctx.date))).monospacedDigit().foregroundStyle(.red)
             }
+        case .reminder(let title): Text(title).lineLimit(1).minimumScaleFactor(0.8)
         case .download:
             if let f = DownloadMonitor.shared.overall {
                 HStack(spacing: 5) {
@@ -488,6 +493,8 @@ struct ExpandedView: View {
                     .background(.black.opacity(0.6))
             }
         }
+        .overlay(alignment: .bottom) { ReminderBanner() }   // a reminder that's going off: Done / Snooze
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: OnyxReminders.shared.ringing)
         .onDrop(of: [.fileURL, .image, .plainText], isTargeted: $dropTarget) { providers in
             model.tab = .shelf
             return ShelfStore.shared.handleDrop(providers)

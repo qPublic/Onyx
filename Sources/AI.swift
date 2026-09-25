@@ -159,7 +159,28 @@ enum AgentTools {
                 }
                 return "Opened \(u.lastPathComponent)"
             },
-            AgentTool(name: "create_reminder", description: "Add a reminder to the Reminders app", params: [("title", "What to remember", false), ("due", "Due date/time as yyyy-MM-dd HH:mm", true)], requires: ["remind", "reminder", "to-do", "todo", "to do", "task"]) { a in
+            AgentTool(name: "create_reminder", description: "Set a reminder that goes off in the Onyx notch at a time. Use for 'remind me to…'", params: [("title", "What to remind the user about, in their words", false), ("in_minutes", "Minutes from now, if they said 'in N minutes/hours'", true), ("at", "Date/time as yyyy-MM-dd HH:mm, if they gave a clock time", true)], requires: ["remind", "reminder"]) { a in
+                guard let t = arg(a, "title") else { return "Missing title" }
+                guard Assistant.grounded(t) else { return Assistant.ungrounded }
+                guard let due = OnyxReminders.dueDate(inMinutes: arg(a, "in_minutes"), at: arg(a, "at"), request: Assistant.currentRequest) else {
+                    return "Not set: no time given. Ask the user when they want to be reminded."
+                }
+                await MainActor.run { _ = OnyxReminders.shared.add(title: t, due: due) }
+                let when = Calendar.current.isDateInToday(due) ? due.formatted(date: .omitted, time: .shortened) : due.formatted(date: .abbreviated, time: .shortened)
+                return "Reminder set for \(when). The notch will ring then."
+            },
+            AgentTool(name: "list_reminders", description: "List the user's upcoming Onyx reminders", params: [], requires: ["remind", "reminder"]) { _ in
+                await MainActor.run {
+                    let r = OnyxReminders.shared.upcoming
+                    return r.isEmpty ? "No upcoming reminders" : r.map { "\($0.title) — \($0.due.formatted(date: .abbreviated, time: .shortened))" }.joined(separator: "\n")
+                }
+            },
+            AgentTool(name: "cancel_reminder", description: "Cancel an upcoming Onyx reminder by (part of) its title", params: [("title", "Words from the reminder's title", false)], requires: ["cancel", "delete", "remove", "stop", "clear"]) { a in
+                guard let t = arg(a, "title") else { return "Missing title" }
+                let gone = await MainActor.run { OnyxReminders.shared.cancel(matching: t) }
+                return gone.isEmpty ? "No upcoming reminder matches \(t)" : "Cancelled: " + gone.map(\.title).joined(separator: ", ")
+            },
+            AgentTool(name: "add_to_reminders_app", description: "Add an item to Apple's Reminders app (only when the user asks for the Reminders app)", params: [("title", "What to remember", false), ("due", "Due date/time as yyyy-MM-dd HH:mm", true)], requires: ["reminders app", "apple reminders", "reminders list", "in reminders"]) { a in
                 guard let t = arg(a, "title") else { return "Missing title" }
                 guard Assistant.grounded(t) else { return Assistant.ungrounded }
                 return try await CalendarService.shared.createReminder(title: t, due: arg(a, "due").flatMap(parseDate))

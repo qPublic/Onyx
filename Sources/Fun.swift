@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import AVFoundation
 import CoreImage
+import Vision
 
 // MARK: - Fun mode preferences
 
@@ -413,12 +414,13 @@ struct GooseView: View {
 // MARK: - Mirror filters
 
 enum MirrorFilter: String, CaseIterable, Identifiable {
-    case none, noir, comic, thermal, xray, sepia, pixel, posterize, invert, bulge, pinch, twirl, kaleidoscope
+    case none, catEars, noir, comic, thermal, xray, sepia, pixel, posterize, invert, bulge, pinch, twirl, kaleidoscope
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .none: "Normal"
+        case .catEars: "Cat Ears"
         case .noir: "Noir"
         case .comic: "Comic"
         case .thermal: "Thermal"
@@ -436,7 +438,7 @@ enum MirrorFilter: String, CaseIterable, Identifiable {
 
     func make() -> CIFilter? {
         switch self {
-        case .none: return nil
+        case .none, .catEars: return nil   // cat ears are drawn over the face, not a Core Image filter
         case .noir: return CIFilter(name: "CIPhotoEffectNoir")
         case .comic: return CIFilter(name: "CIComicEffect")
         case .thermal: return CIFilter(name: "CIThermal")
@@ -523,8 +525,82 @@ struct FilteredCamera: NSViewRepresentable {
                 k.configure(f, extent: extent)
                 if let o = f.outputImage { img = o.cropped(to: extent) }
             }
-            guard let cg = ctx.createCGImage(img, from: extent) else { return }
+            guard var cg = ctx.createCGImage(img, from: extent) else { return }
+            if k == .catEars { cg = drawCatEars(on: cg, source: img) ?? cg }
             DispatchQueue.main.async { self.layer?.contents = cg }
+        }
+
+        // MARK: Cat ears (face tracking; only touched on `queue`)
+        private let faceRequest = VNDetectFaceLandmarksRequest()
+        private var ears: (rect: CGRect, angle: CGFloat)?
+        private var missed = 0
+
+        private func drawCatEars(on cg: CGImage, source: CIImage) -> CGImage? {
+            let w = CGFloat(cg.width), h = CGFloat(cg.height)
+            try? VNImageRequestHandler(ciImage: source, options: [:]).perform([faceRequest])
+            if let face = faceRequest.results?.max(by: { $0.boundingBox.width < $1.boundingBox.width }) {
+                let b = face.boundingBox
+                let r = CGRect(x: b.minX * w, y: b.minY * h, width: b.width * w, height: b.height * h)
+                var angle: CGFloat = 0
+                if let l = face.landmarks?.leftEye, let rt = face.landmarks?.rightEye {
+                    let size = CGSize(width: w, height: h)
+                    let p1 = Self.centroid(l.pointsInImage(imageSize: size)), p2 = Self.centroid(rt.pointsInImage(imageSize: size))
+                    let (a, c) = p1.x < p2.x ? (p1, p2) : (p2, p1)
+                    angle = atan2(c.y - a.y, c.x - a.x)
+                }
+                // Smooth so the ears don't jitter.
+                if let e = ears {
+                    let t: CGFloat = 0.45
+                    func mix(_ x: CGFloat, _ y: CGFloat) -> CGFloat { x + (y - x) * t }
+                    ears = (CGRect(x: mix(e.rect.minX, r.minX), y: mix(e.rect.minY, r.minY),
+                                   width: mix(e.rect.width, r.width), height: mix(e.rect.height, r.height)), mix(e.angle, angle))
+                } else { ears = (r, angle) }
+                missed = 0
+            } else {
+                missed += 1
+                if missed > 8 { ears = nil }
+            }
+            guard let e = ears,
+                  let c = CGContext(data: nil, width: cg.width, height: cg.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(),
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+            else { return nil }
+            c.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            // Face box runs brow → chin, so the ears sit a bit above its top edge, tilted with the head.
+            c.translateBy(x: e.rect.midX, y: e.rect.midY)
+            c.rotate(by: e.angle)
+            for side: CGFloat in [-1, 1] {
+                Self.drawEar(c, at: CGPoint(x: side * e.rect.width * 0.32, y: e.rect.height * 0.6),
+                             size: e.rect.width * 0.38, tilt: -side * 0.3)
+            }
+            return c.makeImage()
+        }
+
+        private static func centroid(_ pts: [CGPoint]) -> CGPoint {
+            guard !pts.isEmpty else { return .zero }
+            let s = pts.reduce(CGPoint.zero) { CGPoint(x: $0.x + $1.x, y: $0.y + $1.y) }
+            return CGPoint(x: s.x / CGFloat(pts.count), y: s.y / CGFloat(pts.count))
+        }
+
+        private static func drawEar(_ c: CGContext, at p: CGPoint, size s: CGFloat, tilt: CGFloat) {
+            func shape(_ k: CGFloat) -> CGPath {
+                let path = CGMutablePath()
+                path.move(to: CGPoint(x: -s * 0.5 * k, y: 0))
+                path.addQuadCurve(to: CGPoint(x: 0, y: s * 1.1 * k), control: CGPoint(x: -s * 0.42 * k, y: s * 0.7 * k))
+                path.addQuadCurve(to: CGPoint(x: s * 0.5 * k, y: 0), control: CGPoint(x: s * 0.42 * k, y: s * 0.7 * k))
+                path.addQuadCurve(to: CGPoint(x: -s * 0.5 * k, y: 0), control: CGPoint(x: 0, y: -s * 0.12 * k))
+                return path
+            }
+            c.saveGState()
+            c.translateBy(x: p.x, y: p.y); c.rotate(by: tilt)
+            c.addPath(shape(1))
+            c.setFillColor(CGColor(red: 0.17, green: 0.14, blue: 0.13, alpha: 1))
+            c.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.85)); c.setLineWidth(max(1.5, s * 0.04))
+            c.drawPath(using: .fillStroke)
+            c.translateBy(x: 0, y: s * 0.1)
+            c.addPath(shape(0.6))
+            c.setFillColor(CGColor(red: 1, green: 0.64, blue: 0.74, alpha: 1)); c.fillPath()
+            c.restoreGState()
         }
     }
 

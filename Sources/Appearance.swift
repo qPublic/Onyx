@@ -214,7 +214,9 @@ final class FullscreenWatcher {
         let nc = NSWorkspace.shared.notificationCenter
         for n in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification] {
             nc.addObserver(forName: n, object: nil, queue: .main) { [weak self] _ in
+                // The fullscreen animation takes ~0.7s; check again once it has settled.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self?.check() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self?.check() }
             }
         }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.check() }
@@ -228,8 +230,9 @@ final class FullscreenWatcher {
 
     static func frontAppIsFullscreen(on screen: NSScreen) -> Bool {
         guard let app = NSWorkspace.shared.frontmostApplication,
-              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return false }
+        if axFullscreen(app.processIdentifier, on: screen) { return true }
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
         else { return false }
         let size = screen.frame.size
         return list.contains { w in
@@ -239,6 +242,23 @@ final class FullscreenWatcher {
             // A maximized window leaves room for the menu bar; a fullscreen one covers the whole display.
             return (b["Width"] ?? 0) >= size.width && (b["Height"] ?? 0) >= size.height
         }
+    }
+
+    /// Native fullscreen, as the app itself reports it. (On notched Macs a fullscreen window stops
+    /// below the notch, so it never covers the whole display and the size check alone misses it.)
+    private static func axFullscreen(_ pid: pid_t, on screen: NSScreen) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let app = AXUIElementCreateApplication(pid)
+        var win: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &win) == .success, let win,
+              CFGetTypeID(win) == AXUIElementGetTypeID() else { return false }
+        let w = win as! AXUIElement
+        var fs: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(w, "AXFullScreen" as CFString, &fs) == .success, (fs as? Bool) == true else { return false }
+        // Only count it when that window is on the notch's screen (AX uses top-left global coordinates).
+        guard let p = SnapController.position(w) else { return true }
+        let primaryH = NSScreen.screens.first?.frame.maxY ?? 0
+        return screen.frame.insetBy(dx: -2, dy: -2).contains(CGPoint(x: p.x + 1, y: primaryH - p.y - 1))
     }
 }
 

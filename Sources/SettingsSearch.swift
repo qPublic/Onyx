@@ -76,6 +76,7 @@ enum SettingsIndex {
         e(.live, "Canvas", "Connect Canvas LMS", "canvas lms school assignments homework todo to-do instructure classes"),
         e(.live, "Canvas", "How to get a Canvas token", "canvas token access api guide help instructure"),
         e(.widgets, "Home boxes", "Dancing cow under Now Playing", "cow dancing polish gif music fun"),
+        e(.widgets, "Home boxes", "Cow dances to the beat", "cow beat bpm tempo rhythm sync dance music spotify"),
         e(.widgets, "Home boxes", "Aquarium live stream box", "aquarium fish monterey bay live stream video youtube"),
         e(.live, "Weather", "Weather city", "weather city location forecast"),
         e(.live, "Weather", "Fahrenheit", "celsius fahrenheit temperature units"),

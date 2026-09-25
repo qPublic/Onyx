@@ -473,6 +473,7 @@ struct WidgetsSettings: View {
     @AppStorage(AP.collRight) var collRight = "weather"
     @AppStorage(AP.bookshelf) var bookshelf = true
     @AppStorage(AP.musicCow) var musicCow = false
+    @AppStorage(AP.cowBeat) var cowBeat = true
 
     var body: some View {
         Form {
@@ -532,6 +533,13 @@ struct WidgetsSettings: View {
                     }
                 }
                 Toggle("Dancing cow under Now Playing", isOn: $musicCow)
+                if musicCow {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Toggle("Dance to the beat", isOn: $cowBeat)
+                        Text("Matches the cow's steps to the song's tempo. The tempo is looked up by song title and artist on Deezer; songs it doesn't know get the normal dance.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             } header: { Text("Home boxes") }
 
             Section("File Shelf") {

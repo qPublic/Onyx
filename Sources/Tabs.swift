@@ -119,6 +119,50 @@ struct MusicCard: View {
     }
 }
 
+/// Song tempo for the dancing cow. Spotify no longer gives tempo to new apps, so this looks the
+/// song up on Deezer's public API by title + artist (no account needed). 0 = unknown.
+final class TempoService {
+    static let shared = TempoService()
+    private var cache: [String: Double] = [:]
+    private var inFlight = Set<String>()
+
+    /// Returns the BPM if known; starts a lookup the first time a song is seen. Main thread only.
+    func bpm(title: String, artist: String) -> Double? {
+        guard !title.isEmpty else { return nil }
+        let key = "\(artist)|\(title)".lowercased()
+        if let v = cache[key] { return v > 0 ? v : nil }
+        if inFlight.insert(key).inserted {
+            Task {
+                let v = await Self.lookup(title: title, artist: artist)
+                await MainActor.run { self.cache[key] = v; self.inFlight.remove(key) }
+            }
+        }
+        return nil
+    }
+
+    private static func lookup(title: String, artist: String) async -> Double {
+        // "Song (feat. X) - Remastered 2011" → "Song"; "A, B & C" → "A"
+        var t = title.components(separatedBy: " - ").first ?? title
+        t = t.replacingOccurrences(of: "\\s*[\\(\\[].*?[\\)\\]]", with: "", options: .regularExpression)
+        let a = artist.components(separatedBy: CharacterSet(charactersIn: ",&")).first?
+            .components(separatedBy: " feat").first?.trimmingCharacters(in: .whitespaces) ?? artist
+        var c = URLComponents(string: "https://api.deezer.com/search")!
+        c.queryItems = [URLQueryItem(name: "q", value: "\(a) \(t)"), URLQueryItem(name: "limit", value: "3")]
+        guard let u = c.url, let j = await json(u), let hits = j["data"] as? [[String: Any]] else { return 0 }
+        for h in hits {
+            guard let id = h["id"] else { continue }
+            if let d = await json(URL(string: "https://api.deezer.com/track/\(id)")!),
+               let bpm = (d["bpm"] as? NSNumber)?.doubleValue, bpm > 30 { return bpm }
+        }
+        return 0
+    }
+
+    private static func json(_ u: URL) async -> [String: Any]? {
+        guard let (d, _) = try? await URLSession.shared.data(from: u) else { return nil }
+        return try? JSONSerialization.jsonObject(with: d) as? [String: Any]
+    }
+}
+
 /// The dancing cow (optional, fills the space under Now Playing). Transparent background, so the
 /// notch's own style shows through. Dances while music plays; when it stops, it finishes the current
 /// dance cycle and settles on frame 0 (standing) instead of freezing mid-move.
@@ -133,6 +177,7 @@ final class CowAnimator: ObservableObject {
     @Published var frame = 0
     private var timer: Timer?
     private var sub: AnyCancellable?
+    private var lastStep = Date.distantPast
 
     init() {
         sub = MediaController.shared.$isPlaying.removeDuplicates().receive(on: DispatchQueue.main)
@@ -140,12 +185,38 @@ final class CowAnimator: ObservableObject {
     }
     func sync() {
         if (MediaController.shared.isPlaying || frame != 0), timer == nil, Self.frames.count > 1 {
-            timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in self?.tick() }
+            timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.tick() }
         }
     }
     private func tick() {
+        let m = MediaController.shared
+        // On the beat: the frame follows the song's playback position, so the dips land on beats.
+        if m.isPlaying, Prefs.bool(AP.cowBeat), Self.frames.count == 20,
+           let bpm = TempoService.shared.bpm(title: m.title, artist: m.artist) {
+            let f = Self.frame(onBeat: m.currentPosition(at: Date()) * Self.danceTempo(bpm) / 60)
+            if f != frame { frame = f }
+            return
+        }
+        // Otherwise the gif's own speed (10 fps).
+        guard Date().timeIntervalSince(lastStep) >= 0.095 else { return }
+        lastStep = Date()
         frame = (frame + 1) % Self.frames.count
-        if frame == 0 && !MediaController.shared.isPlaying { stop() }   // back to standing: rest here
+        if frame == 0 && !m.isPlaying { stop() }   // back to standing: rest here
+    }
+
+    /// The gif dips 4 times per 20-frame loop, at frames 2, 6, 12 and 16 (120 BPM at its own speed).
+    /// Stretch between those so a dip lands on every beat.
+    private static let dips: [Double] = [2, 6, 12, 16, 22]
+    static func frame(onBeat beats: Double) -> Int {
+        let b = max(0, beats).truncatingRemainder(dividingBy: 4), k = Int(b), t = b - Double(k)
+        return Int((dips[k] + (dips[k + 1] - dips[k]) * t).rounded(.down)) % 20
+    }
+    /// Very fast or slow songs dance at half/double time so the cow stays readable.
+    static func danceTempo(_ bpm: Double) -> Double {
+        var t = bpm
+        while t > 150 { t /= 2 }
+        while t < 75 { t *= 2 }
+        return t
     }
     func stop() { timer?.invalidate(); timer = nil }
     deinit { timer?.invalidate() }

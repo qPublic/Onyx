@@ -92,7 +92,12 @@ struct NotchRootView: View {
     }
 
     /// Ear width when idle, driven by the collapsed-notch glance widgets the user picked.
-    var idleEar: CGFloat { model.geometry.earsTucked ? 0 : max(AP.collapsedLeft?.glanceWidth ?? 0, AP.collapsedRight?.glanceWidth ?? 0) }
+    var idleEar: CGFloat {
+        let e = max(AP.collapsedLeft?.glanceWidth ?? 0, AP.collapsedRight?.glanceWidth ?? 0)
+        return model.geometry.earsFit(e) ? e : 0   // built-in notch: fold away rather than cover menus or icons
+    }
+    /// Built-in notch with app menus or menu bar icons right beside it: a live activity hangs below the camera instead.
+    var hangsBelow: Bool { activity != .none && popup == nil && !model.expanded && !model.geometry.earsFit(activity.earWidth) }
 
     /// Volume/brightness changes drop a small pop-out down from the notch (Settings › Behavior).
     var popup: HUDEvent? {
@@ -111,13 +116,14 @@ struct NotchRootView: View {
             let mid = g.hasNotch ? 0 : AP.collapsedMid?.glanceWidth ?? 0   // the center is behind a built-in camera
             return CGSize(width: max(g.notchWidth, mid + 28) + 2 * idleEar, height: g.notchHeight)
         }
+        if hangsBelow { return CGSize(width: g.belowWidth(activity.earWidth), height: g.notchHeight + 26) }
         return CGSize(width: g.notchWidth + 2 * activity.earWidth, height: g.notchHeight)
     }
 
     var body: some View {
         let s = size
         let top: CGFloat = model.expanded ? 12 : 6
-        let bottom: CGFloat = model.expanded ? 26 : (popup != nil ? 18 : 10)
+        let bottom: CGFloat = model.expanded ? 26 : (popup != nil ? 18 : hangsBelow ? 14 : 10)
         ZStack(alignment: .top) {
             NotchBackground(shape: NotchShape(top: top, bottom: bottom), expanded: model.expanded)
                 .frame(width: s.width, height: s.height)
@@ -132,7 +138,7 @@ struct NotchRootView: View {
                     HUDPopupView(hud: p)
                         .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: -14)), removal: .opacity))
                 } else {
-                    CollapsedView(activity: activity)
+                    CollapsedView(activity: activity, below: hangsBelow)
                         .transition(.opacity)
                 }
             }
@@ -153,14 +159,30 @@ struct NotchRootView: View {
 
 struct CollapsedView: View {
     let activity: Activity
+    var below = false
     @EnvironmentObject var model: NotchModel
     @ObservedObject var media = MediaController.shared
     @ObservedObject var timer = FocusTimer.shared
 
+    private var idleEar: CGFloat { max(AP.collapsedLeft?.glanceWidth ?? 0, AP.collapsedRight?.glanceWidth ?? 0) }
+    private var tucked: Bool { !model.geometry.earsFit(idleEar) }   // built-in notch: menus or icons are right beside it
+
     var body: some View {
+        if below {
+            // Built-in notch with menus or icons right beside it: the activity hangs below the camera.
+            VStack(spacing: 0) {
+                Color.clear.frame(height: model.geometry.notchHeight)
+                HStack(spacing: 8) { left; right }.lineLimit(1).minimumScaleFactor(0.8).frame(height: 24).padding(.horizontal, 12)
+            }
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+        } else {
+            sideBody
+        }
+    }
+
+    @ViewBuilder private var sideBody: some View {
         let idle = activity == .none
-        let tucked = idle && model.geometry.earsTucked
-        let ear = tucked ? 0 : idle ? max(AP.collapsedLeft?.glanceWidth ?? 0, AP.collapsedRight?.glanceWidth ?? 0) : activity.earWidth
+        let ear = idle ? (tucked ? 0 : idleEar) : activity.earWidth
         ZStack {
             HStack(spacing: 0) {
                 leftContent.frame(width: max(ear - 16, 0), alignment: .leading).padding(.leading, ear > 0 ? 16 : 0)
@@ -175,11 +197,11 @@ struct CollapsedView: View {
 
     // Idle → user-chosen glance widgets; otherwise the live activity's own left/right content.
     @ViewBuilder private var leftContent: some View {
-        if activity == .none { if !model.geometry.earsTucked, let w = AP.collapsedLeft { CollapsedGlance(widget: w) } }
+        if activity == .none { if !tucked, let w = AP.collapsedLeft { CollapsedGlance(widget: w) } }
         else { left }
     }
     @ViewBuilder private var rightContent: some View {
-        if activity == .none { if !model.geometry.earsTucked, let w = AP.collapsedRight { CollapsedGlance(widget: w) } }
+        if activity == .none { if !tucked, let w = AP.collapsedRight { CollapsedGlance(widget: w) } }
         else { right }
     }
 
@@ -420,9 +442,14 @@ struct ExpandedView: View {
                 if g.avoidsCamera { Color.clear.frame(width: g.hardwareNotchWidth + 8) } else { Spacer(minLength: 8) }
 
                 if g.avoidsCamera {
-                    // Right of a built-in camera: header widgets drop off the end until the row fits.
+                    // Right of a built-in camera: header widgets drop off the end until the row fits, behind a "+2" menu.
                     ViewThatFits(in: .horizontal) {
-                        ForEach((0...widgets.widgets.count).reversed(), id: \.self) { n in widgetRow(Array(widgets.widgets.prefix(n))) }
+                        ForEach((0...widgets.widgets.count).reversed(), id: \.self) { n in
+                            HStack(spacing: 6) {
+                                widgetRow(Array(widgets.widgets.prefix(n)))
+                                if n < widgets.widgets.count { HiddenWidgetsMenu(hidden: Array(widgets.widgets.dropFirst(n))) }
+                            }
+                        }
                     }
                     .layoutPriority(1)
                 } else {
@@ -515,6 +542,27 @@ struct ExpandedView: View {
             }
         }
         .animation(.snappy(duration: 0.2), value: widgets.widgets)
+    }
+}
+
+/// Built-in notch: the header widgets that don't fit beside the camera, behind a small "+2" menu.
+struct HiddenWidgetsMenu: View {
+    let hidden: [NotchWidget]
+    var body: some View {
+        Menu {
+            Section("These don't fit next to the camera") {
+                ForEach(hidden) { w in
+                    Button { WidgetLayout.shared.toggle(w) } label: { Label("Remove \(w.title)", systemImage: w.icon) }
+                }
+            }
+            Text("Or make the notch wider in Settings › Size & Position")
+        } label: {
+            Text("+\(hidden.count)").font(.system(size: 11, weight: .semibold))
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Color.primary.opacity(0.12), in: Capsule())
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help("\(hidden.count) more header widget\(hidden.count == 1 ? "" : "s") that don't fit next to the camera")
     }
 }
 

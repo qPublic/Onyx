@@ -276,8 +276,13 @@ struct AppearanceSettings: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Toggle("Use this style even when collapsed", isOn: $styleCollapsed)
-                    .help("Off keeps the idle notch solid black so it blends with a hardware notch.")
+                if NotchModel.shared.geometry.hasNotch {
+                    Text("Your Mac has a built-in notch, so the closed notch stays black to blend in with it. This style shows when it opens.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Toggle("Use this style even when collapsed", isOn: $styleCollapsed)
+                        .help("Off keeps the idle notch solid black so it blends with a hardware notch.")
+                }
             }
             Section("Colors") {
                 ColorPicker("Accent", selection: hexColorBinding(AP.accent), supportsOpacity: false)
@@ -323,6 +328,9 @@ struct LayoutSettings: View {
                 slider("Width adjust", $collW, -80...260, "pt")
                 slider("Height adjust", $collH, -6...24, "pt")
                 slider("Side widget room", $earScale, 0.6...1.8, "×")
+                if NotchModel.shared.geometry.hasNotch {
+                    Text("It never gets smaller than your Mac's built-in notch.").font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section("Position") {
                 Picker("Placement", selection: $placement) {
@@ -331,7 +339,12 @@ struct LayoutSettings: View {
                 if placement == Placement.floating.rawValue {
                     slider("Gap from top", $topGap, 0...60, "pt")
                 }
-                slider("Horizontal offset", $hOffset, -600...600, "pt")
+                if NotchModel.shared.geometry.hasNotch {
+                    Text("Onyx stays centered on your Mac's built-in notch, and opens around the camera.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    slider("Horizontal offset", $hOffset, -600...600, "pt")
+                }
                 Picker("Show on display", selection: $display) {
                     Text("Automatic (notch display)").tag("auto")
                     Text("Built-in display").tag("builtin")
@@ -498,9 +511,11 @@ struct WidgetsSettings: View {
                     Text("None").tag("")
                     ForEach(NotchWidget.allCases) { Label($0.title, systemImage: $0.icon).tag($0.rawValue) }
                 }
-                Picker("Center", selection: $collMid) {
-                    Text("None").tag("")
-                    ForEach(NotchWidget.allCases) { Label($0.title, systemImage: $0.icon).tag($0.rawValue) }
+                if !NotchModel.shared.geometry.hasNotch {   // with a built-in notch, the center is behind the camera
+                    Picker("Center", selection: $collMid) {
+                        Text("None").tag("")
+                        ForEach(NotchWidget.allCases) { Label($0.title, systemImage: $0.icon).tag($0.rawValue) }
+                    }
                 }
                 Picker("Right side", selection: $collRight) {
                     Text("None").tag("")

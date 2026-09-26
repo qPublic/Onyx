@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.1
+
+### Improved
+- **Macs with a built-in notch.** Onyx now works around the camera:
+  - The closed notch always stays black so it blends in, even with Liquid Glass or Frosted. Your style shows once it opens.
+  - It opens around the camera, with your tabs on the left and the clock, widgets and buttons on the right. Nothing ends up behind the camera: header widgets that don't fit are left out, and the open notch gets a little wider if it needs the room.
+  - It always stays centered on the camera and is never smaller than it. The horizontal offset setting only applies to Macs without a notch.
+  - When an app's menus reach the notch, the side widgets fold away instead of the notch sliding off the camera.
+  - The Center widget for the closed notch is hidden, since it would sit behind the camera.
+
 ## 1.5.0
 
 ### New

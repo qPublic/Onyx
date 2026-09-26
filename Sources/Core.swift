@@ -142,6 +142,8 @@ enum HUDEvent: Equatable {
 struct NotchGeometry: Equatable {
     var hasNotch = false
     var hardwareNotchWidth: CGFloat = 0
+    var hardwareNotchHeight: CGFloat = 0
+    var earsTucked = false                 // built-in notch: idle side widgets fold away when app menus reach them
     var notchWidth: CGFloat = 190          // collapsed idle width (after user adjustment)
     var notchHeight: CGFloat = 32          // collapsed height
     var screenFrame: NSRect = .zero
@@ -161,8 +163,10 @@ struct NotchGeometry: Equatable {
         // Extra height is room for the volume/brightness pop-out to drop down (transparent + click-through).
         CGSize(width: notchWidth + 2 * 124 * earScale + 24, height: topGap + notchHeight + 52)
     }
-    /// The expanded header only needs a gap for the camera when the notch sits right over it.
-    var avoidsCamera: Bool { hasNotch && !floating && abs(centerX - screenFrame.midX) < 2 && notchWidth >= hardwareNotchWidth - 1 }
+    /// With a built-in notch, the opened notch's top row leaves room for the camera (unless Clear glass hangs it below).
+    var avoidsCamera: Bool { hasNotch && NotchGeometry.menuBarLift(self, expanded: true) == 0 }
+    /// Debug: ONYX_FAKENOTCH=1 treats the screen as having a built-in notch (for testing on Macs without one).
+    static let fakeNotch = ProcessInfo.processInfo.environment["ONYX_FAKENOTCH"] != nil
 
     init() {}
     init(screen: NSScreen) {
@@ -176,18 +180,32 @@ struct NotchGeometry: Equatable {
             hardwareNotchWidth = screen.frame.width - l.width - r.width + 4
             baseW = hardwareNotchWidth
             baseH = top
+        } else if Self.fakeNotch {
+            hasNotch = true
+            hardwareNotchWidth = 200
+            baseW = 200
+            baseH = menuBar > 10 ? menuBar : 32
         } else {
             baseH = menuBar > 10 ? max(menuBar - 1, 24) : 30
         }
+        hardwareNotchHeight = hasNotch ? baseH : 0
         notchWidth = max(80, baseW + d.double(forKey: AP.collW))
         notchHeight = max(18, baseH + d.double(forKey: AP.collH))
+        // A built-in notch can't shrink: the pill always covers the whole camera housing.
+        if hasNotch { notchWidth = max(notchWidth, hardwareNotchWidth); notchHeight = max(notchHeight, hardwareNotchHeight) }
         floating = AP.placementValue == .floating
         topGap = floating ? d.double(forKey: AP.topGap) : 0
         let w = min(max(d.double(forKey: AP.expW), 520), screen.frame.width - 20)
         expandedSize = CGSize(width: w, height: min(max(d.double(forKey: AP.expH), 220), screen.frame.height * 0.8))
+        // Wide enough that the tabs fit left of a built-in camera, and the buttons plus a widget or two fit right of it.
+        if hasNotch {
+            let side = max(CGFloat(AP.enabledTabs.count) * 48 - 4, 230)
+            expandedSize.width = min(max(expandedSize.width, hardwareNotchWidth + 2 * (side + 36)), screen.frame.width - 20)
+        }
         earScale = max(0.6, d.double(forKey: AP.earScale))
         let maxOff = max(0, screen.frame.width / 2 - w / 2 - 8)
-        centerX = screen.frame.midX + min(max(d.double(forKey: AP.hOffset), -maxOff), maxOff)
+        // …and can't move, so the notch stays centered on the camera.
+        centerX = screen.frame.midX + (hasNotch ? 0 : min(max(d.double(forKey: AP.hOffset), -maxOff), maxOff))
     }
 
     /// With see-through (Clear) glass, the opened notch hangs just below the menu bar so menu text is
@@ -310,6 +328,8 @@ final class NotchController {
         guard MenuBarDodger.shared.enabled, let edge = MenuBarDodger.shared.rightEdge else { return }
         let ear = max(AP.collapsedLeft?.glanceWidth ?? 0, AP.collapsedRight?.glanceWidth ?? 0)
         let pillW = g.notchWidth + 2 * ear
+        // A built-in notch can't move, so fold the idle side widgets away instead of sliding off the camera.
+        if g.hasNotch { g.earsTucked = ear > 0 && g.centerX - pillW / 2 < edge + 10; return }
         // Clear glass bends whatever sits just past its edge, so keep menu text well outside that lens zone.
         let gap: CGFloat = BackdropSampler.enabled && Prefs.bool(AP.styleCollapsed) ? 34 : 10
         if g.centerX - pillW / 2 < edge + gap {

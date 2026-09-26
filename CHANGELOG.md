@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0
+
+### New
+- **Automatic updates.** Onyx now checks GitHub for new versions, downloads them in the background, and installs them the next time Onyx starts or when you quit it. The notch lets you know when an update is ready and again after it's installed. To install right away, use **Restart Now** in **Settings › Behavior › Updates** or **Restart to Install** in the menu bar icon's menu. You can turn automatic updates off in Settings, and **Check Now** (or **Check for Updates…** in the menu bar icon's menu) checks on demand.
+  - **Safe by design:** an update is only installed if it's signed with the same certificate as your copy of Onyx and is a newer version. Anything else is deleted. Because the signature stays the same, macOS keeps your Accessibility and Screen Recording permissions.
+  - Updates come from this repo's latest GitHub release, over HTTPS.
+
 ## 1.4.0
 
 ### New

@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var notch: NotchController!
     var statusItem: NSStatusItem!
     var hideItem: NSMenuItem?
+    var updateItem: NSMenuItem?
     var settingsWindow: NSWindow?
     var optimizeWindow: NSWindow?
     var onboardingWindow: NSWindow?
@@ -17,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Prefs.registerDefaults()
+        if Updater.shared.installPendingAtLaunch() { NSApp.terminate(nil); return }   // swap in a downloaded update, then reopen
 
         // Lazy services: only what the idle notch needs starts now; heavier ones start on first use.
         MediaController.shared.start()
@@ -48,9 +50,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         OptimizeService.shared.start()          // low-disk alert + optional weekly clean
         AutoQuit.shared.start()                 // optional: quit apps that have no windows
         OnyxReminders.shared.start()            // AI-set reminders that ring in the notch
+        Updater.shared.start()                  // new GitHub releases download in the background
         // Debug: ONYX_AI_TEST=1 runs rendered math problems through Onyx AI at every effort into ai-test.log, then quits.
         if ProcessInfo.processInfo.environment["ONYX_AI_TEST"] != nil {
             Task { @MainActor in try? await Task.sleep(for: .seconds(3)); await AISelfTest.run() }
+        }
+        // Debug: ONYX_UPDATE_TEST=<file> checks GitHub now, logs the result and exits (ONYX_UPDATE_TEST_QUIT=1 quits
+        // normally instead, so a downloaded update installs). Pair with ONYX_UPDATE_CURRENT and ONYX_UPDATE_DEST.
+        if let path = ProcessInfo.processInfo.environment["ONYX_UPDATE_TEST"] {
+            Updater.shared.check(user: true)
+            Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { t in
+                switch Updater.shared.state {
+                case .checking, .downloading: return
+                case let s:
+                    t.invalidate()
+                    try? "\(s)\n".write(toFile: path, atomically: true, encoding: .utf8)
+                    if ProcessInfo.processInfo.environment["ONYX_UPDATE_TEST_QUIT"] != nil { NSApp.terminate(nil) } else { exit(0) }
+                }
+            }
         }
         // Debug: ONYX_REMINDER_TEST=1 sets a reminder 5 seconds out to exercise the ringing notch.
         if ProcessInfo.processInfo.environment["ONYX_REMINDER_TEST"] != nil {
@@ -314,6 +331,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Optimization…", action: #selector(openOptimization), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Set Up Permissions…", action: #selector(showOnboarding), keyEquivalent: "").target = self
+        let upd = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        upd.target = self
+        menu.addItem(upd)
+        updateItem = upd
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Onyx", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
@@ -325,6 +346,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         hideItem?.state = notch.userHidden ? .on : .off
         updateStatusIcon()
+        if case .ready(let v) = Updater.shared.state { updateItem?.title = "Restart to Install Onyx \(v)" }
+        else { updateItem?.title = "Check for Updates…" }
         // Show each item's current (possibly rebound) shortcut.
         for i in menu.items {
             guard let raw = i.representedObject as? String, let a = HotAction(rawValue: raw),
@@ -345,6 +368,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func captureRegion() { QuickCapture.shared.screenshot(.region) }
+    @objc func checkForUpdates() {
+        if case .ready = Updater.shared.state { Updater.shared.restartNow() } else { Updater.shared.check(user: true) }
+    }
+    func applicationWillTerminate(_ notification: Notification) { Updater.shared.installOnQuit() }
     @objc func toggleRecording() { QuickCapture.shared.toggleRecording() }
 
     private func updateStatusIcon() {

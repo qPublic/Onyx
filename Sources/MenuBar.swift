@@ -8,6 +8,7 @@ final class MenuBarDodger {
 
     /// Global (top-left origin) X where the frontmost app's menus end, or nil when dodging is off/untrusted.
     private(set) var rightEdge: CGFloat?
+    private(set) var iconsEdge: CGFloat?   // only tracked on a screen with a built-in notch
     var onChange: (() -> Void)?
     private var timer: Timer?
 
@@ -61,11 +62,13 @@ final class MenuBarDodger {
         // Asking another app for its menus is an IPC round-trip; do it off the main thread.
         guard !inFlight else { return }
         inFlight = true
+        let g = NotchModel.shared.geometry, notchScreen = g.hasNotch ? g.screenFrame : nil
         queue.async {
             let edge = Self.frontAppMenusRightEdge()
+            let icons = notchScreen.flatMap { Self.statusItemsLeftEdge(in: $0) }
             DispatchQueue.main.async {
                 self.inFlight = false
-                if edge != self.rightEdge { self.rightEdge = edge; self.onChange?() }
+                if edge != self.rightEdge || icons != self.iconsEdge { self.rightEdge = edge; self.iconsEdge = icons; self.onChange?() }
             }
         }
     }

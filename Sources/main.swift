@@ -83,18 +83,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 .fill(Color.black).overlay(UnevenRoundedRectangle(bottomLeadingRadius: 10, bottomTrailingRadius: 10).stroke(Color.red.opacity(0.8))))
             cam.orderFrontRegardless()
             objc_setAssociatedObject(self, "fakeCam", cam, .OBJC_ASSOCIATION_RETAIN)
-            if let dir = ProcessInfo.processInfo.environment["ONYX_NOTCHTEST"] {
-                func shot(_ name: String) {
-                    let w = 1000.0, r = "\(Int(f.midX - w / 2)),0,\(Int(w)),360"
-                    let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                    p.arguments = ["-x", "-R", r, dir + "/" + name]; try? p.run(); p.waitUntilExit()
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { shot("1-closed.png")
-                    NotchModel.shared.flash(.message(icon: "checkmark.seal.fill", text: "Updated to 1.5.1", tint: .green), for: 3)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { shot("2-activity.png")
+        }
+        if let dir = ProcessInfo.processInfo.environment["ONYX_NOTCHTEST"] {
+            func shot(_ name: String) {
+                let f = NotchModel.shared.geometry.screenFrame, w = 1000.0, r = "\(Int(f.midX - w / 2)),0,\(Int(w)),360"
+                let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                p.arguments = ["-x", "-R", r, dir + "/" + name]; try? p.run(); p.waitUntilExit()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { shot("1-closed.png")
+                NotchModel.shared.flash(.message(icon: "checkmark.seal.fill", text: "Updated to 1.5.1", tint: .green), for: 1.5)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { shot("2-activity.png")
+                    NotchModel.shared.flash(.volume(0.6, muted: false), for: 1.5)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { shot("3-volume.png")
                         NotchModel.shared.pinned = true
                         self.notch.expand(tab: .home)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { shot("3-open.png"); NSApp.terminate(nil) }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { shot("4-open.png"); NSApp.terminate(nil) }
                     }
                 }
             }

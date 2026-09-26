@@ -248,6 +248,7 @@ struct IconTile: View {
 // MARK: - Appearance
 
 struct AppearanceSettings: View {
+    @ObservedObject var hw = NotchHardware.shared
     @AppStorage(AP.style) var style = NotchStyle.solid.rawValue
     @AppStorage(AP.glassVariant) var glassVariant = "regular"
     @AppStorage(AP.clearBlur) var clearBlur = true
@@ -276,7 +277,7 @@ struct AppearanceSettings: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                if NotchModel.shared.geometry.hasNotch {
+                if hw.builtIn {
                     Text("Your Mac has a built-in notch, so the closed notch stays black to blend in with it. This style shows when it opens.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
@@ -308,6 +309,7 @@ struct AppearanceSettings: View {
 // MARK: - Size & position
 
 struct LayoutSettings: View {
+    @ObservedObject var hw = NotchHardware.shared
     @AppStorage(AP.expW) var expW = 680.0
     @AppStorage(AP.expH) var expH = 270.0
     @AppStorage(AP.collW) var collW = 0.0
@@ -323,12 +325,16 @@ struct LayoutSettings: View {
             Section("Expanded size") {
                 slider("Width", $expW, 520...1000, "pt")
                 slider("Height", $expH, 220...460, "pt")
+                if hw.builtIn {
+                    Text("On this Mac it's at least \(Int(NotchModel.shared.geometry.minOpenWidth))pt wide, so your tabs and buttons fit around the camera.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section("Collapsed size") {
                 slider("Width adjust", $collW, -80...260, "pt")
                 slider("Height adjust", $collH, -6...24, "pt")
                 slider("Side widget room", $earScale, 0.6...1.8, "×")
-                if NotchModel.shared.geometry.hasNotch {
+                if hw.builtIn {
                     Text("It never gets smaller than your Mac's built-in notch.").font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -339,7 +345,7 @@ struct LayoutSettings: View {
                 if placement == Placement.floating.rawValue {
                     slider("Gap from top", $topGap, 0...60, "pt")
                 }
-                if NotchModel.shared.geometry.hasNotch {
+                if hw.builtIn {
                     Text("Onyx stays centered on your Mac's built-in notch, and opens around the camera.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
@@ -446,7 +452,7 @@ struct BehaviorSettings: View {
                         Button("Re-check") { axTrusted = MenuBarDodger.shared.trusted }
                             .buttonStyle(.link)
                     }.font(.caption)
-                    Text("Slides the notch aside only when the active app's menus (e.g. Chrome's Help) would reach it. If you weren't prompted, click Open Settings and enable Onyx in the list.")
+                    Text("Slides the notch aside only when the active app's menus (e.g. Chrome's Help) would reach it. On a Mac with a built-in notch, the side widgets fold away and live activities hang below the camera instead. If you weren't prompted, click Open Settings and enable Onyx in the list.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 4) {
@@ -488,6 +494,7 @@ struct BehaviorSettings: View {
 // MARK: - Widgets & tabs
 
 struct WidgetsSettings: View {
+    @ObservedObject var hw = NotchHardware.shared
     @ObservedObject var layout = WidgetLayout.shared
     @ObservedObject var home = HomeLayout.shared
     @AppStorage(AP.tabs) var tabs = ""
@@ -511,7 +518,7 @@ struct WidgetsSettings: View {
                     Text("None").tag("")
                     ForEach(NotchWidget.allCases) { Label($0.title, systemImage: $0.icon).tag($0.rawValue) }
                 }
-                if !NotchModel.shared.geometry.hasNotch {   // with a built-in notch, the center is behind the camera
+                if !hw.builtIn {   // with a built-in notch, the center is behind the camera
                     Picker("Center", selection: $collMid) {
                         Text("None").tag("")
                         ForEach(NotchWidget.allCases) { Label($0.title, systemImage: $0.icon).tag($0.rawValue) }

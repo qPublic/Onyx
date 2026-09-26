@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.2
+
+### Improved
+- **Built-in notch: menus and menu bar icons stay uncovered.** When an app's menus or the menu bar icons are right next to the camera:
+  - The closed notch's side widgets fold away.
+  - Live activities (timers, downloads, reminders, messages and the compact volume/brightness HUD) hang just below the camera instead of spreading over the menu bar. They only widen past the camera where there's free space.
+- **Hidden header widgets show a "+2" button.** If some of your widgets don't fit next to the camera, a small button shows how many are hidden. Click it to remove any of them.
+- **Settings explains the width limit.** On a Mac with a built-in notch, **Size & Position** shows how wide the open notch needs to be to fit around the camera.
+
+### Fixed
+- The built-in notch notes in Settings now update right away when you plug in or unplug a display.
+
 ## 1.5.1
 
 ### Improved

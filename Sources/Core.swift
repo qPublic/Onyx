@@ -143,7 +143,9 @@ struct NotchGeometry: Equatable {
     var hasNotch = false
     var hardwareNotchWidth: CGFloat = 0
     var hardwareNotchHeight: CGFloat = 0
-    var earsTucked = false                 // built-in notch: idle side widgets fold away when app menus reach them
+    var menusEdge: CGFloat?                // built-in notch: right edge of the app's menus, if they come near
+    var iconsEdge: CGFloat?                // built-in notch: left edge of the menu bar icons
+    var minOpenWidth: CGFloat = 0          // built-in notch: narrowest the open notch can be and still fit around the camera
     var notchWidth: CGFloat = 190          // collapsed idle width (after user adjustment)
     var notchHeight: CGFloat = 32          // collapsed height
     var screenFrame: NSRect = .zero
@@ -167,6 +169,17 @@ struct NotchGeometry: Equatable {
     var avoidsCamera: Bool { hasNotch && NotchGeometry.menuBarLift(self, expanded: true) == 0 }
     /// Debug: ONYX_FAKENOTCH=1 treats the screen as having a built-in notch (for testing on Macs without one).
     static let fakeNotch = ProcessInfo.processInfo.environment["ONYX_FAKENOTCH"] != nil
+    /// Built-in notch: whether side ears this wide fit beside the camera without covering app menus or menu bar icons.
+    func earsFit(_ ear: CGFloat) -> Bool {
+        ear == 0 || ((menusEdge.map { centerX - notchWidth / 2 - ear >= $0 + 10 } ?? true)
+                     && (iconsEdge.map { centerX + notchWidth / 2 + ear <= $0 - 10 } ?? true))
+    }
+    /// Built-in notch: width of an activity hanging below the camera. Its top edge widens past the camera only into free menu bar space.
+    func belowWidth(_ ear: CGFloat) -> CGFloat {
+        let left = menusEdge.map { centerX - notchWidth / 2 - ($0 + 10) } ?? .infinity
+        let right = iconsEdge.map { ($0 - 10) - (centerX + notchWidth / 2) } ?? .infinity
+        return notchWidth + 2 * max(0, min(left, right, ear - notchWidth / 2))
+    }
 
     init() {}
     init(screen: NSScreen) {
@@ -200,7 +213,8 @@ struct NotchGeometry: Equatable {
         // Wide enough that the tabs fit left of a built-in camera, and the buttons plus a widget or two fit right of it.
         if hasNotch {
             let side = max(CGFloat(AP.enabledTabs.count) * 48 - 4, 230)
-            expandedSize.width = min(max(expandedSize.width, hardwareNotchWidth + 2 * (side + 36)), screen.frame.width - 20)
+            minOpenWidth = min(hardwareNotchWidth + 2 * (side + 36), screen.frame.width - 20)
+            expandedSize.width = max(expandedSize.width, minOpenWidth)
         }
         earScale = max(0.6, d.double(forKey: AP.earScale))
         let maxOff = max(0, screen.frame.width / 2 - w / 2 - 8)
@@ -228,6 +242,13 @@ struct NotchGeometry: Equatable {
         }
         return screens.first { $0.safeAreaInsets.top > 0 } ?? screens[0]
     }
+}
+
+/// Whether the notch is on a screen with a built-in camera notch. Settings watches this so its notes update when displays change.
+final class NotchHardware: ObservableObject {
+    static let shared = NotchHardware()
+    @Published private(set) var builtIn = false
+    func update(_ v: Bool) { if v != builtIn { builtIn = v } }
 }
 
 final class NotchModel: ObservableObject {
@@ -320,16 +341,23 @@ final class NotchController {
         var g = NotchGeometry(screen: NotchGeometry.targetScreen())
         dodgeMenus(&g)
         if g != model.geometry { model.geometry = g }
+        NotchHardware.shared.update(g.hasNotch)
         applyFrame(large: model.expanded, animated: true)
     }
 
     /// Shift the notch right so its collapsed pill never covers the frontmost app's menus.
     private func dodgeMenus(_ g: inout NotchGeometry) {
+        // A built-in notch can't move: note where the app's menus and the menu bar icons are, so side widgets fold
+        // away and live activities hang below the camera instead of covering them (see earsFit).
+        if g.hasNotch {
+            guard MenuBarDodger.shared.enabled else { return }
+            g.menusEdge = MenuBarDodger.shared.rightEdge
+            g.iconsEdge = MenuBarDodger.shared.iconsEdge
+            return
+        }
         guard MenuBarDodger.shared.enabled, let edge = MenuBarDodger.shared.rightEdge else { return }
         let ear = max(AP.collapsedLeft?.glanceWidth ?? 0, AP.collapsedRight?.glanceWidth ?? 0)
         let pillW = g.notchWidth + 2 * ear
-        // A built-in notch can't move, so fold the idle side widgets away instead of sliding off the camera.
-        if g.hasNotch { g.earsTucked = ear > 0 && g.centerX - pillW / 2 < edge + 10; return }
         // Clear glass bends whatever sits just past its edge, so keep menu text well outside that lens zone.
         let gap: CGFloat = BackdropSampler.enabled && Prefs.bool(AP.styleCollapsed) ? 34 : 10
         if g.centerX - pillW / 2 < edge + gap {

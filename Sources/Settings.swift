@@ -451,6 +451,7 @@ struct BehaviorSettings: View {
                 Toggle("Show menu bar icon", isOn: $menuBarIcon)
                 Toggle("Open at login", isOn: $loginItem).onChange(of: loginItem) { _, v in LoginItem.set(v) }
             }
+            UpdateSettings()
             Section {
                 Toggle("Hide the notch completely", isOn: $userHidden)
                 Text("Fully removes the notch from the screen — for tests, exams or presentations. Toggle it back anytime with its shortcut (below) or the menu bar icon. This is remembered until you turn it off.")

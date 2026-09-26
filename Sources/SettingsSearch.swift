@@ -50,6 +50,7 @@ enum SettingsIndex {
         e(.behavior, "System", "Pop-out style for the volume/brightness HUD", "popup pop out hud volume brightness"),
         e(.behavior, "System", "Show menu bar icon", "menu bar icon status item tray"),
         e(.behavior, "System", "Open at login", "startup login launch boot automatically"),
+        e(.behavior, "Updates", "Update automatically", "update updates upgrade new version check download install release github auto"),
         e(.behavior, "Hide notch", "Hide the notch completely", "hide disable test exam presentation invisible off"),
         e(.behavior, "Shortcuts", "Keyboard shortcuts", "shortcut hotkey keybind keyboard key binding rebind"),
         e(.behavior, "Shortcuts", "Screenshot & recording shortcuts", "screenshot record capture shortcut"),

@@ -137,6 +137,8 @@ enum AP {
 
     private static var d: UserDefaults { .standard }
     static var notchStyle: NotchStyle { NotchStyle(rawValue: Prefs.string(style)) ?? .solid }
+    /// The style also shows while closed, except over a built-in notch, where the closed notch stays black to blend in.
+    static var styleWhenCollapsed: Bool { Prefs.bool(styleCollapsed) && !NotchModel.shared.geometry.hasNotch }
     static var placementValue: Placement { Placement(rawValue: Prefs.string(placement)) ?? .attached }
     static var openTrigger: OpenTrigger { OpenTrigger(rawValue: Prefs.string(openOn)) ?? .hover }
     static var enabledTabs: [NotchTab] {
@@ -278,7 +280,7 @@ struct NotchBackground<S: Shape>: View {
     var body: some View {
         let d = UserDefaults.standard
         let shadowAmt = d.double(forKey: AP.shadow)
-        let fancy = expanded || d.bool(forKey: AP.styleCollapsed)
+        let fancy = expanded || AP.styleWhenCollapsed
         let border = d.bool(forKey: AP.border)
 
         ZStack {

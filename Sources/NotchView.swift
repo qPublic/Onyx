@@ -76,7 +76,7 @@ struct NotchRootView: View {
 
     /// Only while the (see-through) clear glass is actually showing: expanded, or collapsed with the style applied.
     var darkText: Bool {
-        BackdropSampler.enabled && backdrop.isLight && (model.expanded || Prefs.bool(AP.styleCollapsed))
+        BackdropSampler.enabled && backdrop.isLight && (model.expanded || AP.styleWhenCollapsed)
     }
 
     // Now Playing no longer auto-takes-over the notch; pick it as a collapsed widget to keep it in place.
@@ -92,7 +92,7 @@ struct NotchRootView: View {
     }
 
     /// Ear width when idle, driven by the collapsed-notch glance widgets the user picked.
-    var idleEar: CGFloat { max(AP.collapsedLeft?.glanceWidth ?? 0, AP.collapsedRight?.glanceWidth ?? 0) }
+    var idleEar: CGFloat { model.geometry.earsTucked ? 0 : max(AP.collapsedLeft?.glanceWidth ?? 0, AP.collapsedRight?.glanceWidth ?? 0) }
 
     /// Volume/brightness changes drop a small pop-out down from the notch (Settings › Behavior).
     var popup: HUDEvent? {
@@ -108,7 +108,7 @@ struct NotchRootView: View {
         if model.expanded { return g.expandedSize }
         if popup != nil { return CGSize(width: max(g.notchWidth + 150, 320), height: g.notchHeight + 40) }
         if activity == .none {
-            let mid = AP.collapsedMid?.glanceWidth ?? 0
+            let mid = g.hasNotch ? 0 : AP.collapsedMid?.glanceWidth ?? 0   // the center is behind a built-in camera
             return CGSize(width: max(g.notchWidth, mid + 28) + 2 * idleEar, height: g.notchHeight)
         }
         return CGSize(width: g.notchWidth + 2 * activity.earWidth, height: g.notchHeight)
@@ -159,14 +159,15 @@ struct CollapsedView: View {
 
     var body: some View {
         let idle = activity == .none
-        let ear = idle ? max(AP.collapsedLeft?.glanceWidth ?? 0, AP.collapsedRight?.glanceWidth ?? 0) : activity.earWidth
+        let tucked = idle && model.geometry.earsTucked
+        let ear = tucked ? 0 : idle ? max(AP.collapsedLeft?.glanceWidth ?? 0, AP.collapsedRight?.glanceWidth ?? 0) : activity.earWidth
         ZStack {
             HStack(spacing: 0) {
                 leftContent.frame(width: max(ear - 16, 0), alignment: .leading).padding(.leading, ear > 0 ? 16 : 0)
                 Spacer(minLength: 0)
                 rightContent.frame(width: max(ear - 16, 0), alignment: .trailing).padding(.trailing, ear > 0 ? 16 : 0)
             }
-            if idle, let w = AP.collapsedMid { CollapsedGlance(widget: w) }   // centered on the pill
+            if idle, !model.geometry.hasNotch, let w = AP.collapsedMid { CollapsedGlance(widget: w) }   // centered on the pill
         }
         .frame(height: model.geometry.notchHeight)
         .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -174,11 +175,11 @@ struct CollapsedView: View {
 
     // Idle → user-chosen glance widgets; otherwise the live activity's own left/right content.
     @ViewBuilder private var leftContent: some View {
-        if activity == .none { if let w = AP.collapsedLeft { CollapsedGlance(widget: w) } }
+        if activity == .none { if !model.geometry.earsTucked, let w = AP.collapsedLeft { CollapsedGlance(widget: w) } }
         else { left }
     }
     @ViewBuilder private var rightContent: some View {
-        if activity == .none { if let w = AP.collapsedRight { CollapsedGlance(widget: w) } }
+        if activity == .none { if !model.geometry.earsTucked, let w = AP.collapsedRight { CollapsedGlance(widget: w) } }
         else { right }
     }
 
@@ -409,26 +410,24 @@ struct ExpandedView: View {
 
     var body: some View {
         let g = model.geometry
+        let side = (g.expandedSize.width - 68 - g.hardwareNotchWidth) / 2   // header room on each side of a built-in camera
         VStack(spacing: 8) {
             HStack(spacing: 4) {
                 TabBar(editing: widgets.editing)
+                    .frame(width: g.avoidsCamera ? side : nil, alignment: .leading)
 
-                if g.avoidsCamera { Spacer(minLength: g.notchWidth) } else { Spacer(minLength: 8) }
+                // Opens around a built-in camera: tabs on its left, widgets and buttons on its right.
+                if g.avoidsCamera { Color.clear.frame(width: g.hardwareNotchWidth + 8) } else { Spacer(minLength: 8) }
 
-                HStack(spacing: 6) {
-                    ForEach(widgets.widgets) { w in
-                        ZStack(alignment: .topTrailing) {
-                            HeaderWidgetView(widget: w)
-                            if widgets.editing {
-                                Button { widgets.toggle(w) } label: {
-                                    Image(systemName: "minus.circle.fill").font(.system(size: 11)).foregroundStyle(.red)
-                                }.buttonStyle(.plain).offset(x: 4, y: -4)
-                            }
-                        }
-                        .transition(.scale.combined(with: .opacity))
+                if g.avoidsCamera {
+                    // Right of a built-in camera: header widgets drop off the end until the row fits.
+                    ViewThatFits(in: .horizontal) {
+                        ForEach((0...widgets.widgets.count).reversed(), id: \.self) { n in widgetRow(Array(widgets.widgets.prefix(n))) }
                     }
+                    .layoutPriority(1)
+                } else {
+                    widgetRow(widgets.widgets)
                 }
-                .animation(.snappy(duration: 0.2), value: widgets.widgets)
 
                 Spacer(minLength: 6)
 
@@ -499,6 +498,23 @@ struct ExpandedView: View {
             model.tab = .shelf
             return ShelfStore.shared.handleDrop(providers)
         }
+    }
+
+    private func widgetRow(_ list: [NotchWidget]) -> some View {
+        HStack(spacing: 6) {
+            ForEach(list) { w in
+                ZStack(alignment: .topTrailing) {
+                    HeaderWidgetView(widget: w)
+                    if widgets.editing {
+                        Button { widgets.toggle(w) } label: {
+                            Image(systemName: "minus.circle.fill").font(.system(size: 11)).foregroundStyle(.red)
+                        }.buttonStyle(.plain).offset(x: 4, y: -4)
+                    }
+                }
+                .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: widgets.widgets)
     }
 }
 

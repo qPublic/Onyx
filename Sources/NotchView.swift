@@ -26,7 +26,7 @@ struct NotchShape: Shape {
 }
 
 enum Activity: Equatable {
-    case none, hud(HUDEvent), timer, game(Game), music, ticker(Quote), recording, download, reminder(String)
+    case none, hud(HUDEvent), timer, game(Game), music, ticker(Quote), recording, download, reminder(String), meeting(String)
 
     var key: String {
         switch self {
@@ -48,13 +48,14 @@ enum Activity: Equatable {
         case .recording: "rec"
         case .download: "dl"
         case .reminder: "rem"
+        case .meeting: "meet"
         }
     }
 
     var earWidth: CGFloat {
         switch self {
         case .none: 0
-        case .hud(.message), .hud(.eyeBreak), .hud(.earbuds), .reminder: 118
+        case .hud(.message), .hud(.eyeBreak), .hud(.earbuds), .reminder, .meeting: 118
         case .game: 84
         case .ticker, .download: 84
         default: 70
@@ -70,6 +71,7 @@ struct NotchRootView: View {
     @ObservedObject var capture = QuickCapture.shared
     @ObservedObject var downloads = DownloadMonitor.shared
     @ObservedObject var reminders = OnyxReminders.shared
+    @ObservedObject var meetings = MeetingWatch.shared
     @AppStorage(Prefs.sportsActivity) var sportsActivity = true
     @AppStorage(Prefs.tickerActivity) var tickerActivity = false
     @ObservedObject var appearance = AppearanceStore.shared
@@ -84,6 +86,7 @@ struct NotchRootView: View {
     var activity: Activity {
         if let h = model.hud { return .hud(h) }
         if let r = reminders.ringing.first { return .reminder(r.title) }   // stays until Done / Snooze
+        if let m = meetings.next { return .meeting(m.title ?? "Meeting") }   // a call about to start: Join from the notch
         if capture.recording { return .recording }
         if !downloads.items.isEmpty { return .download }
         if timer.running { return .timer }
@@ -215,6 +218,7 @@ struct CollapsedView: View {
         case .ticker(let q): Text(q.id).lineLimit(1)
         case .recording: Image(systemName: "record.circle.fill").foregroundStyle(.red).symbolEffect(.pulse)
         case .reminder: Image(systemName: "bell.fill").foregroundStyle(.orange).symbolEffect(.bounce, options: .repeating)
+        case .meeting: Image(systemName: "video.fill").foregroundStyle(.green).symbolEffect(.pulse)
         case .download:
             HStack(spacing: 4) {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(.cyan)
@@ -252,6 +256,10 @@ struct CollapsedView: View {
                 Text(format(ctx.date.timeIntervalSince(QuickCapture.shared.startedAt ?? ctx.date))).monospacedDigit().foregroundStyle(.red)
             }
         case .reminder(let title): Text(title).lineLimit(1).minimumScaleFactor(0.8)
+        case .meeting:
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                if let e = MeetingWatch.shared.next { Text(MeetingWatch.countdown(e, at: ctx.date)).monospacedDigit().foregroundStyle(.green) }
+            }
         case .download:
             if let f = DownloadMonitor.shared.overall {
                 HStack(spacing: 5) {
@@ -527,7 +535,8 @@ struct ExpandedView: View {
                     .background(.black.opacity(0.6))
             }
         }
-        .overlay(alignment: .bottom) { ReminderBanner() }   // a reminder that's going off: Done / Snooze
+        .overlay(alignment: .bottom) { VStack(spacing: 0) { MeetingBanner(); ReminderBanner() } }   // a call about to start: Join; a reminder going off: Done / Snooze
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: MeetingWatch.shared.next?.eventIdentifier)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: OnyxReminders.shared.ringing)
         .onDrop(of: [.fileURL, .image, .plainText], isTargeted: $dropTarget) { providers in
             model.tab = .shelf

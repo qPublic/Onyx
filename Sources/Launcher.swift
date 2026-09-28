@@ -282,6 +282,8 @@ struct LauncherView: View {
     @State private var openFolder: String?
     @State private var appeared = false
     @State private var renaming = ""
+    @State private var files: [URL] = []            // files whose names match the search
+    @State private var fileSearch: Task<Void, Never>?
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -336,7 +338,16 @@ struct LauncherView: View {
                 .textFieldStyle(.plain).font(.system(size: 15))
                 .focused($searchFocused)
                 .onSubmit { launchSelected() }
-                .onChange(of: query) { _, _ in selected = 0 }
+                .onChange(of: query) { _, q in
+                    selected = 0
+                    fileSearch?.cancel()
+                    fileSearch = Task {   // after a short pause in typing
+                        try? await Task.sleep(for: .milliseconds(250))
+                        guard !Task.isCancelled else { return }
+                        let found = await LauncherActions.files(q)
+                        if !Task.isCancelled { files = found }
+                    }
+                }
                 .onKeyPress(.leftArrow) { if query.isEmpty { withAnimation { nav.step(-1) }; return .handled } else { selected = max(selected - 1, 0); return .handled } }
                 .onKeyPress(.rightArrow) { if query.isEmpty { withAnimation { nav.step(1) }; return .handled } else { selected += 1; return .handled } }
             if !query.isEmpty {
@@ -462,32 +473,65 @@ struct LauncherView: View {
 
     // MARK: Search results
 
+    /// Actions (math, timers, definitions, questions) on top, then matching apps, then matching files.
     private func results(_ m: Metrics) -> some View {
-        let found = Array(store.search(query).prefix(m.perPage))
-        return Group {
-            if found.isEmpty {
-                Text("No apps match \"\(query)\"").font(.system(size: 15)).foregroundStyle(.secondary).padding(.top, 80)
-                    .frame(maxHeight: .infinity, alignment: .top)
-            } else {
-                LazyVGrid(columns: Array(repeating: GridItem(.fixed(m.cell.width), spacing: 0), count: m.cols), spacing: 22) {
-                    ForEach(Array(found.enumerated()), id: \.element.id) { i, app in
-                        AppTile(app: app, icon: store.icon(app.path), size: m.icon, highlighted: i == min(selected, found.count - 1), pinned: store.pinned.contains(app.path)) {
-                            store.open(app.path); close()
+        let actions = LauncherActions.parse(query, close: close)
+        let found = Array(store.search(query).prefix(actions.isEmpty ? m.perPage : m.perPage - m.cols))
+        let pick = min(selected, actions.count + found.count - 1)
+        return ScrollView {
+            VStack(spacing: 18) {
+                ForEach(Array(actions.enumerated()), id: \.element.id) { i, a in LauncherActionRow(action: a, highlighted: i == pick) }
+                if !found.isEmpty {
+                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(m.cell.width), spacing: 0), count: m.cols), spacing: 22) {
+                        ForEach(Array(found.enumerated()), id: \.element.id) { i, app in
+                            AppTile(app: app, icon: store.icon(app.path), size: m.icon, highlighted: actions.count + i == pick, pinned: store.pinned.contains(app.path)) {
+                                store.open(app.path); close()
+                            }
+                            .frame(width: m.cell.width, height: m.cell.height)
                         }
-                        .frame(width: m.cell.width, height: m.cell.height)
                     }
                 }
-                .padding(.top, 36)
-                .frame(maxHeight: .infinity, alignment: .top)
+                if !files.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Files").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white.opacity(0.7)).padding(.leading, 6)
+                        ForEach(files, id: \.self) { u in fileRow(u) }
+                    }
+                    .frame(width: 560)
+                }
+                if actions.isEmpty && found.isEmpty && files.isEmpty {
+                    Text("No apps or files match \"\(query)\"").font(.system(size: 15)).foregroundStyle(.secondary).padding(.top, 60)
+                }
             }
+            .padding(.top, 36).padding(.bottom, 40)
+            .frame(maxWidth: .infinity)
         }
+        .scrollIndicators(.hidden)
+    }
+
+    private func fileRow(_ u: URL) -> some View {
+        Button { NSWorkspace.shared.open(u); close() } label: {
+            HStack(spacing: 10) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: u.path)).resizable().frame(width: 26, height: 26)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(u.lastPathComponent).font(.system(size: 12.5, weight: .medium)).lineLimit(1)
+                    Text(u.deletingLastPathComponent().path.replacingOccurrences(of: NSHomeDirectory(), with: "~")).font(.system(size: 10)).foregroundStyle(.white.opacity(0.6)).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).foregroundStyle(.white)
+        .contextMenu { Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([u]); close() } }
     }
 
     private func launchSelected() {
+        let actions = LauncherActions.parse(query, close: close)
+        if selected < actions.count { actions[selected].run(); return }
         let found = store.search(query)
-        guard !found.isEmpty else { return }
-        store.open(found[min(selected, found.count - 1)].path)
-        close()
+        if !found.isEmpty { store.open(found[min(selected - actions.count, found.count - 1)].path); close() }
+        else if let f = files.first { NSWorkspace.shared.open(f); close() }
     }
 
     // MARK: Folder

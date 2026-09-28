@@ -40,7 +40,7 @@ struct Shortcut: Equatable {
 }
 
 enum HotAction: String, CaseIterable, Identifiable {
-    case toggleNotch, toggleHide, circleSearch, askAI, captureRegion, captureScreen, toggleRecording, openLauncher
+    case toggleNotch, toggleHide, circleSearch, askAI, captureRegion, captureScreen, toggleRecording, openLauncher, askSelection, clipboardPicker, copyText
     var id: String { rawValue }
 
     var title: String {
@@ -53,6 +53,9 @@ enum HotAction: String, CaseIterable, Identifiable {
         case .captureScreen: "Screenshot full screen"
         case .toggleRecording: "Start / stop screen recording"
         case .openLauncher: "Open App Launcher"
+        case .askSelection: "Ask AI about selected text"
+        case .clipboardPicker: "Clipboard history (paste)"
+        case .copyText: "Copy text from screen"
         }
     }
 
@@ -67,6 +70,9 @@ enum HotAction: String, CaseIterable, Identifiable {
         case .captureScreen: return Shortcut(keyCode: 20, mods: co)    // ⌃⌥3
         case .toggleRecording: return Shortcut(keyCode: 23, mods: co)  // ⌃⌥5
         case .openLauncher: return nil                                 // none until you pick one
+        case .askSelection: return Shortcut(keyCode: 1, mods: co)      // ⌃⌥S
+        case .clipboardPicker: return Shortcut(keyCode: 9, mods: co)   // ⌃⌥V
+        case .copyText: return Shortcut(keyCode: 17, mods: co)         // ⌃⌥T
         }
     }
 
@@ -82,6 +88,9 @@ enum HotAction: String, CaseIterable, Identifiable {
         case .captureScreen: QuickCapture.shared.screenshot(.screen)
         case .toggleRecording: QuickCapture.shared.toggleRecording()
         case .openLauncher: MainActor.assumeIsolated { AppLauncher.shared.toggle() }   // hotkeys fire on the main thread
+        case .askSelection: Task { @MainActor in await SelectionGrabber.askAI() }
+        case .clipboardPicker: MainActor.assumeIsolated { ClipboardPicker.shared.toggle() }
+        case .copyText: MainActor.assumeIsolated { TextGrabber.fromScreen() }
         }
     }
 }

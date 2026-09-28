@@ -116,6 +116,12 @@ struct CaptureView: View {
                     }.buttonStyle(.link).font(.caption)
                 }
             }
+            HStack(spacing: 8) {
+                Button { if let u = Markup.lastScreenshot { Markup.open(u) } } label: { Label("Mark up last screenshot", systemImage: "pencil.tip.crop.circle") }
+                    .disabled(Markup.lastScreenshot == nil)
+                Button { TextGrabber.fromScreen() } label: { Label("Copy text from screen" + (Shortcuts.get(.copyText).map { " (\($0.display))" } ?? ""), systemImage: "text.viewfinder") }
+            }
+            .controlSize(.small).font(.system(size: 11))
             HStack {
                 Text("Saved to Pictures › Onyx Captures and added to the Shelf.").font(.caption).foregroundStyle(.secondary)
                 Spacer()

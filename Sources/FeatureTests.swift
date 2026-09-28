@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import EventKit
 import AVFoundation
 import Speech
 import ImagePlayground
@@ -793,5 +794,153 @@ enum AutoCloseTest {
                 exit(0)
             }
         }
+    }
+}
+
+// MARK: - Self-test (debug): ONYX_EXTRASTEST=<file> checks the 1.7 features without touching your settings or taking
+// screenshots: launcher actions and file search, reading files, text recognition, the briefing, meeting countdowns,
+// battery health, quick toggle states, workspaces (read only), day phases, the weather shader, and long-document reading.
+enum ExtrasTest {
+    @MainActor static func run(_ file: String) async {
+        var log: [String] = [], fails = 0
+        func note(_ s: String) { log.append(s); try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8) }
+        func check(_ name: String, _ ok: Bool) { note((ok ? "PASS " : "FAIL ") + name); if !ok { fails += 1 } }
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("onyx-extras-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // Launcher actions
+        check("timer 10 → 10 min", LauncherActions.timerMinutes("timer 10") == 10)
+        check("5 min timer → 5", LauncherActions.timerMinutes("5 min timer") == 5)
+        check("timer 90s → 1.5", LauncherActions.timerMinutes("timer 90s") == 1.5)
+        check("set a timer for 2 hours → 120", LauncherActions.timerMinutes("set a timer for 2 hours") == 120)
+        let calc = LauncherActions.parse("15% of 80", close: {})
+        check("15% of 80 → \(calc.first?.title ?? "nothing")", calc.first?.kind == .calc && calc.first?.title == "12")
+        let def = LauncherActions.parse("define serendipity", close: {})
+        note("define serendipity → " + (def.first?.detail.prefix(80).description ?? "nothing"))
+        check("define gives a dictionary entry", def.first?.kind == .define)
+        check("a question offers Ask Onyx AI", LauncherActions.parse("what is the tallest mountain in europe?", close: {}).contains { $0.kind == .ask })
+        check("timer title reads \"\(LauncherActions.parse("timer 10", close: {}).first?.title ?? "")\"", LauncherActions.parse("timer 10", close: {}).first?.title == "Start a 10-minute timer")
+        check("plain app names get no actions", LauncherActions.parse("safari", close: {}).isEmpty)
+        let files = await LauncherActions.files("Onyx")
+        note("files named *Onyx*: \(files.prefix(3).map(\.lastPathComponent).joined(separator: ", "))")
+        check("file search finds something", !files.isEmpty)
+
+        // Reading documents
+        let txt = tmp.appendingPathComponent("notes.txt"); try? "Quarterly plan\n\n\n\nShip   the  launcher.".write(to: txt, atomically: true, encoding: .utf8)
+        check("reads a text file (and tidies spaces)", DocumentReader.text(of: txt) == "Quarterly plan\n\nShip the launcher.")
+        let html = tmp.appendingPathComponent("page.html"); try? "<html><body><h1>Hello</h1><p>World of Onyx</p></body></html>".write(to: html, atomically: true, encoding: .utf8)
+        check("reads HTML", DocumentReader.text(of: html)?.contains("World of Onyx") == true)
+        let pdf = tmp.appendingPathComponent("doc.pdf")
+        if let ctx = CGContext(pdf as CFURL, mediaBox: nil, nil) {
+            ctx.beginPDFPage(nil)
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: "The meeting moved to Thursday at noon.", attributes: [.font: NSFont.systemFont(ofSize: 18)]))
+            ctx.textPosition = CGPoint(x: 72, y: 700); CTLineDraw(line, ctx)
+            ctx.endPDFPage(); ctx.closePDF()
+        }
+        check("reads a PDF", DocumentReader.text(of: pdf)?.contains("Thursday at noon") == true)
+        check("says no to things it can't read", DocumentReader.text(of: URL(fileURLWithPath: "/bin/ls")) == nil)
+
+        // Text recognition
+        if let img = AISelfTest.render(["Invoice 4417", "Total due: $86.20"]) {
+            let t = await TextGrabber.text(in: img)
+            note("recognized: \(t.replacingOccurrences(of: "\n", with: " | "))")
+            check("reads text in a picture", t.contains("4417") && t.contains("86.20"))
+            let pix = MarkupView.pixelate(img)
+            check("blur (pixelate) makes a picture the same size", pix?.width == img.width && pix?.height == img.height)
+        }
+
+        // Meetings
+        let e = EKEvent(eventStore: CalendarService.shared.store)
+        e.title = "Design review"; e.startDate = Date().addingTimeInterval(90); e.endDate = Date().addingTimeInterval(1890)
+        e.url = URL(string: "https://us02web.zoom.us/j/123456789")
+        check("finds the Zoom link", e.meetingURL?.host?.contains("zoom.us") == true)
+        check("countdown reads in 1:30 (\(MeetingWatch.countdown(e, at: Date())))", MeetingWatch.countdown(e, at: Date()) == "in 1:30")
+        check("names the service", MeetingWatch.service(e.meetingURL) == "Zoom")
+
+        // Battery, toggles, workspaces (all read only)
+        if let h = BatteryHealth.read() { note("battery: health \(h.health ?? -1)%, \(h.cycles ?? -1) cycles, \(h.condition ?? "?"), \(h.temperature.map { String(format: "%.0f°C", $0) } ?? "?")") }
+        let users = await BatteryHealth.energyUsers()
+        note("energy: " + users.prefix(4).map { "\($0.name) \(Int($0.power))" }.joined(separator: ", "))
+        check("energy use is measured", !users.isEmpty)
+        QuickToggles.shared.refresh()
+        note("dark \(QuickToggles.shared.dark), desktop icons hidden \(QuickToggles.shared.iconsHidden), mic muted \(QuickToggles.shared.micMuted)")
+        for a in NSWorkspace.shared.runningApplications where a.activationPolicy == .regular && !a.isHidden {
+            var v: CFTypeRef?
+            let err = AXUIElementCopyAttributeValue(AXUIElementCreateApplication(a.processIdentifier), kAXWindowsAttribute as CFString, &v)
+            let raw = (v as? [AXUIElement]) ?? []
+            let subs = raw.map { w -> String in var s: CFTypeRef?; AXUIElementCopyAttributeValue(w, kAXSubroleAttribute as CFString, &s); return (s as? String) ?? "nil" }
+            note("AX \(a.localizedName ?? "?"): error \(err.rawValue), \(raw.count) windows \(subs)")
+        }
+        note("trusted: \(AXIsProcessTrusted())")
+        if let w = Workspaces.shared.capture(name: "test") {
+            note("workspace would save: " + w.apps.map { "\($0.name) (\($0.windows.count))" }.joined(separator: ", "))
+            check("workspace sees windows", w.apps.contains { !$0.windows.isEmpty })
+        } else { note("workspace capture: needs Accessibility or no windows") }
+
+        // Wallpapers
+        note("day phase now: \(DayPhase.now().rawValue)")
+        if let img = AISelfTest.render(["sky"]) {
+            let night = DayPhase.relight(img, for: .night)
+            check("relights a picture for night", night != nil && night?.width == img.width)
+        }
+        let lib = try? await GPU.device?.makeLibrary(source: WeatherOverlayView.source, options: nil)
+        check("weather shader compiles", lib?.makeFunction(name: "wx_fragment") != nil && lib?.makeFunction(name: "wx_vertex") != nil)
+        note("weather now: \(WallWeather.now.title) (code \(WeatherService.shared.code))")
+
+        // Briefing (starts the calendar and weather, which this early hook otherwise skips)
+        CalendarService.shared.start()
+        await WeatherService.shared.refresh()
+        let facts = await Briefing.facts()
+        note("briefing facts:\n  " + facts.joined(separator: "\n  "))
+        check("briefing has today's date", facts.first?.hasPrefix("Today is") == true)
+        let text = await Briefing.make()
+        note("briefing: \(text)")
+        check("briefing is written", text.count > 40)
+
+        // A long document, read part by part
+        let long = (1...14).map { i in "Section \(i). " + String(repeating: "The committee reviewed routine budget items and approved minor changes. ", count: 8) + (i == 9 ? "The launch date was moved to March 14 because the supplier was late. " : "") }.joined(separator: "\n")
+        let doc = AIDocument(name: "minutes.txt", text: long)
+        let t0 = Date()
+        if let notes = try? await Assistant.shared.read(doc, for: "When is the launch, and why did it change?", effort: .medium) {
+            note(String(format: "long document (%d chars) read in %.0f s:\n", long.count, Date().timeIntervalSince(t0)) + notes.prefix(700))
+            check("notes found the launch date", notes.contains("March 14") || notes.lowercased().contains("march"))
+        }
+
+        note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
+        exit(0)
+    }
+}
+
+// MARK: - Debug: ONYX_VIEWSHOT=<dir> draws the new panels offscreen at their real sizes into PNGs (no screen capture).
+enum ViewShot {
+    @MainActor static func run(_ dir: String) {
+        func save<V: View>(_ name: String, _ v: V, _ size: CGSize) {
+            let r = ImageRenderer(content: v.frame(width: size.width, height: size.height).background(Color.black).environment(\.colorScheme, .dark))
+            r.scale = 2
+            guard let cg = r.cgImage, let d = CGImageDestinationCreateWithURL(URL(fileURLWithPath: "\(dir)/\(name).png") as CFURL, "public.png" as CFString, 1, nil) else { return }
+            CGImageDestinationAddImage(d, cg, nil); CGImageDestinationFinalize(d)
+        }
+        if ProcessInfo.processInfo.environment["ONYX_VIEWSHOT_TOUR"] != nil {   // the tour's new slides, at two moments each
+            let new: [TourStep] = [.meetings, .clipboard, .askAbout, .briefing, .focus, .workspaces, .markup, .livingWalls, .launcherPlus, .system]
+            for step in new {
+                for t in [2.0, 4.5] {
+                    save("tour-\(step)-\(Int(t * 10))", TourDemo(step: step, t: t).frame(height: 250).frame(maxWidth: .infinity)
+                        .background(RadialGradient(colors: [step.tint.opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 260)), CGSize(width: 472, height: 250))
+                }
+            }
+            exit(0)
+        }
+        let tool = CGSize(width: 506, height: 206)   // the Tools tab's card inside a 680×270 notch
+        save("focus", Card { FocusSessionView() }, tool)
+        save("workspaces", Card { WorkspacesView() }, tool)
+        save("system", Card { SystemView() }, tool)
+        save("battery", OptBattery(), CGSize(width: 680, height: 560))
+        Assistant.shared.document = AIDocument(name: "Selected text", text: "The quick brown fox jumps over the lazy dog. " + String(repeating: "More words here. ", count: 20), selection: true)
+        save("docbar", AttachedDocumentBar().padding(8), CGSize(width: 628, height: 90))
+        Assistant.shared.document = nil
+        save("actions", VStack(spacing: 12) { ForEach(LauncherActions.parse("15% of 80", close: {}) + LauncherActions.parse("define serendipity", close: {}) + LauncherActions.parse("timer 10", close: {})) { LauncherActionRow(action: $0, highlighted: $0.kind == .calc) } }.padding(20), CGSize(width: 620, height: 300))
+        save("picker", ClipboardPickerView(close: {}, paste: { _ in }), CGSize(width: 520, height: 430))
+        exit(0)
     }
 }

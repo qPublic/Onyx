@@ -392,6 +392,13 @@ struct ShelfItem: View {
             Button("Open") { NSWorkspace.shared.open(url) }
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             Button("AirDrop") { ShelfStore.airDrop([url]) }
+            if NSImage(contentsOf: url) != nil {
+                Divider()
+                Button("Mark Up…") { Markup.open(url) }
+                Button("Copy Text in Picture") {
+                    Task { if let img = NSImage(contentsOf: url)?.cgImage(forProposedRect: nil, context: nil, hints: nil) { TextGrabber.copy(await TextGrabber.text(in: img)) } }
+                }
+            }
             Button("Copy Path") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.path, forType: .string) }
             Divider()
             Button("Remove from Shelf") { ShelfStore.shared.remove(url) }
@@ -413,6 +420,7 @@ struct AITab: View {
     @State private var dropping = false
 
     let suggestions = [
+        "Brief me on my day",
         "What's on my screen? Summarize it",
         "Solve the problem on my screen",
         "Remind me to study at 7pm",
@@ -430,7 +438,10 @@ struct AITab: View {
                             .font(.system(size: 12)).foregroundStyle(.secondary)
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
                             ForEach(suggestions, id: \.self) { s in
-                                Button { if s.contains("screen") { ai.seeScreen = true }; ai.send(s) } label: {
+                                Button {
+                                    if s == "Brief me on my day" { Task { await Briefing.post() }; return }
+                                    if s.contains("screen") { ai.seeScreen = true }; ai.send(s)
+                                } label: {
                                     Text(s).font(.system(size: 11)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(8).background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                                 }.buttonStyle(.plain)
@@ -468,6 +479,7 @@ struct AITab: View {
                 .padding(.horizontal, 10).padding(.vertical, 4)
                 .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
             }
+            AttachedDocumentBar()
             if case .failed(let why) = voice.state {
                 HStack(spacing: 8) {
                     Image(systemName: "mic.slash").foregroundStyle(.orange)
@@ -494,8 +506,11 @@ struct AITab: View {
                     Button { ai.chooseImage() } label: { Label("Choose an image…", systemImage: "photo") }
                     Button { _ = ai.attachFromClipboard() } label: { Label("Paste image", systemImage: "doc.on.clipboard") }
                         .disabled(NSImage.canInit(with: .general) == false)
+                    Divider()
+                    Button { ai.chooseFile() } label: { Label("Choose a file (PDF, Word, text)…", systemImage: "doc.text") }
+                    Button { Task { await SelectionGrabber.askAI() } } label: { Label("Use the text selected in the app behind", systemImage: "text.quote") }
                 } label: { Image(systemName: "paperclip") }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Ask about an image")
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Ask about an image, a file or selected text")
                 Menu {
                     Picker("Effort", selection: $effortRaw) {
                         ForEach(AIEffort.allCases) { e in
@@ -539,7 +554,7 @@ struct AITab: View {
                 return true
             }
             _ = p.loadObject(ofClass: URL.self) { u, _ in
-                if let u, let img = NSImage(contentsOf: u) { DispatchQueue.main.async { ai.attach(img) } }
+                if let u { DispatchQueue.main.async { ai.attachFile(u) } }   // an image, or a PDF / Word / text file to ask about
             }
             return true
         }
@@ -567,6 +582,10 @@ struct AITab: View {
                 Text(m.text).font(.system(size: 12)).padding(.horizontal, 10).padding(.vertical, 6)
                     .background(Color.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12)).textSelection(.enabled)
                 if !ai.busy || ai.messages.last?.id != m.id {
+                    Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(m.text, forType: .string) } label: {
+                        Image(systemName: "doc.on.doc").font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Copy")
                     Button { speaker.speakingID == m.id ? speaker.stop() : speaker.speak(m.text, id: m.id) } label: {
                         Image(systemName: speaker.speakingID == m.id ? "stop.fill" : "speaker.wave.2").font(.system(size: 10))
                     }
@@ -850,13 +869,15 @@ struct MarketsView: View {
 
 struct ToolsTab: View {
     enum Tool: String, CaseIterable, Identifiable {
-        case clipboard = "Clipboard", notes = "Notes", timer = "Timer", mirror = "Mirror", bluetooth = "Bluetooth", capture = "Capture", system = "System", fun = "Fun"
+        case clipboard = "Clipboard", notes = "Notes", timer = "Timer", focus = "Focus", workspaces = "Workspaces", mirror = "Mirror", bluetooth = "Bluetooth", capture = "Capture", system = "System", fun = "Fun"
         var id: String { rawValue }
         var icon: String {
             switch self {
             case .clipboard: "doc.on.clipboard"
             case .notes: "note.text"
             case .timer: "timer"
+            case .focus: "scope"
+            case .workspaces: "rectangle.3.group"
             case .mirror: "camera.fill"
             case .bluetooth: "headphones"
             case .capture: "camera.viewfinder"
@@ -887,6 +908,8 @@ struct ToolsTab: View {
                 case .clipboard: ClipboardView()
                 case .notes: NotesView()
                 case .timer: TimerView()
+                case .focus: FocusSessionView()
+                case .workspaces: WorkspacesView()
                 case .mirror: MirrorView()
                 case .bluetooth: BluetoothView()
                 case .capture: CaptureView()
@@ -1072,6 +1095,7 @@ struct SystemView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            QuickTogglesGrid()
             HStack {
                 Label(caf.active ? "Caffeinated" + (caf.until.map { " until \($0.formatted(date: .omitted, time: .shortened))" } ?? "") : "Caffeinate",
                       systemImage: caf.active ? "cup.and.saucer.fill" : "cup.and.saucer")

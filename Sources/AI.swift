@@ -322,6 +322,7 @@ final class Assistant: ObservableObject {
     @Published var seeScreen = false
     @Published var status: String?            // "Reading your screen…", "Thinking…"
     @Published var attachment: CGImage?       // an image to ask about
+    @Published var document: AIDocument?      // a file or selected text to ask about (see AIExtras.swift)
     private var session: LanguageModelSession?
     private var sessionIsAgent = true
     private var sessionEffort = AIEffort.medium
@@ -393,9 +394,9 @@ final class Assistant: ObservableObject {
             return
         }
         if let r = unavailableReason { messages.append(Msg(role: .error, text: r)); return }
-        let image = attachment
-        attachment = nil
-        messages.append(Msg(role: .user, text: text, image: image.map { NSImage(cgImage: $0, size: .zero) }))
+        let image = attachment, doc = document
+        attachment = nil; document = nil
+        messages.append(Msg(role: .user, text: text + (doc.map { "\n📎 \($0.name)" } ?? ""), image: image.map { NSImage(cgImage: $0, size: .zero) }))
         let start = messages.count   // this turn's replies and tool calls come after here
         busy = true
         Self.currentRequest = text
@@ -406,6 +407,7 @@ final class Assistant: ObservableObject {
                 // 1. Turn what the user shared into text the model can read.
                 var shared: [String] = []
                 if let context { shared.append("Selected content:\n\"\"\"\n\(context.prefix(effort.contextChars))\n\"\"\"") }
+                if let doc { shared.append(try await read(doc, for: text, effort: effort)) }
                 if let image {
                     status = "Looking at the image…"
                     let r = await ImageReader.analyze(image, effort: effort)

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.7.0
+
+### New
+- **Meeting countdown.** 2 minutes before a Zoom, Google Meet, Teams or Webex call on your calendar, the notch counts down to it. Open the notch and click **Join**. Turn it off in **Settings › Live › Live activities in the notch**.
+- **Clipboard picker.** Press **⌃⌥V** anywhere to open your clipboard history over the app you're in. Type to search, use the arrow keys, and press Return to paste. Pin clips you use a lot (right-click › Pin as a snippet) and they stay at the top.
+- **App Launcher actions.** Type math like "15% of 80" and press Return to copy the answer, "timer 10" to start a timer, "define serendipity" for the dictionary, or a question to ask Onyx AI. Files whose names match show up under your apps, most recently used first.
+- **Ask AI about selected text.** Select text in any app and press **⌃⌥S**. Onyx AI opens with it attached and one-click Summarize, Explain, Rewrite, Fix grammar, Translate and Key points.
+- **Ask about a file.** Drop a PDF, Word, RTF, HTML or text file on the AI tab (or choose one from the paperclip menu) and ask about it. Long documents are read part by part, so it can answer from the whole thing.
+- **Daily briefing.** Tap **Brief me on my day** in the AI tab for your weather, what's left on your calendar, reminders and anything due on Canvas, in a few friendly sentences. The first time you use your Mac each morning, one is waiting for you. Turn that off in **Settings › Privacy › AI**.
+- **Weather on your wallpaper.** When it's actually raining, snowing, foggy or stormy where you are, your live wallpaper shows it too, with lightning in a thunderstorm. Turn it off with **Match the weather** in Live Wallpapers.
+- **Day and night wallpapers.** Create with AI can also make sunset and night versions of your loop (the same scene, relit, with stars at night) that switch by themselves at the real sunset and sunrise where you are.
+- **Battery health.** A new **Battery** page in Optimization shows your battery's health, charge cycles, capacity and temperature, and which apps are using the most energy right now. It can also remind you to unplug at 80%.
+- **Focus sessions.** A new **Focus** tool in the notch's Tools tab runs a timer that blocks the apps and websites you choose (in Safari, Chrome, Arc, Brave and Edge) until it's done, and keeps a daily streak.
+- **Quick toggles.** Tools › System now has one-click Dark Mode, Do Not Disturb, Keep awake, Hide desktop icons and Mute microphone.
+- **Window workspaces.** Arrange the apps and windows you use for something, save them as a workspace like "School" or "Coding" in the new **Workspaces** tool, and get them all back with one click, optionally hiding everything else.
+- **Mark up screenshots.** Right-click a screenshot on the Shelf › **Mark Up…** (or Tools › Capture › Mark up last screenshot) to draw, highlight, add arrows and boxes, or blur out private details, then copy or save it.
+- **Copy text from anything.** Press **⌃⌥T** and drag over any part of the screen to copy the text in it. Pictures on the Shelf have **Copy Text in Picture** too.
+
+### Improved
+- Onyx AI's answers have a Copy button.
+- The feature tour shows off everything new, with live demos of meeting countdowns, the clipboard picker, Ask about anything, the daily briefing, focus sessions, workspaces, screenshot markup, weather and day-and-night wallpapers, launcher actions, and battery health with quick toggles. It also uses much less power while it plays.
+
 ## 1.6.1
 
 ### New

@@ -698,6 +698,7 @@ struct LiveSettings: View {
     @AppStorage(Prefs.weatherCity) var weatherCity = ""
     @AppStorage(Prefs.fahrenheit) var fahrenheit = true
     @AppStorage(Prefs.sportsActivity) var sportsActivity = true
+    @AppStorage(MeetingWatch.key) var meetingActivity = true
     @AppStorage(Prefs.tickerActivity) var tickerActivity = false
     @AppStorage(Prefs.downloadActivity) var downloadActivity = true
     @AppStorage(Prefs.downloadToShelf) var downloadToShelf = true
@@ -715,6 +716,11 @@ struct LiveSettings: View {
                 Toggle("Download progress", isOn: $downloadActivity)
                 Toggle("Put finished downloads on the Shelf", isOn: $downloadToShelf)
                 Toggle("AirPods & headphone battery when they connect", isOn: $earbudsActivity)
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Meeting countdown", isOn: $meetingActivity)
+                    Text("2 minutes before a Zoom, Meet, Teams or Webex call on your calendar, the notch counts down with a Join button.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Toggle("Rain alerts", isOn: $rainAlerts)
                     Text("A heads-up in the notch when rain, snow or a storm is about to start where you are.")
@@ -769,6 +775,7 @@ struct LiveSettings: View {
 struct LockSettings: View {
     @AppStorage(AIEffort.key) private var effort = AIEffort.medium.rawValue
     @AppStorage(Speaker.key) private var speak = "voice"
+    @AppStorage(Briefing.key) private var briefing = true
     var body: some View {
         Form {
             Section("Permissions") {
@@ -797,6 +804,9 @@ struct LockSettings: View {
                     Text("Always").tag("always")
                 }
                 Text("Ask by voice with the mic button in the AI tab. Your speech is turned into text on this Mac. Answers are read in your Mac's best installed voice; you can download nicer ones in System Settings › Accessibility › Spoken Content.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Morning briefing", isOn: $briefing)
+                Text("The first time you use your Mac each morning, Onyx AI puts together your weather, what's on your calendar, reminders and anything due on Canvas. It waits in the AI tab. You can also ask for one any time with Brief me.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

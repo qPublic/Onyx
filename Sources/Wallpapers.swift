@@ -14,6 +14,8 @@ struct Wallpaper: Codable, Identifiable, Hashable {
     var duration = 0.0
     var enhanced = false
     var prompt: String?       // what an AI loop was made from
+    var dusk: String?, night: String?   // ids of this loop's sunset and night versions, switched by the real sun
+    var variantOf: String?    // set on those versions, which don't show up in the library by themselves
 
     var isScene: Bool { file == nil }
     var scene: WallpaperScene? { WallpaperScene(rawValue: id) }
@@ -21,7 +23,7 @@ struct Wallpaper: Codable, Identifiable, Hashable {
     var badge: String {
         guard !isScene else { return "Animated scene" }
         let res = height >= 2000 ? "4K" : height >= 1400 ? "1440p" : height >= 1000 ? "1080p" : height >= 700 ? "720p" : "\(height)p"
-        return (prompt != nil ? "AI loop · " : "") + "\(res) · \(Int(fps.rounded())) fps"
+        return (prompt != nil ? "AI loop · " : "") + (dusk != nil ? "Day & night · " : "") + "\(res) · \(Int(fps.rounded())) fps"
     }
 }
 
@@ -81,7 +83,7 @@ final class WallpaperLibrary: ObservableObject {
     static let shared = WallpaperLibrary()
     @Published private(set) var videos: [Wallpaper] = []
 
-    var all: [Wallpaper] { WallpaperScene.allCases.map(\.wallpaper) + videos }
+    var all: [Wallpaper] { WallpaperScene.allCases.map(\.wallpaper) + videos.filter { $0.variantOf == nil } }
     var folder: URL {
         let u = Prefs.supportDir.appendingPathComponent("Wallpapers", isDirectory: true)
         try? FileManager.default.createDirectory(at: u.appendingPathComponent("Thumbnails"), withIntermediateDirectories: true)
@@ -95,7 +97,25 @@ final class WallpaperLibrary: ObservableObject {
         }
     }
 
-    func item(_ id: String) -> Wallpaper? { all.first { $0.id == id } }
+    func item(_ id: String) -> Wallpaper? { (WallpaperScene.allCases.map(\.wallpaper) + videos).first { $0.id == id } }
+
+    /// Makes `dusk` and `night` the sunset and night versions of `day`.
+    func link(_ day: Wallpaper, dusk: Wallpaper, night: Wallpaper) {
+        for (i, v) in videos.enumerated() {
+            if v.id == day.id { videos[i].dusk = dusk.id; videos[i].night = night.id }
+            if v.id == dusk.id || v.id == night.id { videos[i].variantOf = day.id }
+        }
+        save()
+    }
+
+    /// The version of a day/night set for right now (or the wallpaper itself if it isn't one).
+    func forNow(_ w: Wallpaper) -> Wallpaper {
+        switch DayPhase.now() {
+        case .dusk: return w.dusk.flatMap(item) ?? w
+        case .night: return w.night.flatMap(item) ?? w
+        case .day: return w
+        }
+    }
     func url(_ w: Wallpaper) -> URL? { w.file.map { folder.appendingPathComponent($0) } }
     private func save() { if let d = try? JSONEncoder().encode(videos) { try? d.write(to: index, options: .atomic) } }
 
@@ -119,6 +139,7 @@ final class WallpaperLibrary: ObservableObject {
 
     func remove(_ w: Wallpaper) {
         guard !w.isScene else { return }
+        for v in [w.dusk, w.night].compactMap({ $0 }).compactMap(item) { remove(v) }   // its sunset and night versions go too
         if let u = url(w) { try? FileManager.default.trashItem(at: u, resultingItemURL: nil) }   // recoverable from the Trash
         try? FileManager.default.removeItem(at: thumbURL(w))
         videos.removeAll { $0.id == w.id }; save()
@@ -191,7 +212,7 @@ final class WallpaperEngine: ObservableObject {
         static let sound = "wall.sound", still = "wall.still"
     }
     static let defaults: [String: Any] = [K.enabled: false, K.current: WallpaperScene.aurora.rawValue, K.shuffle: 0, K.night: "",
-                                          K.pauseBattery: false, K.pauseLowPower: true, K.sound: false, K.still: false]
+                                          K.pauseBattery: false, K.pauseLowPower: true, K.sound: false, K.still: false, WallWeather.key: true]
 
     @Published private(set) var pausedReason: String?
     private var windows: [String: WallpaperWindow] = [:]   // by display name
@@ -267,11 +288,12 @@ final class WallpaperEngine: ObservableObject {
             let win = windows[Self.key(s)] ?? WallpaperWindow(screen: s)
             windows[Self.key(s)] = win
             win.setFrame(s.frame, display: true)
-            let w = WallpaperLibrary.shared.item(wallpaperID(for: s)) ?? WallpaperScene.aurora.wallpaper
+            let w = WallpaperLibrary.shared.forNow(WallpaperLibrary.shared.item(wallpaperID(for: s)) ?? WallpaperScene.aurora.wallpaper)
             win.show(w, sound: Prefs.bool(K.sound))
             win.orderBack(nil)
         }
         restartShuffle()
+        updateWeather()
         evaluate()
         if Prefs.bool(K.still) { Task { await applyDesktopPictures() } }
     }
@@ -298,6 +320,16 @@ final class WallpaperEngine: ObservableObject {
         let night = Self.isNight()
         if let was = wasNight, was != night, !(UserDefaults.standard.string(forKey: K.night) ?? "").isEmpty { rebuild() }
         wasNight = night
+        let phase = DayPhase.now()   // day/night sets switch at sunset and sunrise
+        if let was = wasPhase, was != phase { rebuild() }
+        wasPhase = phase
+    }
+    private var wasPhase: DayPhase?
+
+    /// Rain, snow, fog or a storm drawn over the wallpaper when that's the weather outside (Match the weather).
+    func updateWeather() {
+        let k = WallWeather.now
+        windows.values.forEach { $0.setWeather(k) }
     }
 
     private func restartShuffle() {
@@ -389,6 +421,7 @@ final class WallpaperEngine: ObservableObject {
 
 final class WallpaperWindow: NSWindow {
     private let host = NSView()
+    private let weather = WeatherOverlayView(frame: .zero)
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
     private var current: String?
@@ -433,7 +466,11 @@ final class WallpaperWindow: NSWindow {
             host.layer?.addSublayer(layer)
             player = p
         }
+        weather.frame = host.bounds
+        host.addSubview(weather)   // the weather layer stays on top
     }
+
+    func setWeather(_ k: WallWeather) { weather.kind = k }
 
     // A desktop window is never the focused one, and macOS draws Liquid Glass dimmed in unfocused windows.
     // Report the "active" look so the Liquid Glass scene stays bright (same AppKit hooks as the notch).
@@ -444,10 +481,12 @@ final class WallpaperWindow: NSWindow {
     func play() {
         player?.play()
         host.subviews.compactMap { $0 as? SceneView }.forEach { $0.setRunning(true) }
+        weather.setRunning(true)
     }
     func pause() {
         player?.pause()
         host.subviews.compactMap { $0 as? SceneView }.forEach { $0.setRunning(false) }
+        weather.setRunning(false)
     }
     func stop() { player?.pause(); looper?.disableLooping(); looper = nil; player = nil; current = nil }
 }

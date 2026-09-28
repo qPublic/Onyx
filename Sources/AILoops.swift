@@ -137,6 +137,7 @@ enum ArtStyle: String, CaseIterable, Identifiable {
     @Published var checkNote: String?          // what checking the pictures found
     @Published var checkOK = false
     static let grain: UInt32 = 1 << 12          // the shader's film-grain switch, for photo-like loops
+    static let dayNightKey = "loop.dayNight"    // also make sunset and night versions that switch with the real sun
     private var task: Task<Void, Never>?
     private var painting: Task<Void, Error>?
 
@@ -256,6 +257,20 @@ enum ArtStyle: String, CaseIterable, Identifiable {
                 }
                 try Task.checkCancellation()
                 let w = try await WallpaperLibrary.shared.add(url, name: title, move: true, prompt: prompt)
+                if UserDefaults.standard.bool(forKey: Self.dayNightKey) {
+                    // The same picture relit for sunset and night, so the three loops match and swap at the real sunset and sunrise.
+                    var made: [Wallpaper] = []
+                    for phase in [DayPhase.dusk, .night] {
+                        guard let lit = DayPhase.relight(picture, for: phase) else { continue }
+                        let label = phase == .dusk ? "Sunset version: " : "Night version: "
+                        let u = try await Self.build(lit, fx: fx | phase.extraEffects, motion: motion) { stage, p in
+                            Task { @MainActor in if self.busy { self.step = .working(label + stage.lowercased(), p) } }
+                        }
+                        try Task.checkCancellation()
+                        made.append(try await WallpaperLibrary.shared.add(u, name: "\(title) (\(phase == .dusk ? "sunset" : "night"))", move: true, prompt: prompt))
+                    }
+                    if made.count == 2 { WallpaperLibrary.shared.link(w, dusk: made[0], night: made[1]) }
+                }
                 WallpaperEngine.shared.set(w)
                 step = .done(w.id)
             } catch is CancellationError {
@@ -797,6 +812,7 @@ struct CreateLoopSheet: View {
     @State private var restyle = false
     @State private var chosen = 0
     @State private var motion = 1
+    @AppStorage(LoopMaker.dayNightKey) private var dayNight = false
     @State private var dropping = false
     @State private var removed = 0     // redraws the style cards after a download is removed
 
@@ -1004,6 +1020,8 @@ struct CreateLoopSheet: View {
                 Picker("", selection: $motion) { Text("Subtle").tag(0); Text("Normal").tag(1); Text("Strong").tag(2) }
                     .pickerStyle(.segmented).labelsHidden().frame(width: 240)
             }
+            Toggle("Also make sunset and night versions that switch with the real sun (takes 3× as long)", isOn: $dayNight)
+                .font(.system(size: 12))
             Spacer(minLength: 0)
             HStack {
                 Button("Back") { maker.reset() }.buttonStyle(.glass)

@@ -200,6 +200,7 @@ final class BatteryMonitor: ObservableObject {
             }
             if plugged { lowShown = false }
             percent = pct; pluggedIn = plugged; charging = chg
+            ChargeReminder.check(percent: pct, plugged: plugged)
             minutesLeft = (t ?? -1) > 0 ? t : nil
         }
         loaded = true
@@ -500,6 +501,7 @@ final class ClipboardHistory: ObservableObject {
         var pinned = false
     }
     @Published var clips: [Clip] = []
+    var paused = false   // while Onyx borrows the clipboard itself (reading a selection); those changes aren't kept
     private var lastCount = NSPasteboard.general.changeCount
     private var saveWork: DispatchWorkItem?
     private var file: URL { Prefs.supportDir.appendingPathComponent("clipboard.json") }
@@ -513,6 +515,7 @@ final class ClipboardHistory: ObservableObject {
         let pb = NSPasteboard.general
         guard pb.changeCount != lastCount else { return }
         lastCount = pb.changeCount
+        if paused { return }
         let types = pb.types?.map(\.rawValue) ?? []
         if types.contains("org.nspasteboard.ConcealedType") || types.contains("org.nspasteboard.TransientType") { return }
         guard let s = pb.string(forType: .string), !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -586,6 +589,7 @@ final class FocusTimer: ObservableObject {
         if endDate != nil { self.now = now }
         if let e = endDate, now >= e {
             endDate = nil
+            FocusSession.shared.finish(completed: true)   // a focus session that ran its course counts toward the streak
             if Fun.has(Fun.bomb) {
                 SoundBoard.play(.boom)
                 NotchModel.shared.flash(.message(icon: "burst.fill", text: "BOOM! Time's up", tint: .orange), for: 5)

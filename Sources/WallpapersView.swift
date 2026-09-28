@@ -14,6 +14,7 @@ struct WallpapersView: View {
     @AppStorage(WallpaperEngine.K.night) private var night = ""
     @AppStorage(WallpaperEngine.K.pauseBattery) private var pauseBattery = false
     @AppStorage(WallpaperEngine.K.pauseLowPower) private var pauseLowPower = true
+    @AppStorage(WallWeather.key) private var matchWeather = true
     @AppStorage(WallpaperEngine.K.sound) private var sound = false
     @AppStorage(WallpaperEngine.K.still) private var still = false
     @State private var display = "all"
@@ -202,6 +203,8 @@ struct WallpapersView: View {
                 Toggle("Pause on battery power", isOn: $pauseBattery).onChange(of: pauseBattery) { _, _ in engine.evaluate() }
                 Toggle("Pause in Low Power Mode", isOn: $pauseLowPower).onChange(of: pauseLowPower) { _, _ in engine.evaluate() }
                 Toggle("Play the video's sound", isOn: $sound).onChange(of: sound) { _, _ in engine.rebuild() }
+                Toggle("Match the weather", isOn: $matchWeather).onChange(of: matchWeather) { _, _ in engine.updateWeather() }
+                    .help("When it's raining, snowing, foggy or stormy where you are, your wallpaper shows it too.")
                 Text("Pauses by itself when it's covered, behind a fullscreen app, or your Mac is locked.")
                     .font(.system(size: 10.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }

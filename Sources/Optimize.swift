@@ -648,7 +648,7 @@ final class AutoQuit {
 // MARK: - Settings UI
 
 enum OptimizePage: String, CaseIterable, Identifiable {
-    case overview, clean, maintain, tweaks, startup, storage
+    case overview, clean, maintain, tweaks, startup, storage, battery
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
 }
@@ -689,6 +689,7 @@ struct OptimizeSettings: View {
             case .tweaks: OptTweaks()
             case .startup: OptStartup()
             case .storage: OptStorage()
+            case .battery: OptBattery()
             }
         }
     }

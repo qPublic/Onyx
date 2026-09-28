@@ -56,6 +56,8 @@ enum Prefs {
             lowBatteryLevel: 15,
             autoClose: true,
             autoCloseDelay: 20,
+            Briefing.key: true,
+            MeetingWatch.key: true,
         ].merging(AP.defaults) { a, _ in a }.merging(Fun.defaults) { a, _ in a }.merging(Opt.defaults) { a, _ in a }
          .merging(WallpaperEngine.defaults) { a, _ in a })
     }

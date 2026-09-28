@@ -108,6 +108,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let file = ProcessInfo.processInfo.environment["ONYX_AICHECKTEST"] { Task { @MainActor in await AICheckTest.run(file) }; return }
         // Debug: ONYX_LAUNCHERPINTEST=<dir> checks pinned apps and the by-category view, with screenshots (see LauncherPinTest).
         if let dir = ProcessInfo.processInfo.environment["ONYX_LAUNCHERPINTEST"] { Task { @MainActor in await LauncherPinTest.run(dir) }; return }
+        // Debug: ONYX_VIEWSHOT=<dir> renders the new panels offscreen to PNGs (see ViewShot).
+        if let dir = ProcessInfo.processInfo.environment["ONYX_VIEWSHOT"] { ViewShot.run(dir); return }
+        // Debug: ONYX_EXTRASTEST=<file> checks the launcher actions, file reading, OCR, briefing and more (see ExtrasTest).
+        if let file = ProcessInfo.processInfo.environment["ONYX_EXTRASTEST"] { Task { @MainActor in await ExtrasTest.run(file) }; return }
         // Debug: ONYX_TOURTEST=<file> plays the feature tour for 13 s (see TourTest).
         if let file = ProcessInfo.processInfo.environment["ONYX_TOURTEST"] { TourTest.run(file); return }
         // Debug: ONYX_AUTOCLOSETEST=<file> checks a watched window closes once you've clicked away for the set time (see AutoCloseTest).
@@ -148,6 +152,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         OptimizeService.shared.start()          // low-disk alert + optional weekly clean
         AutoQuit.shared.start()                 // optional: quit apps that have no windows
         OnyxReminders.shared.start()            // AI-set reminders that ring in the notch
+        MainActor.assumeIsolated { Briefing.watch() }   // the morning briefing
+        MeetingWatch.shared.start()             // video calls: countdown + Join in the notch
         Updater.shared.start()                  // new GitHub releases download in the background
         NotesSync.shared.start()                // optional two-way sync with Apple Notes
         EarbudsWatcher.shared.start()           // AirPods battery pops up when they connect
@@ -155,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Speaker.shared.start()                  // speaks Onyx AI's answers (Settings › Privacy › AI)
         SettingsSync.shared.start()             // optional: same settings on all your Macs (iCloud Drive)
         WallpaperEngine.shared.start()          // live wallpapers behind the desktop icons (when turned on)
+        WeatherWallpaper.shared.start()         // …with the real weather drawn over them
         // Debug: ONYX_AI_TEST=1 runs rendered math problems through Onyx AI at every effort into ai-test.log, then quits.
         if ProcessInfo.processInfo.environment["ONYX_AI_TEST"] != nil {
             Task { @MainActor in try? await Task.sleep(for: .seconds(3)); await AISelfTest.run() }

@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.6.0
+
+### New
+- **Sync notes with Apple Notes.** Turn it on from the folder menu in Notes, or in **Settings › Widgets & Tabs › Notes**. Onyx keeps your notes in an "Onyx" folder in Apple Notes, with a subfolder for each Onyx folder. That puts them on your iPhone and iPad too, and edits, new notes, moves and deletions on either side show up on the other.
+  - Syncs every 30 seconds while Apple Notes is open, a few seconds after you stop typing in Onyx, and every 15 minutes otherwise.
+  - **Nothing gets lost:** if a note changed on both sides, you get both versions. If a note was deleted in Apple Notes but you'd since edited it in Onyx, it's kept. Notes deleted from Onyx go to Apple Notes' Recently Deleted. If most of your synced notes suddenly disappear from Apple Notes, syncing pauses instead of deleting anything.
+  - Notes with checklists, pictures, tables or other formatting are read-only in Onyx, with an **Open** button to edit them in Apple Notes. Locked notes are left alone, and your other Apple notes are never touched.
+  - The first time, macOS asks to let Onyx control Notes.
+- **Ask Onyx AI by voice.** Tap the new mic button in the AI tab and just talk. Your words appear as you speak, and your question sends when you pause. Speech is recognized on your Mac with Apple's on-device model, which downloads the first time you use it. The notch stays open while you're talking.
+- **Spoken answers.** Onyx AI reads its answer aloud when you asked by voice. Change this to **Always** or **Off** in **Settings › Privacy › AI**. Every answer also has a speaker button to hear it or stop it, and math like "m∠A" is read as "the measure of angle A".
+- **AirPods battery pop-up.** When AirPods, Beats or other Bluetooth headphones connect, the notch shows their battery for a few seconds: one number when both buds match, left and right when they don't, plus the case. Anything at 20% or lower is red.
+- **Rain alerts.** A heads-up in the notch like "Rain in ~15 min" or "Snow starting soon" when rain, snow or a storm is about to start where you are and it's dry now. At most once every 3 hours.
+- **Sync settings between your Macs.** Turn it on in **Settings › Behavior › Back up & sync** to keep Onyx's settings the same on every Mac signed in to your iCloud account, through iCloud Drive. The first time, if another Mac's settings are already there, you choose which to keep. You can also **Export** your settings to a file and **Import** them later. Notes, Shelf files and permissions stay on each Mac, and passwords (like your Canvas token) are never included.
+
+- **Live Wallpapers.** Your own videos, or one of three animated scenes (Aurora, Liquid Glass and Night Sky), playing behind your desktop icons. Open it from the menu bar icon › **Live Wallpapers…** or the notch's ••• menu.
+  - **Add your own videos:** MP4 or MOV, from **Add Videos** or by dropping them on the window.
+  - **Every display:** the same wallpaper everywhere, or a different one per display.
+  - **Shuffle** every 15 minutes, hour or day, and pick a different wallpaper **after sunset**, based on where you are.
+  - **Uses almost nothing:** about 0% CPU. It pauses when the desktop is covered, behind fullscreen apps, while your Mac is locked or asleep, and in Low Power Mode. It can also pause on battery. Videos never keep your screen awake.
+  - **Match my desktop picture** optionally sets a still as your real desktop picture, so the lock screen and Mission Control match, and puts your old picture back when you turn it off.
+- **Enhance with AI.** Right-click a video wallpaper › **Enhance with AI…** to make it smoother and sharper, all on your Mac with Apple's video models. Frame interpolation takes it to 60 or 120 fps. Super resolution upscales it 4×, for example 720p to 5K. The upscaling model downloads once. Your original stays in the library, and enhanced copies play without sound.
+- **Game-style scene pack.** Five new animated wallpapers drawn live by your Mac's graphics chip: **Neon Horizon** (an 80s synthwave sunset over a neon grid), **Rain City** (a night skyline scrolling past in the rain), **Pixel Dusk** (a pixel-art sunset over the sea), **Hyperspace** and **Code Rain**. They stay sharp on any display and pause when nobody can see them.
+- **Create with AI.** In Live Wallpapers, describe any game's world, a place or a mood, and Onyx makes it into a looping live wallpaper. Apple Intelligence plans it and picks the effects, Image Playground paints four versions to choose from, and Onyx brings the one you pick to life: near things drift against far things, with rain, snow, embers, fireflies, twinkling stars, fog, falling leaves or petals, dust, bubbles or wind. The motion is gentle on purpose: near things slide in front of far ones as solid shapes, effects sit behind whatever is in front of them, and photo-like loops get a touch of film grain, so it looks filmed rather than generated. The loop is sharpened to your screen's resolution and repeats seamlessly. You can also bring your own picture to life, like a game screenshot. Everything happens on your Mac.
+- **Art styles for Create with AI.** Pick **Realistic**, **Anime**, **Painted**, **Animated** or **Illustration**. Realistic, Anime and Painted are painted on your Mac by Stable Diffusion models made for each look (a one-time 2 GB download per style, which you can remove again); Animated and Illustration use Image Playground.
+- **Feature tour.** The end of onboarding is now a tour that plays a short live demo of each feature: the notch, music, the Shelf, Onyx AI, Circle to Search, widgets, notes, snap layouts, Live Wallpapers, Create with AI, the App Launcher and Optimization. Watch it again any time from the menu bar icon › **Take the Tour…**.
+- **App Launcher.** Every app in a full-screen Liquid Glass grid, like Launchpad, which macOS Tahoe removed. Open it from the menu bar icon › **App Launcher** or the notch's ••• menu, or give it a keyboard shortcut in **Settings › Behavior › Shortcuts**. The search field is ready as soon as it opens, so you can just start typing.
+  - **Pages:** swipe, scroll or use the arrow keys, with page dots at the bottom.
+  - **Folders:** drop one app onto another to make a folder, named for what's in it. Drop onto a folder to add, click a folder to open and rename it, and drag an app out to take it out.
+  - **Your order:** drag apps to rearrange them, or drop one on a page dot to move it to that page.
+  - **Search as you type:** press Return to open the best match.
+  - Right-click an app to show it in Finder or hide it from the launcher. Esc or clicking outside closes it.
+- **⌘Space can open the App Launcher.** A switch in **Settings › Behavior › Shortcuts** moves Spotlight to ⌥⌘Space and gives ⌘Space to the launcher. Turning it off puts Spotlight back the way it was.
+- **Onboarding asks for everything up front.** Setup now includes Location, Microphone, Focus and Downloads folder access, plus optional switches for Apple Notes sync and settings sync. **Settings › Privacy** lists every permission with a shortcut to its System Settings page.
+
+### Improved
+- **Much more accurate weather.** Onyx now uses your Mac's location, if you allow it, instead of guessing from your internet connection, which can be tens of kilometers off or wrong on a VPN. It's rounded to about 1 km before being sent to weather services.
+- **Current conditions from the closest weather station.** The temperature and conditions "now" come from the closest station that reported in the last 90 minutes: US National Weather Service stations, or airport weather reports anywhere in the world. If none is within 20 km, Onyx uses the forecast model for your exact spot. **Settings › Live › Weather** shows which station it's using and how far away it is.
+
 ## 1.5.2
 
 ### Improved

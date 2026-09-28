@@ -4,6 +4,7 @@ import EventKit
 import AVFoundation
 import CoreBluetooth
 import ApplicationServices
+import Intents
 
 // MARK: - First-run permission wizard (asks for everything up front, like a proper menu-bar app)
 
@@ -15,9 +16,18 @@ final class PermissionsModel: ObservableObject {
     @Published var automation = false
     @Published var accessibility = false
     @Published var bluetooth = false
+    @Published var location = false
+    @Published var microphone = false
+    @Published var focus = false
+    @Published var downloads = false
     private var btManager: CBCentralManager?
 
     func refresh() {
+        location = LocationProvider.shared.allowed
+        microphone = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        focus = INFocusStatusCenter.default.authorizationStatus == .authorized
+        // Reading the folder is what asks, so only check once you've clicked Grant (then it never prompts again).
+        if UserDefaults.standard.bool(forKey: "askedDownloads") { downloads = Self.canReadDownloads() }
         accessibility = AXIsProcessTrusted()
         bluetooth = CBManager.authorization == .allowedAlways
         screen = CGPreflightScreenCaptureAccess()
@@ -63,6 +73,27 @@ final class PermissionsModel: ObservableObject {
         }
     }
 
+    func requestLocation() { Task { _ = await LocationProvider.shared.current(); refresh() } }
+
+    func requestMicrophone() {
+        AVCaptureDevice.requestAccess(for: .audio) { _ in DispatchQueue.main.async { self.refresh() } }
+    }
+
+    func requestFocus() {
+        INFocusStatusCenter.default.requestAuthorization { _ in DispatchQueue.main.async { self.refresh() } }
+    }
+
+    func requestDownloads() {
+        UserDefaults.standard.set(true, forKey: "askedDownloads")
+        if !Self.canReadDownloads() { open("Privacy_FilesAndFolders") }
+        refresh()
+    }
+
+    nonisolated static func canReadDownloads() -> Bool {
+        let dir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+        return (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) != nil
+    }
+
     func open(_ anchor: String) {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)")!)
     }
@@ -72,6 +103,8 @@ struct OnboardingView: View {
     let done: () -> Void
     @StateObject private var perms = PermissionsModel()
     @State private var page = 0
+    @State private var tourStep = 0
+    var tourOnly = false   // menu bar icon › Take the Tour
 
     var body: some View {
         VStack(spacing: 0) {
@@ -85,26 +118,35 @@ struct OnboardingView: View {
             }
             .frame(height: 150)
 
-            TabView(selection: $page) {
-                permissionsPage.tag(0)
-                featuresPage.tag(1)
+            ZStack {
+                if page == 0 && !tourOnly {
+                    permissionsPage.transition(.move(edge: .leading).combined(with: .opacity))
+                } else {
+                    FeatureTour(step: $tourStep).transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
-            .tabViewStyle(.automatic)
             .frame(maxHeight: .infinity)
 
             Divider()
             HStack {
-                Button("Skip") { done() }.buttonStyle(.plain).foregroundStyle(.secondary)
+                Button(page == 0 && !tourOnly ? "Skip" : "Skip Tour") { done() }.buttonStyle(.plain).foregroundStyle(.secondary)
                 Spacer()
-                if page == 0 {
-                    Button("Continue") { withAnimation { page = 1 } }.buttonStyle(.borderedProminent)
+                if page == 0 && !tourOnly {
+                    Button("Take the Tour") { withAnimation(.spring(response: 0.5, dampingFraction: 0.88)) { page = 1 } }.buttonStyle(.borderedProminent)
                 } else {
-                    Button("Start Using Onyx") { done() }.buttonStyle(.borderedProminent)
+                    if tourStep > 0 {
+                        Button("Back") { withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) { tourStep -= 1 } }.buttonStyle(.bordered)
+                    }
+                    if tourStep < TourStep.allCases.count - 1 {
+                        Button("Next") { withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) { tourStep += 1 } }.buttonStyle(.borderedProminent)
+                    } else {
+                        Button(tourOnly ? "Done" : "Start Using Onyx") { done() }.buttonStyle(.borderedProminent)
+                    }
                 }
             }
             .padding(16)
         }
-        .frame(width: 520, height: 560)
+        .frame(width: 520, height: 620)
         .background(Color(hex: "0B0B12"))
         .environment(\.colorScheme, .dark)
         .onAppear { perms.refresh() }
@@ -129,8 +171,16 @@ struct OnboardingView: View {
                     granted: perms.automation) { perms.requestAutomation() }
                 row("Camera", "The Mirror widget", "camera",
                     granted: perms.camera) { perms.requestCamera() }
-                row("Bluetooth", "Connect devices and show AirPods battery", "headphones",
+                row("Bluetooth", "Connect and disconnect devices from the notch", "headphones",
                     granted: perms.bluetooth) { perms.requestBluetooth() }
+                row("Location", "Accurate local weather and rain alerts", "location",
+                    granted: perms.location) { perms.requestLocation() }
+                row("Microphone", "Ask Onyx AI by voice (recognized on this Mac)", "mic",
+                    granted: perms.microphone) { perms.requestMicrophone() }
+                row("Focus", "Show when a Focus is on", "moon",
+                    granted: perms.focus) { perms.requestFocus() }
+                row("Downloads folder", "Download progress in the notch", "arrow.down.circle",
+                    granted: perms.downloads) { perms.requestDownloads() }
                 Text("Screen Recording may ask to quit & reopen Onyx. That's normal; onboarding comes back afterward.")
                     .font(.system(size: 10.5)).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 20)
 
@@ -138,6 +188,18 @@ struct OnboardingView: View {
                     Label("Open Onyx automatically at login", systemImage: "power")
                 }
                 .padding(.horizontal, 20).padding(.top, 6)
+
+                Text("Optional. Each one asks macOS for what it needs when you turn it on.")
+                    .font(.system(size: 10.5)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20).padding(.top, 6)
+                Toggle(isOn: Binding(get: { NotesSync.shared.enabled }, set: { NotesSync.shared.setEnabled($0); perms.objectWillChange.send() })) {
+                    Label("Sync notes with Apple Notes (asks to control Notes)", systemImage: "note.text")
+                }
+                .padding(.horizontal, 20)
+                Toggle(isOn: Binding(get: { SettingsSync.shared.enabled }, set: { SettingsSync.shared.setEnabled($0); perms.objectWillChange.send() })) {
+                    Label("Sync settings between your Macs (uses iCloud Drive)", systemImage: "icloud")
+                }
+                .padding(.horizontal, 20)
 
             }
             .padding(.bottom, 16)
@@ -162,28 +224,5 @@ struct OnboardingView: View {
         .padding(12)
         .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 20)
-    }
-
-    private var featuresPage: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                feature("hand.draw", "Hover the notch", "Move your pointer to the notch to expand it. Drag files onto it to use the Shelf.")
-                feature("sparkles", "Ask AI  ·  ⌃⌥A", "A private, on-device assistant that can open apps, add reminders, draft emails and read your screen.")
-                feature("circle.dashed", "Circle to Search  ·  ⌃⌥Space", "Draw around anything on screen to search, translate or explain it.")
-                feature("square.grid.2x2", "Customise everything", "Open Settings to change the style (Liquid Glass, Frosted, Solid), size, position, widgets, colours and more.")
-                feature("bolt.heart", "Light on memory", "Onyx trims itself while idle to stay small in the background.")
-            }
-            .padding(20)
-        }
-    }
-
-    private func feature(_ icon: String, _ title: String, _ body: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon).font(.system(size: 18)).frame(width: 26).foregroundStyle(.cyan)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13, weight: .semibold))
-                Text(body).font(.system(size: 11.5)).foregroundStyle(.secondary)
-            }
-        }
     }
 }

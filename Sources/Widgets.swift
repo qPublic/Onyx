@@ -141,7 +141,10 @@ final class WidgetLayout: ObservableObject {
     @Published var editing = false
     private let key = "ap.headerWidgets"
 
-    init() {
+    init() { reload() }
+
+    /// Re-reads the saved widgets (also after settings sync changes them).
+    func reload() {
         if let raw = UserDefaults.standard.string(forKey: key) {
             widgets = raw.split(separator: ",").compactMap { NotchWidget(rawValue: String($0)) }
         } else {

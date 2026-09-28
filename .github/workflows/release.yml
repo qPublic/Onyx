@@ -1,0 +1,40 @@
+# Publishes a GitHub Release when a version tag (v1.2.3) is pushed.
+#
+# The DMG is built and signed on the Mac with the "Onyx Local Signing" certificate (the auto-updater only installs
+# builds signed with it), then pushed to the `release-assets` branch as Onyx-<version>.dmg before the tag. This
+# workflow attaches that DMG and uses the version's section of CHANGELOG.md as the release notes.
+
+name: Publish release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the DMG built on the Mac
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git fetch --depth=1 origin release-assets:release-assets
+          git show "release-assets:Onyx-${VERSION}.dmg" > "Onyx-${VERSION}.dmg"
+          ls -l "Onyx-${VERSION}.dmg"
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="## ${VERSION}" '$0 == v { f = 1; next } /^## / { if (f) exit } f' CHANGELOG.md > notes.md
+          test -s notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" "Onyx-${VERSION}.dmg" --title "Onyx ${VERSION}" --notes-file notes.md --verify-tag --latest

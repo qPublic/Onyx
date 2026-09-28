@@ -39,6 +39,7 @@ enum Activity: Equatable {
             case .lowBattery: "low"
             case .message: "msg"
             case .eyeBreak: "eye"
+            case .earbuds: "buds"
             }
         case .timer: "timer"
         case .game(let g): "game" + g.id
@@ -53,7 +54,7 @@ enum Activity: Equatable {
     var earWidth: CGFloat {
         switch self {
         case .none: 0
-        case .hud(.message), .hud(.eyeBreak), .reminder: 118
+        case .hud(.message), .hud(.eyeBreak), .hud(.earbuds), .reminder: 118
         case .game: 84
         case .ticker, .download: 84
         default: 70
@@ -230,6 +231,8 @@ struct CollapsedView: View {
             case .lowBattery: Image(systemName: "battery.25percent").foregroundStyle(.red)
             case .message(let icon, _, let tint): Image(systemName: icon).foregroundStyle(tint)
             case .eyeBreak: HStack(spacing: 5) { Image(systemName: "eye.fill").foregroundStyle(.cyan); Text("Eye break").lineLimit(1) }
+            case .earbuds(let name, _, _, _, _):
+                HStack(spacing: 5) { Image(systemName: EarbudsWatcher.icon(name)); Text(EarbudsWatcher.shortName(name)).lineLimit(1).minimumScaleFactor(0.8) }
             }
         }
     }
@@ -283,6 +286,7 @@ struct CollapsedView: View {
                     let s = max(0, Int(until.timeIntervalSince(ctx.date)))
                     Text(s > 0 ? "Look 20 ft away · \(s)s" : "Done 👍").lineLimit(1).minimumScaleFactor(0.8)
                 }
+            case .earbuds(let name, let l, let r, let c, let m): EarbudsLevels(name: name, left: l, right: r, caseLevel: c, main: m)
             }
         }
     }
@@ -480,6 +484,9 @@ struct ExpandedView: View {
                             Image(systemName: "gearshape").foregroundStyle(Color.primary.opacity(0.6))
                         }.buttonStyle(.plain).help("Settings")
                         Menu {
+                            Button { (NSApp.delegate as? AppDelegate)?.openLauncher() } label: { Label("App Launcher", systemImage: "square.grid.3x3.fill") }
+                            Button { (NSApp.delegate as? AppDelegate)?.openWallpapers() } label: { Label("Live Wallpapers…", systemImage: "play.rectangle.on.rectangle") }
+                            Divider()
                             Button { withAnimation { widgets.editing = true } } label: { Label("Edit Tabs & Widgets", systemImage: "square.grid.2x2") }
                             if model.tab == .home {
                                 Button { withAnimation { HomeLayout.shared.editing = true } } label: { Label("Edit Home Boxes", systemImage: "rectangle.3.group") }

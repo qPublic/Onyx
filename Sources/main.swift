@@ -13,11 +13,99 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var updateItem: NSMenuItem?
     var settingsWindow: NSWindow?
     var optimizeWindow: NSWindow?
+    var wallpapersWindow: NSWindow?
     var onboardingWindow: NSWindow?
+    var tourWindow: NSWindow?
     private var bag = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Prefs.registerDefaults()
+        // Debug: ONYX_UPDATE_TEST=<file> checks GitHub now, logs the result and exits (ONYX_UPDATE_TEST_QUIT=1 quits
+        // normally instead, so a downloaded update installs). Pair with ONYX_UPDATE_CURRENT and ONYX_UPDATE_DEST.
+        if let path = ProcessInfo.processInfo.environment["ONYX_UPDATE_TEST"] {
+            Updater.shared.check(user: true)
+            Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { t in
+                switch Updater.shared.state {
+                case .checking, .downloading: return
+                case let s:
+                    t.invalidate()
+                    try? "\(s)\n".write(toFile: path, atomically: true, encoding: .utf8)
+                    if ProcessInfo.processInfo.environment["ONYX_UPDATE_TEST_QUIT"] != nil { NSApp.terminate(nil) } else { exit(0) }
+                }
+            }
+            return   // before any services start, so nothing else can ask for anything
+        }
+        // Debug: ONYX_IMAGINETEST=<dir> runs Create with AI's painting step for real (ONYX_IMAGINETEST_ART, default realistic)
+        // and saves what it paints, before any services start.
+        if let dir = ProcessInfo.processInfo.environment["ONYX_IMAGINETEST"] {
+            let art = ArtStyle(rawValue: ProcessInfo.processInfo.environment["ONYX_IMAGINETEST_ART"] ?? "") ?? .realistic
+            let m = LoopMaker.shared, start = Date()
+            m.imagine(ProcessInfo.processInfo.environment["ONYX_IMAGINETEST_IDEA"] ?? "a misty alpine lake at dawn", art: art)
+            Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
+                MainActor.assumeIsolated {
+                    guard !m.busy else { return }
+                    t.invalidate()
+                    for (i, img) in m.images.enumerated() {
+                        if let d = CGImageDestinationCreateWithURL(URL(fileURLWithPath: "\(dir)/imagine-\(i).png") as CFURL, "public.png" as CFString, 1, nil) {
+                            CGImageDestinationAddImage(d, img, nil); CGImageDestinationFinalize(d)
+                        }
+                    }
+                    let log = "step: \(m.step)\nimages: \(m.images.count)\nname: \(m.name)\neffects: \(m.effects.map(\.rawValue).sorted())\nscene: \(m.scene)\nplan error: \(LoopMaker.planError ?? "none")\nseconds: \(Int(Date().timeIntervalSince(start)))\n"
+                    try? log.write(toFile: dir + "/imagine.log", atomically: true, encoding: .utf8)
+                    exit(0)
+                }
+            }
+            return
+        }
+        // Debug: ONYX_SCENESHOT=<dir> renders the GPU scenes to PNGs (see SceneShots), before any services start.
+        if let dir = ProcessInfo.processInfo.environment["ONYX_SCENESHOT"] { SceneShots.run(dir) }
+        // Debug: ONYX_LOOPTEST=<dir> builds an AI loop end to end (see LoopSelfTest), before any services start.
+        if let dir = ProcessInfo.processInfo.environment["ONYX_LOOPTEST"] { Task { @MainActor in await LoopSelfTest.run(dir) }; return }
+        // Debug: ONYX_SHEETSHOT=<png>:<create|pick|wallpapers> screenshots the Create with AI sheet (pick uses ONYX_SHEETSHOT_ART
+        // as the painting) or the Live Wallpapers window, before any services start, then quits.
+        if let spec = ProcessInfo.processInfo.environment["ONYX_SHEETSHOT"], let colon = spec.lastIndex(of: ":") {
+            let path = String(spec[..<colon]), which = String(spec[spec.index(after: colon)...])
+            var win: NSWindow?
+            if which == "onboarding" {
+                let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 620), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+                w.titlebarAppearsTransparent = true; w.titleVisibility = .hidden
+                w.contentView = NSHostingView(rootView: OnboardingView {})
+                w.center(); w.makeKeyAndOrderFront(nil); win = w
+            } else if which.hasPrefix("tour"), let n = Int(which.dropFirst(4)) {
+                let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 470), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+                w.titlebarAppearsTransparent = true; w.titleVisibility = .hidden
+                w.contentView = NSHostingView(rootView: FeatureTour(step: .constant(n)).frame(width: 520, height: 470).background(Color(hex: "0B0B12")).environment(\.colorScheme, .dark))
+                w.center(); w.makeKeyAndOrderFront(nil); win = w
+            } else if which == "wallpapers" {
+                let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 680), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+                w.titlebarAppearsTransparent = true; w.titleVisibility = .hidden
+                w.contentViewController = NSHostingController(rootView: WallpapersView()); w.setContentSize(NSSize(width: 960, height: 680))
+                w.center(); w.makeKeyAndOrderFront(nil); win = w
+            } else {
+                if which == "pick", let art = ProcessInfo.processInfo.environment["ONYX_SHEETSHOT_ART"],
+                   let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: art) as CFURL, nil), let img = CGImageSourceCreateImageAtIndex(src, 0, nil) {
+                    let m = LoopMaker.shared
+                    m.images = [img, img]; m.name = "Minecraft Sunset"; m.effects = [.petals, .stars]; m.step = .pick
+                }
+                let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
+                w.contentView = NSHostingView(rootView: CreateLoopSheet {}); w.center(); w.makeKeyAndOrderFront(nil); win = w
+            }
+            NSApp.activate()
+            win?.level = .floating; win?.orderFrontRegardless()   // above whatever's in front, just for the picture
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                if let f = win?.frame, let h = NSScreen.screens.first?.frame.maxY {
+                    let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                    p.arguments = ["-x", "-R", "\(Int(f.minX)),\(Int(h - f.maxY)),\(Int(f.width)),\(Int(f.height))", path]
+                    try? p.run(); p.waitUntilExit()
+                }
+                exit(0)
+            }
+            return
+        }
+        // Debug: ONYX_SDTEST=<dir> runs the Stable Diffusion styles and a parallax loop (see SDSelfTest), before any services start.
+        if let dir = ProcessInfo.processInfo.environment["ONYX_SDTEST"] { Task { @MainActor in await SDSelfTest.run(dir) }; return }
+        // Debug: ONYX_SCENETEST=<dir> plays the GPU scenes on the desktop and measures them (see ScenePerfTest).
+        if let dir = ProcessInfo.processInfo.environment["ONYX_SCENETEST"] { Task { @MainActor in await ScenePerfTest.run(dir) }; return }
         if Updater.shared.installPendingAtLaunch() { NSApp.terminate(nil); return }   // swap in a downloaded update, then reopen
 
         // Lazy services: only what the idle notch needs starts now; heavier ones start on first use.
@@ -51,23 +139,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AutoQuit.shared.start()                 // optional: quit apps that have no windows
         OnyxReminders.shared.start()            // AI-set reminders that ring in the notch
         Updater.shared.start()                  // new GitHub releases download in the background
+        NotesSync.shared.start()                // optional two-way sync with Apple Notes
+        EarbudsWatcher.shared.start()           // AirPods battery pops up when they connect
+        RainWatch.shared.start()                // "Rain in ~15 min" heads-up
+        Speaker.shared.start()                  // speaks Onyx AI's answers (Settings › Privacy › AI)
+        SettingsSync.shared.start()             // optional: same settings on all your Macs (iCloud Drive)
+        WallpaperEngine.shared.start()          // live wallpapers behind the desktop icons (when turned on)
         // Debug: ONYX_AI_TEST=1 runs rendered math problems through Onyx AI at every effort into ai-test.log, then quits.
         if ProcessInfo.processInfo.environment["ONYX_AI_TEST"] != nil {
             Task { @MainActor in try? await Task.sleep(for: .seconds(3)); await AISelfTest.run() }
-        }
-        // Debug: ONYX_UPDATE_TEST=<file> checks GitHub now, logs the result and exits (ONYX_UPDATE_TEST_QUIT=1 quits
-        // normally instead, so a downloaded update installs). Pair with ONYX_UPDATE_CURRENT and ONYX_UPDATE_DEST.
-        if let path = ProcessInfo.processInfo.environment["ONYX_UPDATE_TEST"] {
-            Updater.shared.check(user: true)
-            Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { t in
-                switch Updater.shared.state {
-                case .checking, .downloading: return
-                case let s:
-                    t.invalidate()
-                    try? "\(s)\n".write(toFile: path, atomically: true, encoding: .utf8)
-                    if ProcessInfo.processInfo.environment["ONYX_UPDATE_TEST_QUIT"] != nil { NSApp.terminate(nil) } else { exit(0) }
-                }
-            }
         }
         // Debug: ONYX_FAKENOTCH=1 draws a pretend camera housing over the notch (see NotchGeometry.fakeNotch).
         // ONYX_NOTCHTEST=<dir> also screenshots the top of the screen closed, with an activity, and open, then quits.
@@ -101,6 +181,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     }
                 }
             }
+        }
+        // Debug: ONYX_NOTESYNC_SELFTEST=<file> checks the Apple Notes sync decisions offline, then quits.
+        if let path = ProcessInfo.processInfo.environment["ONYX_NOTESYNC_SELFTEST"] { NotesSyncSelfTest.run(path); exit(0) }
+        // Debug: ONYX_NOTESYNC_LIVETEST=<file> round-trips notes through a throwaway Apple Notes folder (see NotesSyncLiveTest).
+        if let path = ProcessInfo.processInfo.environment["ONYX_NOTESYNC_LIVETEST"] { Task { @MainActor in await NotesSyncLiveTest.run(path) } }
+        // Debug: ONYX_FEATURES_TEST=<dir> checks AirPods, rain, weather stations, voice and settings sync (see FeatureSelfTest).
+        if let dir = ProcessInfo.processInfo.environment["ONYX_FEATURES_TEST"] {
+            Task { @MainActor in try? await Task.sleep(for: .seconds(2)); await FeatureSelfTest.run(dir) }
+        }
+        // Debug: ONYX_WINDOWSHOT=<png>:<onboarding|wallpapers|launcher> opens that window, screenshots it, then quits.
+        if let spec = ProcessInfo.processInfo.environment["ONYX_WINDOWSHOT"], let colon = spec.lastIndex(of: ":") {
+            let path = String(spec[..<colon]), which = String(spec[spec.index(after: colon)...])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                var win: NSWindow?
+                switch which {
+                case "onboarding": self.showOnboarding(); win = self.onboardingWindow
+                case "wallpapers": self.openWallpapers(); win = self.wallpapersWindow
+                default: break
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    if let f = win?.frame, let h = NSScreen.screens.first?.frame.maxY {
+                        let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                        p.arguments = ["-x", "-R", "\(Int(f.minX)),\(Int(h - f.maxY)),\(Int(f.width)),\(Int(f.height))", path]
+                        try? p.run(); p.waitUntilExit()
+                    }
+                    exit(0)
+                }
+            }
+        }
+        // Debug: ONYX_ENHANCE_TEST=<dir> runs a generated clip through the AI video enhancer (see EnhanceSelfTest).
+        if let dir = ProcessInfo.processInfo.environment["ONYX_ENHANCE_TEST"] { Task.detached { await EnhanceSelfTest.run(dir) } }
+        // Debug: ONYX_WALLTEST=<dir> checks live wallpapers and the app launcher (see WallpaperSelfTest).
+        if let dir = ProcessInfo.processInfo.environment["ONYX_WALLTEST"] {
+            Task { @MainActor in try? await Task.sleep(for: .seconds(2)); await WallpaperSelfTest.run(dir) }
+        }
+        // Debug: ONYX_SPOTLIGHTTEST=<dir> checks taking ⌘Space from Spotlight and giving it back (see SpotlightSelfTest).
+        if let dir = ProcessInfo.processInfo.environment["ONYX_SPOTLIGHTTEST"] {
+            Task { @MainActor in try? await Task.sleep(for: .seconds(2)); await SpotlightSelfTest.run(dir) }
+        }
+        // Debug: ONYX_LAUNCHERFOCUS=<file> checks you can type into the App Launcher's search right away (see LauncherFocusTest).
+        if let file = ProcessInfo.processInfo.environment["ONYX_LAUNCHERFOCUS"] {
+            Task { @MainActor in try? await Task.sleep(for: .seconds(2)); await LauncherFocusTest.run(file) }
         }
         // Debug: ONYX_REMINDER_TEST=1 sets a reminder 5 seconds out to exercise the ringing notch.
         if ProcessInfo.processInfo.environment["ONYX_REMINDER_TEST"] != nil {
@@ -363,6 +485,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Optimization…", action: #selector(openOptimization), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Live Wallpapers…", action: #selector(openWallpapers), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Take the Tour…", action: #selector(showTour), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "App Launcher", action: #selector(openLauncher), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Set Up Permissions…", action: #selector(showOnboarding), keyEquivalent: "").target = self
         let upd = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
         upd.target = self
@@ -461,10 +586,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         optimizeWindow?.makeKeyAndOrderFront(nil)
     }
 
+    /// Live Wallpapers gets its own window, like Optimization.
+    @objc func openWallpapers() {
+        notch.collapse()
+        if wallpapersWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
+                             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                             backing: .buffered, defer: false)
+            w.title = "Live Wallpapers"
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            w.isReleasedWhenClosed = false
+            w.isRestorable = false
+            w.contentViewController = NSHostingController(rootView: WallpapersView())
+            w.setContentSize(NSSize(width: 960, height: 680))
+            w.center()
+            wallpapersWindow = w
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        wallpapersWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func openLauncher() { MainActor.assumeIsolated { AppLauncher.shared.toggle() } }
+
+    /// The feature tour on its own, any time.
+    @objc func showTour() {
+        notch.collapse()
+        tourWindow?.close()
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 620),
+                         styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+        w.titlebarAppearsTransparent = true
+        w.titleVisibility = .hidden
+        w.isReleasedWhenClosed = false
+        w.isRestorable = false
+        w.contentViewController = NSHostingController(rootView: OnboardingView(done: { [weak self] in self?.tourWindow?.close() }, tourOnly: true))
+        w.center()
+        tourWindow = w
+        NSApp.activate(ignoringOtherApps: true)
+        w.makeKeyAndOrderFront(nil)
+    }
+
     @objc func showOnboarding() {
         notch.collapse()
         if onboardingWindow == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 620),
                              styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
             w.titlebarAppearsTransparent = true
             w.titleVisibility = .hidden

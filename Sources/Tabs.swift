@@ -404,6 +404,8 @@ struct ShelfItem: View {
 struct AITab: View {
     @EnvironmentObject var model: NotchModel
     @ObservedObject var ai = Assistant.shared
+    @ObservedObject var voice = VoiceInput.shared
+    @ObservedObject var speaker = Speaker.shared
     @State private var input = ""
     @FocusState private var focused: Bool
 
@@ -466,6 +468,16 @@ struct AITab: View {
                 .padding(.horizontal, 10).padding(.vertical, 4)
                 .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
             }
+            if case .failed(let why) = voice.state {
+                HStack(spacing: 8) {
+                    Image(systemName: "mic.slash").foregroundStyle(.orange)
+                    Text(why).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                    Spacer()
+                    Button { voice.dismissError() } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+            }
             HStack(spacing: 8) {
                 Picker("", selection: $ai.agentMode) {
                     Text("Ask").tag(false)
@@ -500,6 +512,8 @@ struct AITab: View {
                     .background(Color.primary.opacity(0.1), in: Capsule())
                     .focused($focused)
                     .onSubmit(submit)
+                    .onChange(of: voice.transcript) { _, t in if voice.state == .listening { input = t } }
+                MicButton { text in input = ""; Speaker.askedByVoice = true; ai.send(text) }
                 if ai.busy {
                     Button { ai.stop() } label: { Image(systemName: "stop.circle.fill").font(.system(size: 18)) }.buttonStyle(.plain)
                 } else {
@@ -534,6 +548,7 @@ struct AITab: View {
 
     private func submit() {
         let t = input; input = ""
+        Speaker.askedByVoice = false
         ai.send(t)
     }
 
@@ -548,8 +563,16 @@ struct AITab: View {
                     .background(Color.blue.opacity(0.7), in: RoundedRectangle(cornerRadius: 12)).textSelection(.enabled)
             }
         case .assistant:
-            Text(m.text).font(.system(size: 12)).padding(.horizontal, 10).padding(.vertical, 6)
-                .background(Color.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12)).textSelection(.enabled)
+            HStack(alignment: .bottom, spacing: 4) {
+                Text(m.text).font(.system(size: 12)).padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(Color.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12)).textSelection(.enabled)
+                if !ai.busy || ai.messages.last?.id != m.id {
+                    Button { speaker.speakingID == m.id ? speaker.stop() : speaker.speak(m.text, id: m.id) } label: {
+                        Image(systemName: speaker.speakingID == m.id ? "stop.fill" : "speaker.wave.2").font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help(speaker.speakingID == m.id ? "Stop" : "Read aloud")
+                }
+            }
         case .tool:
             Label(m.text, systemImage: "wand.and.stars").font(.system(size: 10.5)).foregroundStyle(.cyan)
         case .error:

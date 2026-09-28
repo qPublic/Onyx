@@ -17,6 +17,9 @@ enum Prefs {
     static let tickerActivity = "tickerActivity"
     static let downloadActivity = "downloadActivity"
     static let downloadToShelf = "downloadToShelf"
+    static let earbudsActivity = "earbudsActivity"
+    static let rainAlerts = "rainAlerts"
+    static let preciseLocation = "preciseLocation"
     static let leagues = "leagues"
     static let favoriteTeams = "favoriteTeams"
     static let watchlist = "watchlist"
@@ -35,6 +38,10 @@ enum Prefs {
             tickerActivity: false,
             downloadActivity: true,
             downloadToShelf: true,
+            earbudsActivity: true,
+            rainAlerts: true,
+            preciseLocation: true,
+            "ai.speak": "voice",
             leagues: "nfl,nba,mlb,nhl,epl",
             favoriteTeams: "",
             watchlist: "AAPL,NVDA,^GSPC,BTC-USD",
@@ -43,7 +50,8 @@ enum Prefs {
             eyeBreak: false,
             hoverDelay: 0.12,
             notes: "",
-        ].merging(AP.defaults) { a, _ in a }.merging(Fun.defaults) { a, _ in a }.merging(Opt.defaults) { a, _ in a })
+        ].merging(AP.defaults) { a, _ in a }.merging(Fun.defaults) { a, _ in a }.merging(Opt.defaults) { a, _ in a }
+         .merging(WallpaperEngine.defaults) { a, _ in a })
     }
 
     static func bool(_ k: String) -> Bool { UserDefaults.standard.bool(forKey: k) }
@@ -137,6 +145,7 @@ enum HUDEvent: Equatable {
     case lowBattery(Int)
     case message(icon: String, text: String, tint: Color)
     case eyeBreak(until: Date)
+    case earbuds(name: String, left: Int?, right: Int?, caseLevel: Int?, main: Int?)
 }
 
 struct NotchGeometry: Equatable {
@@ -415,6 +424,7 @@ final class NotchController {
     private var sticky: Bool {
         model.pinned || WidgetLayout.shared.editing || HomeLayout.shared.editing
             || (model.tab == .ai && (panel?.isKeyWindow ?? false)) || model.tab == .shelf || menuTracking || !Prefs.bool(AP.closeOnLeave)
+            || MainActor.assumeIsolated { VoiceInput.shared.active }   // don't close while you're talking to Onyx AI
     }
 
     /// Switching to another app is a stronger "I'm done" signal than the pointer leaving, so it

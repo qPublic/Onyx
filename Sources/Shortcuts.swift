@@ -40,7 +40,7 @@ struct Shortcut: Equatable {
 }
 
 enum HotAction: String, CaseIterable, Identifiable {
-    case toggleNotch, toggleHide, circleSearch, askAI, captureRegion, captureScreen, toggleRecording
+    case toggleNotch, toggleHide, circleSearch, askAI, captureRegion, captureScreen, toggleRecording, openLauncher
     var id: String { rawValue }
 
     var title: String {
@@ -52,6 +52,7 @@ enum HotAction: String, CaseIterable, Identifiable {
         case .captureRegion: "Screenshot region"
         case .captureScreen: "Screenshot full screen"
         case .toggleRecording: "Start / stop screen recording"
+        case .openLauncher: "Open App Launcher"
         }
     }
 
@@ -65,6 +66,7 @@ enum HotAction: String, CaseIterable, Identifiable {
         case .captureRegion: return Shortcut(keyCode: 21, mods: co)    // ⌃⌥4
         case .captureScreen: return Shortcut(keyCode: 20, mods: co)    // ⌃⌥3
         case .toggleRecording: return Shortcut(keyCode: 23, mods: co)  // ⌃⌥5
+        case .openLauncher: return nil                                 // none until you pick one
         }
     }
 
@@ -79,6 +81,7 @@ enum HotAction: String, CaseIterable, Identifiable {
         case .captureRegion: QuickCapture.shared.screenshot(.region)
         case .captureScreen: QuickCapture.shared.screenshot(.screen)
         case .toggleRecording: QuickCapture.shared.toggleRecording()
+        case .openLauncher: MainActor.assumeIsolated { AppLauncher.shared.toggle() }   // hotkeys fire on the main thread
         }
     }
 }
@@ -104,12 +107,97 @@ enum Shortcuts {
     static func reset() {
         HotAction.allCases.forEach { UserDefaults.standard.removeObject(forKey: key($0)) }
         reload()
+        if SpotlightKey.isOn { Task { await SpotlightKey.set(false) } }   // the default is Spotlight on ⌘Space
     }
 
     static func reload() {
         HotKeys.shared.unregisterAll()
         for a in HotAction.allCases {
             if let s = get(a) { HotKeys.shared.register(keyCode: s.keyCode, modifiers: s.flags) { a.perform() } }
+        }
+    }
+}
+
+// MARK: - ⌘Space for the App Launcher
+
+/// Takes ⌘Space from Spotlight for the App Launcher. Spotlight moves to ⌥⌘Space, and Finder's search window, which
+/// macOS also puts on ⌥⌘Space, is turned off. What was there before is saved and put back when this is turned off.
+enum SpotlightKey {
+    static let key = "spotlight.swapped"
+    private static let savedKey = "spotlight.saved"
+    private static let domain = "com.apple.symbolichotkeys" as CFString
+    private static let list = "AppleSymbolicHotKeys" as CFString
+    static let spotlight = "64", finderSearch = "65"   // macOS's ids for these two shortcuts
+    static let cmdSpace = Shortcut(keyCode: 49, mods: NSEvent.ModifierFlags.command.rawValue)
+    static let cmd = 1 << 20, opt = 1 << 19
+
+    static var isOn: Bool { UserDefaults.standard.bool(forKey: key) }
+
+    private static func entry(_ mods: Int, enabled: Bool = true) -> [String: Any] {
+        ["enabled": enabled, "value": ["parameters": [32, 49, mods], "type": "standard"]]
+    }
+    /// macOS leaves a shortcut out of the list while it's still the default.
+    private static let builtIn = [spotlight: entry(cmd), finderSearch: entry(cmd | opt)]
+
+    static func read() -> [String: Any] {
+        CFPreferencesCopyValue(list, domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String: Any] ?? [:]
+    }
+
+    private static func write(_ d: [String: Any]) {
+        CFPreferencesSetValue(list, d as CFDictionary, domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+        CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+    }
+
+    private static func enabled(_ d: [String: Any], _ id: String) -> Bool {
+        ((d[id] ?? builtIn[id]) as? [String: Any])?["enabled"] as? Bool ?? false
+    }
+
+    /// Whether that shortcut is turned on and set to Space with exactly these modifiers.
+    static func uses(_ d: [String: Any], _ id: String, mods: Int) -> Bool {
+        guard enabled(d, id), let v = ((d[id] ?? builtIn[id]) as? [String: Any])?["value"] as? [String: Any],
+              let p = v["parameters"] as? [Int], p.count == 3 else { return false }
+        return p[1] == 49 && p[2] & 0x1E0000 == mods
+    }
+
+    /// Makes macOS pick up the new shortcuts now instead of at the next login.
+    private static func activate() async {
+        _ = await Shell.read("/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings", ["-u"])
+    }
+
+    @MainActor static func set(_ on: Bool) async {
+        guard on != isOn else { return }
+        var d = read()
+        if on {
+            var saved: [String: Any] = [:]   // the old entry, or "default" if there wasn't one
+            if uses(d, spotlight, mods: cmd) {
+                saved[spotlight] = d[spotlight] ?? "default"
+                d[spotlight] = entry(cmd | opt)
+                if uses(d, finderSearch, mods: cmd | opt) {
+                    saved[finderSearch] = d[finderSearch] ?? "default"
+                    d[finderSearch] = entry(cmd | opt, enabled: false)
+                }
+            }
+            UserDefaults.standard.set(saved, forKey: savedKey)
+            UserDefaults.standard.set(true, forKey: key)
+            if !saved.isEmpty { write(d); await activate() }
+            Shortcuts.set(.openLauncher, cmdSpace)
+        } else {
+            let saved = UserDefaults.standard.dictionary(forKey: savedKey) ?? [:]
+            var wasDefault: [String] = []
+            func restore(_ id: String) {
+                if let old = saved[id] as? [String: Any] { d[id] = old } else { d[id] = builtIn[id]; wasDefault.append(id) }
+            }
+            // Only put back what's still the way Onyx left it, in case it was changed in System Settings since.
+            if saved[spotlight] != nil, uses(d, spotlight, mods: cmd | opt) { restore(spotlight) }
+            if saved[finderSearch] != nil, !enabled(d, finderSearch) { restore(finderSearch) }
+            UserDefaults.standard.removeObject(forKey: savedKey)
+            UserDefaults.standard.set(false, forKey: key)
+            if !saved.isEmpty {
+                // macOS only applies shortcuts that are written out, so write the defaults, apply them, then drop them again.
+                write(d); await activate()
+                if !wasDefault.isEmpty { wasDefault.forEach { d.removeValue(forKey: $0) }; write(d) }
+            }
+            for a in HotAction.allCases where Shortcuts.get(a) == cmdSpace { Shortcuts.set(a, nil) }   // Spotlight has it again
         }
     }
 }

@@ -366,8 +366,12 @@ final class WeatherService: ObservableObject {
     @Published var place = ""
     @Published var hourly: [WxHour] = []
     @Published var daily: [WxDay] = []
+    @Published var source = ""             // where "now" comes from: the closest station, or the forecast model
+    @Published var precise = false         // location from Location Services (vs. the IP address's city)
+    var coordinates: (Double, Double)?
 
     func start() {
+        _ = LocationProvider.shared            // made on the main thread, where its callbacks arrive
         Task { await refresh() }
         Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { _ in Task { await self.refresh() } }.tolerant()
     }
@@ -378,9 +382,12 @@ final class WeatherService: ObservableObject {
     }
 
     func refresh() async {
-        var lat = 0.0, lon = 0.0, name = ""
+        var lat = 0.0, lon = 0.0, name = "", precise = false
         let city = Prefs.string(Prefs.weatherCity)
-        if city.isEmpty {
+        if city.isEmpty, Prefs.bool(Prefs.preciseLocation), let loc = await LocationProvider.shared.current() {
+            lat = loc.coordinate.latitude; lon = loc.coordinate.longitude; precise = true
+            name = await LocationProvider.placeName(loc) ?? ""
+        } else if city.isEmpty {
             guard let j = await json("https://ipwho.is/"), let la = j["latitude"] as? Double, let lo = j["longitude"] as? Double else { return }
             lat = la; lon = lo; name = j["city"] as? String ?? ""
         } else {
@@ -390,16 +397,30 @@ final class WeatherService: ObservableObject {
                   let la = r["latitude"] as? Double, let lo = r["longitude"] as? Double else { return }
             lat = la; lon = lo; name = r["name"] as? String ?? city
         }
+        // Rounded to about 1 km before it goes to any weather service.
+        lat = (lat * 100).rounded() / 100; lon = (lon * 100).rounded() / 100
         let unit = Prefs.bool(Prefs.fahrenheit) ? "&temperature_unit=fahrenheit" : ""
         guard let j = await json("https://api.open-meteo.com/v1/forecast?latitude=\(lat)&longitude=\(lon)&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code,precipitation_probability&daily=temperature_2m_max,temperature_2m_min,weather_code&timezone=auto&forecast_days=7\(unit)"),
               let cur = j["current"] as? [String: Any] else { return }
         let daily = j["daily"] as? [String: Any]
         let hrs = Self.parseHourly(j["hourly"] as? [String: Any])
         let days = Self.parseDaily(daily)
+        // "Now" comes from the closest weather station that reported recently, if one is within 20 km.
+        let station = await WeatherSources.nearest(lat: lat, lon: lon)
+        let f = Prefs.bool(Prefs.fahrenheit)
         await MainActor.run {
             self.place = name
             self.temp = cur["temperature_2m"] as? Double
             self.code = cur["weather_code"] as? Int ?? 0
+            if let s = station {
+                self.temp = f ? s.tempC * 9 / 5 + 32 : s.tempC
+                if let c = s.code { self.code = c }
+                self.source = "\(s.name) (\(s.id)), \(s.distanceKm < 1 ? "under 1" : String(Int(s.distanceKm.rounded()))) km away"
+            } else {
+                self.source = "Forecast model for your location (no weather station within 20 km)"
+            }
+            self.coordinates = (lat, lon)
+            self.precise = precise
             self.high = (daily?["temperature_2m_max"] as? [Double])?.first
             self.low = (daily?["temperature_2m_min"] as? [Double])?.first
             self.hourly = hrs
@@ -657,10 +678,13 @@ final class BluetoothService: ObservableObject {
     }
 
     /// AirPods/headphone battery isn't in IOBluetooth; system_profiler exposes it. Runs off the main thread.
-    func refreshBattery() {
+    func refreshBattery(then done: (([String: BTBattery]) -> Void)? = nil) {
         DispatchQueue.global(qos: .utility).async {
-            guard let data = Self.runProfiler(), let map = Self.parseBattery(data) else { return }
-            DispatchQueue.main.async { if map != self.battery { self.battery = map } }
+            let map = Self.runProfiler().flatMap(Self.parseBattery)
+            DispatchQueue.main.async {
+                if let map, map != self.battery { self.battery = map }
+                done?(map ?? [:])
+            }
         }
     }
 

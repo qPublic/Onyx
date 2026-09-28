@@ -18,6 +18,7 @@ struct Note: Codable, Identifiable, Hashable {
     var created = Date()
     var updated = Date()
     var cards: [Flashcard] = []
+    var apple: AppleLink?          // its twin in Apple Notes, when syncing is on
 
     var title: String {
         body.split(separator: "\n", omittingEmptySubsequences: true).first.map { String($0).trimmingCharacters(in: .whitespaces) }
@@ -33,7 +34,8 @@ final class NotesStore: ObservableObject {
     static let shared = NotesStore()
     @Published var notes: [Note] = [] { didSet { scheduleSave() } }
     private var saveWork: DispatchWorkItem?
-    private var file: URL { Prefs.supportDir.appendingPathComponent("notes.json") }
+    // Debug: ONYX_NOTES_FILE=<path> uses a separate notes file (for testing sync without touching your notes).
+    private var file: URL { ProcessInfo.processInfo.environment["ONYX_NOTES_FILE"].map { URL(fileURLWithPath: $0) } ?? Prefs.supportDir.appendingPathComponent("notes.json") }
 
     init() {
         if let d = try? Data(contentsOf: file), let n = try? JSONDecoder().decode([Note].self, from: d) {
@@ -67,7 +69,10 @@ final class NotesStore: ObservableObject {
         guard let i = notes.firstIndex(where: { $0.id == id }) else { return }
         change(&notes[i])
     }
-    func delete(_ id: UUID) { notes.removeAll { $0.id == id } }
+    func delete(_ id: UUID) {
+        if let link = notes.first(where: { $0.id == id })?.apple { NotesSync.shared.noteDeleted(link) }
+        notes.removeAll { $0.id == id }
+    }
 
     /// Pinned first, then most recently edited; filtered by folder and search text.
     func list(folder: String, search: String) -> [Note] {
@@ -81,6 +86,8 @@ final class NotesStore: ObservableObject {
 
 struct NotesView: View {
     @ObservedObject var store = NotesStore.shared
+    @ObservedObject var sync = NotesSync.shared
+    @AppStorage(NotesSync.key) private var syncOn = false
     @AppStorage("notes.selected") private var selectedRaw = ""
     @AppStorage("notes.folder") private var folder = "All"
     @State private var search = ""
@@ -131,10 +138,16 @@ struct NotesView: View {
                 }
                 Divider()
                 Button("New Folder…") { askFolder = true }
+                Divider()
+                Button { sync.setEnabled(!syncOn) } label: {
+                    Label("Sync with Apple Notes", systemImage: syncOn ? "checkmark" : "arrow.triangle.2.circlepath")
+                }
+                if syncOn { Button("Sync Now") { sync.syncNow() } }
             } label: {
                 Label(folder == "All" ? "All Notes" : folder, systemImage: "folder").font(.system(size: 10.5, weight: .semibold))
             }
             .menuStyle(.borderlessButton).fixedSize().frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .trailing) { if syncOn { NotesSyncBadge(status: sync.status) } }
 
             let items = store.list(folder: folder, search: search)
             if items.isEmpty {
@@ -202,6 +215,16 @@ struct NotesView: View {
                 .font(.system(size: 11))
                 if studying && !note.cards.isEmpty {
                     FlashcardStudyView(cards: note.cards) { studying = false }
+                } else if note.apple?.rich == true {
+                    // Formatted in Apple Notes (checklists, pictures, tables…): shown here, edited there.
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle").foregroundStyle(.secondary)
+                        Text("This note has formatting Onyx can't show, so edit it in Apple Notes.").lineLimit(2)
+                        Spacer(minLength: 4)
+                        Button("Open") { NotesSync.open(note.apple!.id) }.controlSize(.small)
+                    }
+                    .font(.system(size: 10.5))
+                    ScrollView { Text(note.body).font(.system(size: 12)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                 } else {
                     TextEditor(text: Binding(
                         get: { store.notes.first(where: { $0.id == id })?.body ?? "" },

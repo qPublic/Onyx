@@ -132,6 +132,12 @@ struct SettingsView: View {
             (NSApp.delegate as? AppDelegate)?.openOptimization()
             return
         }
+        // So does Live Wallpapers.
+        if e.group == "Live Wallpapers" {
+            query = ""
+            (NSApp.delegate as? AppDelegate)?.openWallpapers()
+            return
+        }
         withAnimation(.smooth(duration: 0.28)) { selection = e.section; found = e }
         query = ""
     }
@@ -394,6 +400,7 @@ struct BehaviorSettings: View {
     @AppStorage(AP.snapLayouts) var snapLayouts = true
     @AppStorage(AP.hudPopup) var hudPopup = true
     @AppStorage(AP.userHidden) var userHidden = false
+    @AppStorage(SpotlightKey.key) var spotlightSwap = false
     @AppStorage(AP.dodgeMenus) var dodgeMenus = true
     @AppStorage(AP.interceptVolume) var interceptVolume = true
     @AppStorage(AP.menuBarIcon) var menuBarIcon = true
@@ -471,12 +478,16 @@ struct BehaviorSettings: View {
                 Toggle("Open at login", isOn: $loginItem).onChange(of: loginItem) { _, v in LoginItem.set(v) }
             }
             UpdateSettings()
+            SettingsSyncSection()
             Section {
                 Toggle("Hide the notch completely", isOn: $userHidden)
                 Text("Fully removes the notch from the screen — for tests, exams or presentations. Toggle it back anytime with its shortcut (below) or the menu bar icon. This is remembered until you turn it off.")
                     .font(.caption).foregroundStyle(.secondary)
             } header: { Text("Hide notch") }
             Section {
+                Toggle("⌘Space opens the App Launcher", isOn: Binding(get: { spotlightSwap }, set: { on in Task { await SpotlightKey.set(on) } }))
+                Text("Spotlight moves to ⌥⌘Space. Turn this off to give ⌘Space back to Spotlight, and do that before you delete Onyx.")
+                    .font(.caption).foregroundStyle(.secondary)
                 ForEach(HotAction.allCases) { a in
                     LabeledContent(a.title) { ShortcutRecorder(action: a) }
                 }
@@ -589,6 +600,8 @@ struct WidgetsSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            NotesSyncSettings()
+
             Section("Tabs") {
                 let order = AP.enabledTabs + NotchTab.allCases.filter { !AP.enabledTabs.contains($0) }
                 ForEach(order) { t in
@@ -652,6 +665,10 @@ struct LiveSettings: View {
     @AppStorage(Prefs.tickerActivity) var tickerActivity = false
     @AppStorage(Prefs.downloadActivity) var downloadActivity = true
     @AppStorage(Prefs.downloadToShelf) var downloadToShelf = true
+    @AppStorage(Prefs.earbudsActivity) var earbudsActivity = true
+    @AppStorage(Prefs.rainAlerts) var rainAlerts = true
+    @AppStorage(Prefs.preciseLocation) var preciseLocation = true
+    @ObservedObject var weather = WeatherService.shared
 
     var body: some View {
         Form {
@@ -661,6 +678,12 @@ struct LiveSettings: View {
                 Toggle("Stock ticker", isOn: $tickerActivity)
                 Toggle("Download progress", isOn: $downloadActivity)
                 Toggle("Put finished downloads on the Shelf", isOn: $downloadToShelf)
+                Toggle("AirPods & headphone battery when they connect", isOn: $earbudsActivity)
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Rain alerts", isOn: $rainAlerts)
+                    Text("A heads-up in the notch when rain, snow or a storm is about to start where you are.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text("Now Playing no longer takes over the notch — add it as a collapsed-notch widget in Widgets to keep it in a fixed spot.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -686,6 +709,19 @@ struct LiveSettings: View {
             Section("Weather") {
                 TextField("City", text: $weatherCity, prompt: Text("Automatic")).onSubmit { Task { await WeatherService.shared.refresh() } }
                 Toggle("Fahrenheit", isOn: $fahrenheit).onChange(of: fahrenheit) { _, _ in Task { await WeatherService.shared.refresh() } }
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Use my Mac's location", isOn: $preciseLocation).onChange(of: preciseLocation) { _, _ in Task { await WeatherService.shared.refresh() } }
+                    Text("Much more accurate than guessing from your internet connection, which can be tens of kilometers off. Onyx rounds it to about 1 km before asking for the weather. Leave City empty to use it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if !weather.place.isEmpty {
+                    LabeledContent("Location", value: weather.place + (weatherCity.isEmpty ? (weather.precise ? " (your Mac's location)" : " (from your internet connection)") : ""))
+                }
+                if !weather.source.isEmpty {
+                    LabeledContent("Current conditions from") { Text(weather.source).multilineTextAlignment(.trailing) }
+                    Text("Onyx uses the closest weather station that reported in the last 90 minutes (US National Weather Service or airport reports worldwide). If none is within 20 km, it uses the forecast model for your exact location.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
@@ -696,13 +732,19 @@ struct LiveSettings: View {
 
 struct LockSettings: View {
     @AppStorage(AIEffort.key) private var effort = AIEffort.medium.rawValue
+    @AppStorage(Speaker.key) private var speak = "voice"
     var body: some View {
         Form {
             Section("Permissions") {
+                permission("Accessibility", "Volume & brightness HUD, snap layouts, keeping clear of menus", "Privacy_Accessibility")
                 permission("Screen Recording", "Circle to Search, AI screen reading", "Privacy_ScreenCapture")
                 permission("Calendars & Reminders", "Calendar widget & AI agent", "Privacy_Calendars")
-                permission("Automation", "Spotify & Apple Music", "Privacy_Automation")
+                permission("Automation", "Spotify, Apple Music & Apple Notes sync", "Privacy_Automation")
+                permission("Bluetooth", "Connecting devices from the notch", "Privacy_Bluetooth")
+                permission("Downloads folder", "Download progress in the notch", "Privacy_FilesAndFolders")
                 permission("Camera", "Mirror", "Privacy_Camera")
+                permission("Microphone", "Asking Onyx AI by voice", "Privacy_Microphone")
+                permission("Location", "Accurate weather & rain alerts", "Privacy_LocationServices")
                 Button("Re-run setup…") { (NSApp.delegate as? AppDelegate)?.showOnboarding() }
             }
             Section("AI") {
@@ -712,6 +754,13 @@ struct LockSettings: View {
                     ForEach(AIEffort.allCases) { Text($0.title).tag($0.rawValue) }
                 }
                 Text((AIEffort(rawValue: effort) ?? .medium).detail + " You can also change it in the AI tab.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Picker("Speak answers", selection: $speak) {
+                    Text("Off").tag("off")
+                    Text("When I ask by voice").tag("voice")
+                    Text("Always").tag("always")
+                }
+                Text("Ask by voice with the mic button in the AI tab. Your speech is turned into text on this Mac. Answers are read in your Mac's best installed voice; you can download nicer ones in System Settings › Accessibility › Spoken Content.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

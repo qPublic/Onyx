@@ -63,7 +63,10 @@ final class HomeLayout: ObservableObject {
     @Published var editing = false
     private let key = "ap.homePanels"
 
-    init() {
+    init() { reload() }
+
+    /// Re-reads the saved layout (also after settings sync changes it).
+    func reload() {
         if let raw = UserDefaults.standard.string(forKey: key) {
             panels = raw.split(separator: ",").compactMap { HomePanel(rawValue: String($0)) }
         } else {

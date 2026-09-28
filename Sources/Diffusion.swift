@@ -97,7 +97,9 @@ final class Diffusion {
     }
 
     /// Paints `count` pictures of the scene. progress(done, total) counts denoising steps across all of them.
+    /// With `start`, it paints versions of that picture instead (image to image): `strength` is how far they may wander.
     func paint(_ scene: String, people: Bool = false, count: Int, steps: Int = 20, guidance: Float = 7, seed: UInt64 = .random(in: 0...UInt64(UInt32.max)),
+               from start: CGImage? = nil, strength: Double = 0.55,
                isCancelled: () -> Bool = { false }, progress: @escaping (Int, Int) -> Void, each: (CGImage) -> Void) throws {
         // 1. Text → embeddings (the "unconditional" one is the negative prompt, for classifier-free guidance).
         var cond: [Float] = [], uncond: [Float] = []
@@ -106,6 +108,24 @@ final class Diffusion {
             cond = try encode(style.prompt(scene, people: people), text); uncond = try encode(style.negative(people: people), text)
         }
         let tokens = cond.count / 768
+
+        // 1b. For versions of a picture: the picture → latents, with the image encoder.
+        var startLatent: [Float]?
+        if let start {
+            try autoreleasepool {
+                let enc = try load("VAEEncoder")
+                guard let (name, desc) = enc.modelDescription.inputDescriptionsByName.first,
+                      let shp = desc.multiArrayConstraint?.shape.map(\.intValue), shp.count == 4 else { throw VoiceError("That style can't make versions.") }
+                let H = shp[2], W = shp[3]
+                let px = try array(Self.pixels(start, width: W, height: H), shape: shp, like: desc)
+                let out = try enc.prediction(from: MLDictionaryFeatureProvider(dictionary: [name: px]))
+                guard let key = enc.modelDescription.outputDescriptionsByName.keys.first, let lat = out.featureValue(for: key)?.multiArrayValue else {
+                    throw VoiceError("That style's model didn't answer.")
+                }
+                let n4 = 4 * (H / 8) * (W / 8)
+                startLatent = Array(floats(lat).prefix(n4)).map { $0 * 0.18215 }   // the mean (the rest is its spread)
+            }
+        }
 
         // 2. Denoise, one picture at a time (the UNet takes both halves of the guidance as a batch of 2). It's its own
         // function so the UNet is let go of before the decoder loads.
@@ -120,10 +140,12 @@ final class Diffusion {
         let sigmas = Self.karras(steps)
         var latents: [[Float]] = []
         var rng = SplitMix(seed)
+        let s0 = startLatent == nil ? 0 : min(steps - 1, max(0, Int(Double(steps) * (1 - strength))))
         for i in 0..<count {
-            var x = (0..<n).map { _ in rng.gaussian() * sigmas[0] }
+            var x = startLatent.map { l in l.map { $0 + rng.gaussian() * sigmas[s0] } } ?? (0..<n).map { _ in rng.gaussian() * sigmas[0] }
+            if x.count != n { throw VoiceError("That picture doesn't fit this style's model.") }
             var old: [Float]?
-            for s in 0..<steps {
+            for s in s0..<steps {
                 if isCancelled() { throw CancellationError() }
                 let sigma = sigmas[s], next = sigmas[s + 1]
                 let cin = 1 / (sigma * sigma + 1).squareRoot()
@@ -154,7 +176,7 @@ final class Diffusion {
                     x = (0..<n).map { (next / sigma) * x[$0] - k * d[$0] }
                 }
                 old = denoised
-                progress(i * steps + s + 1, count * steps)
+                progress(i * (steps - s0) + (s - s0) + 1, count * (steps - s0))
             }
             latents.append(x)
         }
@@ -172,6 +194,24 @@ final class Diffusion {
                   let cg = Self.image(floats(img), width: w * 8, height: h * 8) else { throw VoiceError("That style's model didn't finish the picture.") }
             each(cg)
         }
+    }
+
+    /// A picture as the encoder wants it: center-cropped to size, RGB channels first, in -1…1.
+    static func pixels(_ img: CGImage, width: Int, height: Int) -> [Float] {
+        var buf = [UInt8](repeating: 0, count: width * height * 4)
+        buf.withUnsafeMutableBytes { raw in
+            guard let ctx = CGContext(data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return }
+            let s = max(Double(width) / Double(img.width), Double(height) / Double(img.height))
+            let w = Double(img.width) * s, h = Double(img.height) * s
+            ctx.interpolationQuality = .high
+            ctx.draw(img, in: CGRect(x: (Double(width) - w) / 2, y: (Double(height) - h) / 2, width: w, height: h))
+        }
+        var out = [Float](repeating: 0, count: 3 * width * height)
+        for y in 0..<height { for x in 0..<width { for c in 0..<3 {
+            out[c * width * height + y * width + x] = Float(buf[(y * width + x) * 4 + c]) / 127.5 - 1
+        } } }
+        return out
     }
 
     private func encode(_ text: String, _ model: MLModel) throws -> [Float] {

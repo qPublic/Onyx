@@ -83,8 +83,17 @@ struct AgentTool: Tool {
         if let prev = ToolBudget.previous(key) { return prev + " (already done; now answer without calling tools again)" }
         guard ToolBudget.spend() else { throw ToolBudget.Exhausted() }
         let request = Assistant.currentRequest.lowercased()
-        if !requires.isEmpty && !requires.contains(where: request.contains) {
+        // The small on-device model calls tools nobody asked for, so they need a matching word; big cloud models don't.
+        if !requires.isEmpty && !CloudAI.active && !requires.contains(where: request.contains) {
             return "Not done: the user didn't ask for this. Don't use tools for this message; answer it directly in words."
+        }
+        if !CloudAI.active && !AgentTools.readOnly.contains(name) && Assistant.questionOnly(Assistant.currentRequest) {
+            return "Not done: the user asked a question, not for an action. Answer it in words."
+        }
+        if AgentTools.dryRun && !AgentTools.readOnly.contains(name) {   // the AI test suite: record it, don't do it
+            AgentTools.dryCalls.append(name + " " + arguments.jsonString)
+            if logs { await MainActor.run { Assistant.shared.log(tool: name, result: "(test run)") } }
+            return "Done."
         }
         let out = try await run(arguments)
         ToolBudget.record(key, out)
@@ -107,7 +116,7 @@ enum ToolBudget {
     static func record(_ key: String, _ result: String) { lock.withLock { done[key] = result } }
 }
 
-private func arg(_ a: GeneratedContent, _ k: String) -> String? {
+func arg(_ a: GeneratedContent, _ k: String) -> String? {
     guard let s = try? a.value(String.self, forProperty: k) else { return nil }
     let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
     return t.isEmpty ? nil : t
@@ -182,7 +191,22 @@ enum AgentTools {
         return "\(v) = \(Calc.format(x, grouped: false))"
     }
 
-    static var all: [AgentTool] {
+    static var all: [AgentTool] { base + extra }
+
+    /// The tools this request could need. The small on-device model does better seeing a handful than all of them.
+    static func relevant(to request: String) -> [AgentTool] {
+        let r = request.lowercased()
+        let math = r.contains(where: \.isNumber) || ["average", "percent", "sum of", "squared", "square root", "convert", "divided", "times", "plus", "minus", "calculate"].contains(where: r.contains)
+        var tools = all.filter { t in t.name == "calculate" ? math : t.requires.contains(where: r.contains) }
+        if Assistant.questionOnly(request) {   // "what is a reminder?" is a question, not a request to make one
+            let fresh = ["latest", "news", "current", "price", "score", "who won", "recent", "right now", "this week", "2025", "2026"].contains(where: r.contains)
+            tools = tools.filter { $0.name == "calculate" || $0.name == "translate" || ($0.name == "onyx_help" && r.contains("onyx")) || ($0.name == "search_web" && fresh) }
+            if !math { tools.removeAll { $0.name == "calculate" } }
+        }
+        return tools
+    }
+
+    static var base: [AgentTool] {
         [
             calculator,
             AgentTool(name: "onyx_help", description: "Find where an Onyx feature or setting is, e.g. low battery mode, live wallpapers, notch size",
@@ -205,7 +229,7 @@ enum AgentTools {
                 await MainActor.run { _ = NSWorkspace.shared.open(u) }
                 return "Opened \(s)"
             },
-            AgentTool(name: "web_search", description: "Search the web in the browser", params: [("query", "Search terms", false)], requires: ["search", "google", "look up", "lookup", "web", "online"]) { a in
+            AgentTool(name: "web_search", description: "Open a web search in the browser (only when the user wants to see the results in their browser)", params: [("query", "Search terms", false)], requires: ["open", "browser", "in safari", "in chrome", "show me results"]) { a in
                 guard let q = arg(a, "query"),
                       let u = URL(string: "https://www.google.com/search?q=" + (q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q))
                 else { return "Missing query" }
@@ -323,12 +347,54 @@ final class Assistant: ObservableObject {
     @Published var status: String?            // "Reading your screen…", "Thinking…"
     @Published var attachment: CGImage?       // an image to ask about
     @Published var document: AIDocument?      // a file or selected text to ask about (see AIExtras.swift)
+    @Published var lastSources: [URL] = []    // web pages the last answer was based on
+    var carryOver: String?                    // a summary of the chat so far, once it outgrew the on-device model
+    var cloudHistory: [CloudMessage] = []
     private var session: LanguageModelSession?
     private var sessionIsAgent = true
     private var sessionEffort = AIEffort.medium
+    private var sessionTools = Set<String>()
     /// The message being answered; tools check it before acting.
     static var currentRequest = ""
     static let ungrounded = "Not done: that title isn't something the user said. Ask the user what to call it instead of inventing one."
+
+    /// A question about something ("what is a reminder?", "explain calendars"), not a request to do something.
+    static func questionOnly(_ request: String) -> Bool {
+        let l = request.lowercased().trimmingCharacters(in: .whitespaces)
+        let asks = ["what is", "what's a", "whats a", "what's the", "what are", "what does", "explain", "why ", "define", "how does", "how do ", "how are", "how many",
+                    "how much", "how long", "how far", "how old", "who is", "who was", "who invented", "who wrote", "when did", "when was", "which ", "where is",
+                    "tell me about", "describe", "what do you mean", "meaning of", "is it", "is a", "is the", "are there", "can you explain"]
+        // Asking about something, unless it's clearly about the user's own things or asks for an action.
+        let mine = ["remind me", "for me", "on my", "my calendar", "my notes", "my files", "my schedule", "my reminders", "my day", "due", "where do i", "how do i",
+                    "translate", "search", "look up", "do i have", "have i", "did i", "i copied", "my workspace"]
+        return asks.contains(where: l.hasPrefix) && !mine.contains(where: l.contains)
+    }
+
+    /// "Reply with only a number" and the like, enforced (the small model tends to add a sentence anyway).
+    static func enforceFormat(_ request: String, _ answer: String) -> String {
+        let r = request.lowercased(), a = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if ["only a number", "just the number", "only the number", "just a number", "number only"].contains(where: r.contains),
+           let m = a.range(of: #"-?\d+(?:[.,]\d+)*"#, options: .regularExpression) { return String(a[m]) }
+        if ["one word", "single word"].contains(where: r.contains), let w = a.split(whereSeparator: { $0.isWhitespace }).first {
+            return String(w).trimmingCharacters(in: .punctuationCharacters).capitalized
+        }
+        if r.contains("yes or no"), let w = a.lowercased().split(whereSeparator: { !$0.isLetter }).first(where: { $0 == "yes" || $0 == "no" }) { return w.capitalized }
+        return answer
+    }
+
+    /// Model errors in words people understand.
+    static func describe(_ error: Error) -> String {
+        guard let e = error as? LanguageModelSession.GenerationError else { return error.localizedDescription }
+        switch e {
+        case .guardrailViolation: return "Apple's on-device safety filter stopped this answer. Try wording it differently, or pick a bigger model in Settings › Privacy › AI."
+        case .refusal: return "The model chose not to answer that."
+        case .assetsUnavailable: return "Apple Intelligence is still getting ready. Try again in a minute."
+        case .unsupportedLanguageOrLocale: return "Apple's on-device model doesn't understand that language yet."
+        case .exceededContextWindowSize: return "That was too much for the on-device model at once. Try a shorter question."
+        case .rateLimited, .concurrentRequests: return "The on-device model is busy. Try again in a moment."
+        default: return "The model got muddled on that one. Try asking again."
+        }
+    }
 
     /// True if the title shares a real word with what the user asked (so the model didn't make it up).
     static func grounded(_ title: String) -> Bool {
@@ -339,17 +405,27 @@ final class Assistant: ObservableObject {
     /// "what is 32/40", "15% of 80?", "5 ft in cm": answered instantly by the calculator, no model needed.
     static func quickMath(_ text: String) -> String? {
         var q = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let bare = ["just the number", "only the number", "only a number", "just a number", "number only"].contains(where: q.contains)
+        if let i = q.firstIndex(of: "?"), q[q.index(after: i)...].contains(where: \.isLetter) { q = String(q[..<i]) }   // "…? Answer with just the number"
         while let last = q.last, "?.!".contains(last) { q.removeLast() }
+        // "the average of 4, 8 and 15"
+        if let r = q.range(of: #"(?:average|mean) of ([\d.,\s]+(?:and [\d.]+)?)$"#, options: .regularExpression) {
+            let nums = q[r].split { !$0.isNumber && $0 != "." }.compactMap { Double($0) }
+            if nums.count >= 2 { let avg = Calc.format(nums.reduce(0, +) / Double(nums.count), grouped: false); return bare ? avg : "The average is \(avg)" }
+        }
+        for (w, op) in [(" squared", "^2"), (" cubed", "^3"), (" to the power of ", "^"), (" plus ", "+"), (" minus ", "-"), (" times ", "*"),
+                        (" multiplied by ", "*"), (" divided by ", "/")] { q = q.replacingOccurrences(of: w, with: op) }
         for lead in ["what is", "what's", "whats", "how much is", "calculate", "calc", "compute", "convert", "solve", "="] where q.hasPrefix(lead + " ") {
             q = String(q.dropFirst(lead.count + 1)); break
         }
         q = q.trimmingCharacters(in: .whitespaces)
         guard q.contains(where: \.isNumber), Double(q) == nil, let r = Calc.evaluate(q) else { return nil }
-        return "\(q) = \(r.display)"
+        return bare ? r.display : "\(q) = \(r.display)"
     }
     private var task: Task<Void, Never>?
 
     var unavailableReason: String? {
+        if CloudAI.active { return nil }   // a cloud model doesn't need Apple Intelligence
         switch SystemLanguageModel.default.availability {
         case .available: return nil
         case .unavailable(.appleIntelligenceNotEnabled): return "Turn on Apple Intelligence in System Settings to use the free on-device AI."
@@ -359,9 +435,11 @@ final class Assistant: ObservableObject {
         }
     }
 
-    private func instructions(agent: Bool, effort: AIEffort) -> String {
+    func instructions(agent: Bool, effort: AIEffort) -> String {
         let now = Date().formatted(date: .complete, time: .shortened)
         var s = "You are Onyx, a friendly assistant built into the user's Mac notch. Now: \(now). Use plain text, never LaTeX: write math like 5x + 30 = 180."
+        s += " Follow format requests exactly: one word, just a number, yes or no, or a set number of bullet points means exactly that. When asked to fix grammar, give the corrected sentence."
+        s += " If the user asks about themselves (their name, pets, plans, what they did) and you haven't been told, say you don't know yet. Never guess about them."
         switch effort {
         case .low: s += " Give just the answer, with at most one short line of working."
         case .medium: s += " Keep answers short (under 120 words)."
@@ -370,13 +448,16 @@ final class Assistant: ObservableObject {
         if agent || effort == .high || effort == .max { s += " Use the calculate tool for arithmetic with plain numbers." }
         else { s += " For math, work step by step and double-check the arithmetic." }
         s += " When the user shares an image or their screen, you get a description made by image recognition and OCR; answer about it directly."
+        if let m = AIMemory.shared.context(for: Self.currentRequest) { s += "\n" + m + "\n" }
+        if let carryOver { s += "\nEarlier in this conversation (summary): " + carryOver + "\n" }
         if agent {
+            s += " To answer questions about current events or facts you're unsure of, use search_web and cite the sources. For the user's own notes, files, clipboard or schoolwork, use search_my_stuff."
             s += " You can act on the Mac with tools, but only when the user explicitly asks for that action. For questions (math, facts, explanations, advice) answer directly in words and do not call any tool. Never invent names, people, titles, places or times; only use details the user gave you. Only say an action happened if a tool confirmed it. Emails are only drafted, never sent. Dates for tools use yyyy-MM-dd HH:mm."
         }
         return s
     }
 
-    func reset() { task?.cancel(); session = nil; messages = []; busy = false; status = nil; attachment = nil }
+    func reset() { task?.cancel(); session = nil; messages = []; busy = false; status = nil; attachment = nil; carryOver = nil; cloudHistory = []; lastSources = [] }
     /// Free the on-device model session while idle to reclaim memory; the chat log stays.
     func releaseIfIdle() { if !busy { session = nil } }
     func stop() { task?.cancel(); busy = false; status = nil }
@@ -400,7 +481,18 @@ final class Assistant: ObservableObject {
         let start = messages.count   // this turn's replies and tool calls come after here
         busy = true
         Self.currentRequest = text
+        AIMemory.shared.notice(text)
+        lastSources = []
         let agent = agentMode, look = seeScreen, effort = AIEffort.current
+        if CloudAI.active {   // a big cloud model: pictures go in as pictures, whole files fit, and no extra passes are needed
+            task = Task { @MainActor in
+                defer { self.busy = false; self.status = nil }
+                do { try await cloudAnswer(text, image: image, doc: doc, context: context, look: look, agent: agent, effort: effort) }
+                catch is CancellationError {}
+                catch { messages.append(Msg(role: .error, text: error.localizedDescription)) }
+            }
+            return
+        }
         task = Task { @MainActor in
             defer { self.busy = false; self.status = nil }
             do {
@@ -432,9 +524,11 @@ final class Assistant: ObservableObject {
 
                 // 3. Check the work against what was asked, and finish anything missed (not on Low, which is for speed).
                 if effort != .low { try await review(text, since: start, agent: agent, effort: effort) }
+                if let i = messages.lastIndex(where: { $0.role == .assistant }), i >= start { messages[i].text = Self.enforceFormat(text, messages[i].text) }
+                if !lastSources.isEmpty { messages.append(Msg(role: .tool, text: "Sources: " + lastSources.compactMap(\.host).joined(separator: ", "))) }
             } catch is CancellationError {
             } catch {
-                messages.append(Msg(role: .error, text: error.localizedDescription))
+                messages.append(Msg(role: .error, text: Self.describe(error)))
             }
         }
     }
@@ -442,8 +536,9 @@ final class Assistant: ObservableObject {
     private func makeSession(agent: Bool, effort: AIEffort) -> LanguageModelSession {
         // In Ask mode the calculator only helps with a thinking pass behind it (High / Max); at Low and Medium the
         // small model tends to feed it things like "m∠A + m∠B" and then guess, so it reasons in plain text instead.
-        LanguageModelSession(tools: agent ? AgentTools.all : (effort == .high || effort == .max) ? [AgentTools.calculator] : [],
-                             instructions: instructions(agent: agent, effort: effort))
+        let tools = agent ? AgentTools.relevant(to: Self.currentRequest) : (effort == .high || effort == .max) ? [AgentTools.calculator] : []
+        sessionTools = Set(tools.map(\.name))
+        return LanguageModelSession(tools: tools, instructions: instructions(agent: agent, effort: effort))
     }
 
     private static func options(_ effort: AIEffort) -> GenerationOptions {
@@ -462,7 +557,9 @@ final class Assistant: ObservableObject {
             return r + "\n\nYour own working notes (check them for mistakes, then give your answer; don't mention the notes):\n" + notes.prefix(limit / 2)
         }
         for attempt in 0..<3 {
-            if session == nil || sessionIsAgent != agent || sessionEffort != effort {
+            let needs = agent && !Set(AgentTools.relevant(to: Self.currentRequest).map(\.name)).isSubset(of: sessionTools)
+            if session == nil || sessionIsAgent != agent || sessionEffort != effort || needs {
+                if session != nil && needs { await summarizeSoFar() }   // new tools mean a new session: keep the gist of the chat
                 session = makeSession(agent: agent, effort: effort)
                 sessionIsAgent = agent; sessionEffort = effort
             }
@@ -484,12 +581,17 @@ final class Assistant: ObservableObject {
                 try await answerWithoutTools(prompt(3000), effort: effort)
                 return
             } catch LanguageModelSession.GenerationError.exceededContextWindowSize {
-                session = nil   // forget the earlier conversation and try again, shorter
+                session = nil   // the chat outgrew the model: carry a short summary of it into a fresh session
+                if attempt == 0 { await summarizeSoFar() }
                 if attempt == 2 { messages.append(Msg(role: .error, text: "That was too much for the on-device model at once. Try a shorter question or a smaller part of the screen.")) }
             } catch let e as LanguageModelSession.GenerationError where Self.isBusy(e) && attempt < 2 {
                 try await Task.sleep(for: .seconds(1.5 * Double(attempt + 1)))   // macOS limits background apps' model use; wait and retry
             } catch let e as LanguageModelSession.ToolCallError where e.underlyingError is ToolBudget.Exhausted {
                 session = nil   // stuck calling tools: answer once more with no tools at all
+                try await answerWithoutTools(prompt(3000), effort: effort)
+                return
+            } catch let e as LanguageModelSession.GenerationError where !Self.isBusy(e) {
+                session = nil   // a garbled tool call, or the safety filter tripping on a tool's output: answer once more without tools
                 try await answerWithoutTools(prompt(3000), effort: effort)
                 return
             }
@@ -658,6 +760,12 @@ final class Assistant: ObservableObject {
                 do {
                     if let r = Assistant.shared.unavailableReason { throw NSError(domain: "Onyx", code: 4, userInfo: [NSLocalizedDescriptionKey: r]) }
                     let effort = AIEffort.current
+                    if CloudAI.active, let jpg = CloudAI.jpeg(image) {   // a big model looks at the picture itself
+                        cont.yield("Asking \(CloudAI.provider.short)…")
+                        let r = try await CloudAI.complete(system: "You explain or solve what a user circled on their screen. Be concise and clear, plain text.",
+                                                           prompt: question, maxTokens: 900, images: [jpg])
+                        cont.yield(Assistant.plain(r)); cont.finish(); return
+                    }
                     let report = await ImageReader.analyze(image, effort: effort)
                     let request = "\(question)\n\nThe user circled part of their screen. " + report.prompt(limit: effort.contextChars)
                     var prompt = request

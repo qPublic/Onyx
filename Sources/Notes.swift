@@ -304,14 +304,13 @@ enum FlashcardMaker {
     /// On-device Apple Intelligence when available; otherwise a simple "term: definition" parser.
     static func make(from text: String) async throws -> [Flashcard] {
         if Assistant.shared.unavailableReason == nil {
-            let s = LanguageModelSession(instructions: """
+            let r = try await AIText.complete(system: """
                 You turn study notes into flashcards. Write 6 to 12 cards covering the most important facts. \
                 Output ONLY lines in exactly this format, one card per line, nothing else:
                 Q: <short question> || A: <short answer>
-                """)
-            let r = try await s.respond(to: "Notes:\n\"\"\"\n\(text.prefix(3500))\n\"\"\"")
-            lastRaw = r.content
-            let cards = parse(r.content)
+                """, prompt: "Notes:\n\"\"\"\n\(text.prefix(CloudAI.active ? 60_000 : 3500))\n\"\"\"", maxTokens: 1200)
+            lastRaw = r
+            let cards = parse(r)
             if !cards.isEmpty { return cards }
         }
         return heuristic(text)

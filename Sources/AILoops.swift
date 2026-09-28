@@ -189,10 +189,16 @@ enum ArtStyle: String, CaseIterable, Identifiable {
                     }
                 }
                 try await paint(p.scene)
+                // Stray lettering and watermarks give AI art away: if every picture has some, paint once more.
+                if picture == nil, !images.isEmpty, await Self.lettering(images).allSatisfy({ $0 }) {
+                    detail = "Painting again: those had stray lettering…"
+                    try await paint(p.scene)
+                }
                 // Asked for someone or something? Look for it in what got painted, and paint again if it's missing.
                 if !p.subject.isEmpty && !images.isEmpty && picture == nil {
                     try await checkWork(p.subject) { try await paint(p.subject + ", " + p.scene) }
                 }
+                await rankFinal(art: art, checked: !p.subject.isEmpty)
                 step = images.isEmpty ? .failed("Nothing got painted. Try describing it differently.") : .pick
             } catch let e as ImageCreator.Error {
                 step = images.isEmpty ? (e == .creationCancelled ? .idle : .failed(Self.message(e))) : .pick
@@ -228,6 +234,66 @@ enum ArtStyle: String, CaseIterable, Identifiable {
             throw CancellationError()
         } catch {
             checkNote = nil
+        }
+    }
+
+    /// Best first: pictures without stray lettering ahead of ones with it, and, when the picture checker is on this Mac
+    /// and nothing more specific was asked for, the ones that best match the art style you picked.
+    private func rankFinal(art: ArtStyle, checked: Bool) async {
+        guard images.count > 1 else { return }
+        let text = await Self.lettering(images)
+        var style = [Float](repeating: 0, count: images.count)
+        if !checked, LoopChecker.ready, let s = try? await LoopChecker.styleScores(images, art: art) { style = s }
+        let order = images.indices.sorted { a, b in (text[a] ? 1 : 0, -style[a]) < (text[b] ? 1 : 0, -style[b]) }
+        images = order.map { images[$0] }
+        let n = text.filter { $0 }.count
+        if n > 0 && n < images.count { checkNote = (checkNote.map { $0 + " · " } ?? "") + "\(n) with stray lettering moved to the end"; if checkNote?.hasPrefix("Checked") != true { checkOK = true } }
+    }
+
+    /// Which pictures have readable text in them (signatures, watermarks, made-up signs).
+    nonisolated static func lettering(_ imgs: [CGImage]) async -> [Bool] {
+        await Task.detached(priority: .userInitiated) {
+            imgs.map { img in
+                let req = VNRecognizeTextRequest()
+                req.recognitionLevel = .accurate
+                req.usesLanguageCorrection = false   // AI lettering is usually gibberish; this still finds it
+                req.minimumTextHeight = 0.03
+                try? VNImageRequestHandler(cgImage: img).perform([req])
+                return (req.results ?? []).contains { o in
+                    guard let t = o.topCandidates(1).first, t.confidence >= 0.4 else { return false }
+                    return t.string.filter(\.isLetter).count >= 3
+                }
+            }
+        }.value
+    }
+
+    /// More like this: new versions of the picture you picked (Stable Diffusion repaints it; Image Playground uses it as a starting point).
+    func moreLike(_ pic: CGImage) {
+        guard !busy else { return }
+        let art = self.art, scene = self.scene, people = !subject.isEmpty
+        step = .drawing; detail = "Painting versions like the one you picked…"; progress = 0
+        task = Task {
+            let awake = ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "Painting a live wallpaper")
+            defer { ProcessInfo.processInfo.endActivity(awake) }
+            do {
+                if let sd = art?.diffusion, sd.ready {
+                    painting = Task.detached(priority: .userInitiated) {
+                        try Diffusion(sd).paint(scene, people: people, count: 2, from: pic, strength: 0.5, isCancelled: { Task.isCancelled }, progress: { done, total in
+                            Task { @MainActor in LoopMaker.shared.progress = Double(done) / Double(total) }
+                        }, each: { img in
+                            let made = img
+                            Task { @MainActor in LoopMaker.shared.images.append(made) }
+                        })
+                    }
+                    try await painting?.value
+                    try await Task.sleep(for: .milliseconds(100))
+                } else {
+                    NSApp.activate()
+                    let creator = try await ImageCreator()
+                    for try await made in creator.images(for: [.image(pic), .text(scene)], style: art?.playground ?? .animation, limit: 2) { images.append(made.cgImage) }
+                }
+            } catch {}
+            step = .pick
         }
     }
 
@@ -347,6 +413,7 @@ enum ArtStyle: String, CaseIterable, Identifiable {
         let fallback = (name: trimmed.split(separator: " ").prefix(4).joined(separator: " ").capitalized, scene: (look.map { $0 + ", " } ?? "") + trimmed + ", wide scenic landscape",
                         effects: LoopEffect.guess(trimmed), subject: someone ? trimmed : "")
         planError = nil
+        if CloudAI.active, !trimmed.isEmpty, let c = await cloudPlan(trimmed, look: look, style: style, someone: someone) { return c }
         guard case .available = SystemLanguageModel.default.availability, !trimmed.isEmpty, let schema = LoopPlan.schema else { return fallback }
         let styleLine = style.map { "\nIt will be drawn in a \($0.lowercased()) style." } ?? ""
         let who = someone ? "\nThe idea asks for a character or creature. Keep the one it names; if it just says character, invent one that fits this world."
@@ -392,6 +459,27 @@ enum ArtStyle: String, CaseIterable, Identifiable {
             } catch { planError = "\(error)"; return fallback }
         }
         return fallback
+    }
+
+    /// With a cloud model picked: the same plan from the bigger model, as JSON.
+    nonisolated static func cloudPlan(_ idea: String, look: String?, style: String?, someone: Bool) async -> (name: String, scene: String, effects: [LoopEffect], subject: String)? {
+        let fx = LoopEffect.allCases.map(\.rawValue).joined(separator: ", ")
+        let prompt = """
+            Plan a looping animated desktop wallpaper for this idea: \(idea)
+            \(look.map { "Its world looks like: \($0)\n" } ?? "")\(style.map { "It will be painted in a \($0.lowercased()) style.\n" } ?? "")\(someone ? "Include the character or creature it asks for (invent one that fits if it just says character)." : "No characters, people or animals: just the place.")
+            Reply with only JSON: {"name": "1 to 4 words", "subject": "\(someone ? "the character, described only by how it looks, under 15 words" : "")", \
+            "scene": "one wide scenic view for an image generator, under 45 words; start with the subject if there is one; describe how things look instead of naming games, films or brands", \
+            "effects": ["one or two of: \(fx) — only ones that clearly fit the weather and time of day"]}
+            """
+        guard let r = try? await CloudAI.complete(system: "You plan wallpapers and reply with JSON only.", prompt: prompt, maxTokens: 500),
+              let start = r.firstIndex(of: "{"), let end = r.lastIndex(of: "}"),
+              let j = try? JSONSerialization.jsonObject(with: Data(r[start...end].utf8)) as? [String: Any],
+              let scene = j["scene"] as? String, !scene.isEmpty else { return nil }
+        let fxs = ((j["effects"] as? [String]) ?? []).compactMap { LoopEffect(rawValue: $0.lowercased()) }
+        let subject = someone ? ((j["subject"] as? String) ?? idea) : ""
+        var s = brief(scene, words: 60)
+        if !subject.isEmpty && !s.lowercased().hasPrefix(subject.lowercased().prefix(12)) { s = subject + ". " + s }
+        return ((j["name"] as? String) ?? idea.capitalized, s, fxs.isEmpty ? LoopEffect.guess(idea + " " + scene) : Array(fxs.prefix(2)), subject)
     }
 
     /// Whether the idea asks for a character, creature or thing to be in it, not just a place.
@@ -638,6 +726,43 @@ enum LoopChecker {
         }
         // merges.txt last, since `ready` looks for it: a download that stopped halfway starts over next time.
         try FileManager.default.moveItem(at: dir.appendingPathComponent("merges.txt.part"), to: dir.appendingPathComponent("merges.txt"))
+    }
+
+    /// For each picture, how much it looks like the art style you picked, compared with the other styles (0…1).
+    static func styleScores(_ images: [CGImage], art: ArtStyle) async throws -> [Float] {
+        let looks: [ArtStyle: String] = [.realistic: "a real photograph", .anime: "an anime illustration", .painted: "a digital painting with brushstrokes",
+                                         .animated: "a 3D cartoon animation still", .illustration: "a flat vector illustration"]
+        let order = ArtStyle.allCases.filter { looks[$0] != nil }
+        guard let want = order.firstIndex(of: art) else { return images.map { _ in 0 } }
+        let folder = dir, texts = order.map { "a picture that is " + looks[$0]! }
+        return try await Task.detached(priority: .userInitiated) {
+            let cfg = MLModelConfiguration(); cfg.computeUnits = .cpuAndNeuralEngine
+            let tokens = try CLIPTokenizer(vocab: folder.appendingPathComponent("vocab.json"), merges: folder.appendingPathComponent("merges.txt"))
+            func unit(_ out: MLFeatureProvider) throws -> [Float] {
+                guard let a = out.featureValue(for: "final_emb_1")?.multiArrayValue else { throw VoiceError("The picture checker didn't answer.") }
+                var v = (0..<a.count).map { Float(truncating: a[$0]) }
+                let n = max(sqrt(v.reduce(0) { $0 + $1 * $1 }), 1e-6)
+                for i in v.indices { v[i] /= n }
+                return v
+            }
+            let tm = try MLModel(contentsOf: folder.appendingPathComponent("text.mlmodelc"), configuration: cfg)
+            let T = try texts.map { t -> [Float] in
+                var ids = tokens.encode(t)
+                if let end = ids.firstIndex(of: 49407) { for i in (end + 1)..<ids.count { ids[i] = 0 } }
+                let a = try MLMultiArray(shape: [1, 77], dataType: .int32)
+                for (i, v) in ids.enumerated() { a[i] = NSNumber(value: v) }
+                return try unit(tm.prediction(from: MLDictionaryFeatureProvider(dictionary: ["text": a])))
+            }
+            let im = try MLModel(contentsOf: folder.appendingPathComponent("image.mlmodelc"), configuration: cfg)
+            guard let c = im.modelDescription.inputDescriptionsByName["image"]?.imageConstraint else { throw VoiceError("The picture checker didn't load right.") }
+            return try images.map { img in
+                let v = try MLFeatureValue(cgImage: img, constraint: c, options: [.cropAndScale: VNImageCropAndScaleOption.scaleFill.rawValue])
+                let e = try unit(im.prediction(from: MLDictionaryFeatureProvider(dictionary: ["image": v])))
+                let logits = T.map { t in 100 * zip(e, t).reduce(0) { $0 + $1.0 * $1.1 } }
+                let m = logits.max() ?? 0, ex = logits.map { exp($0 - m) }
+                return ex[want] / ex.reduce(0, +)
+            }
+        }.value
     }
 
     /// For each picture, how sure it is (0…1) that the subject is in it.
@@ -1025,6 +1150,9 @@ struct CreateLoopSheet: View {
             Spacer(minLength: 0)
             HStack {
                 Button("Back") { maker.reset() }.buttonStyle(.glass)
+                Button { if chosen < maker.images.count { maker.moreLike(maker.images[chosen]) } } label: { Label("More like this", systemImage: "square.on.square") }
+                    .buttonStyle(.glass).disabled(maker.art == nil && maker.canDraw != true)
+                    .help("Paints two new versions of the picture you picked")
                 Spacer()
                 Button { if chosen < maker.images.count { maker.make(maker.images[chosen], motion: [0.004, 0.007, 0.012][motion]) } } label: {
                     Label("Make Loop", systemImage: "play.circle")

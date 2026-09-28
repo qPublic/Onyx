@@ -119,7 +119,17 @@ struct AttachedDocumentBar: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 5) {
                         ForEach(actions(doc), id: \.0) { title, prompt in
-                            Button(title) { ai.send(prompt) }
+                            Button(title) {
+                                guard title == "Translate" else { ai.send(prompt); return }
+                                // Apple's translation models first (better, and on this Mac); the chat model if they aren't downloaded.
+                                Task {
+                                    if let t = await OnDeviceTranslate.translate(doc.text) {
+                                        ai.messages.append(Assistant.Msg(role: .user, text: "Translate this\n📎 \(doc.name)"))
+                                        ai.messages.append(Assistant.Msg(role: .assistant, text: t))
+                                        ai.document = nil
+                                    } else { ai.send(prompt) }
+                                }
+                            }
                                 .buttonStyle(.plain).font(.system(size: 10.5, weight: .medium))
                                 .padding(.horizontal, 9).padding(.vertical, 4)
                                 .background(Color.cyan.opacity(0.18), in: Capsule())
@@ -263,10 +273,10 @@ enum Briefing {
     @MainActor static func make() async -> String {
         let f = await facts()
         let greeting = { let h = Calendar.current.component(.hour, from: Date()); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening" }()
-        guard case .available = SystemLanguageModel.default.availability else { return greeting + "! Here's your day:\n" + f.map { "• " + $0 }.joined(separator: "\n") }
-        let s = LanguageModelSession(instructions: "You write a short, friendly daily briefing. Use only the facts given; never add events, times or details that aren't there. Plain text.")
+        guard Assistant.shared.unavailableReason == nil else { return greeting + "! Here's your day:\n" + f.map { "• " + $0 }.joined(separator: "\n") }
         let prompt = "Facts:\n" + f.joined(separator: "\n") + "\n\nWrite the briefing in 3 to 5 short sentences, starting with \"\(greeting)!\". Mention anything due or overdue first."
-        if let r = try? await Assistant.retrying({ try await s.respond(to: prompt, options: GenerationOptions(temperature: 0.3, maximumResponseTokens: 250)).content }) {
+        if let r = try? await AIText.complete(system: "You write a short, friendly daily briefing. Use only the facts given; never add events, times or details that aren't there. Plain text.",
+                                              prompt: prompt, maxTokens: 300) {
             return Assistant.plain(r)
         }
         return greeting + "! Here's your day:\n" + f.map { "• " + $0 }.joined(separator: "\n")

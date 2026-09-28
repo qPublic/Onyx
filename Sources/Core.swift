@@ -57,6 +57,7 @@ enum Prefs {
             autoClose: true,
             autoCloseDelay: 20,
             Briefing.key: true,
+            AIMemory.key: true,
             MeetingWatch.key: true,
         ].merging(AP.defaults) { a, _ in a }.merging(Fun.defaults) { a, _ in a }.merging(Opt.defaults) { a, _ in a }
          .merging(WallpaperEngine.defaults) { a, _ in a })

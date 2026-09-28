@@ -48,6 +48,8 @@ enum SettingsIndex {
         e(.behavior, "Shortcuts", "Copy text from screen", "ocr text recognition copy text screenshot picture"),
         e(.optimize, "Battery", "Battery health", "battery health cycles capacity condition energy drain apps power"),
         e(.optimize, "Battery", "Remind me to unplug at 80%", "battery charge limit 80 percent unplug reminder"),
+        e(.lock, "AI model", "Model", "model claude chatgpt openai gemini grok mistral deepseek groq openrouter ollama api key cloud gpt anthropic llm switch"),
+        e(.lock, "Memory", "Let Onyx AI remember things about you", "memory remember forget facts about me personal"),
         e(.lock, "AI", "Morning briefing", "briefing daily morning summary day weather calendar agenda brief me"),
         e(.behavior, "Battery", "Low Battery Mode", "low battery mode power saver saving pause wallpaper animations energy"),
         e(.behavior, "Battery", "Turn on at", "low battery level percent threshold 15"),

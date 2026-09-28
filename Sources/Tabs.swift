@@ -512,6 +512,9 @@ struct AITab: View {
                 } label: { Image(systemName: "paperclip") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Ask about an image, a file or selected text")
                 Menu {
+                    Section("Model: \(CloudAI.label)") {
+                        Button("Change model in Settings…") { (NSApp.delegate as? AppDelegate)?.openSettings() }
+                    }
                     Picker("Effort", selection: $effortRaw) {
                         ForEach(AIEffort.allCases) { e in
                             Label("\(e.title) — \(e.detail)", systemImage: e.icon).tag(e.rawValue)

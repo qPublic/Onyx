@@ -944,3 +944,84 @@ enum ViewShot {
         exit(0)
     }
 }
+
+// MARK: - Self-test (debug): ONYX_CLOUDTEST=<file> talks to the cloud-model code path end to end: model list, a plain answer,
+// a picture, and a chat turn where the model calls the calculator. Point it at a stand-in server with ONYX_AI_BASE and
+// ONYX_AI_TEST_KEY (and -ai.provider anthropic|openai), so no real key or account is involved.
+enum CloudTest {
+    @MainActor static func run(_ file: String) async {
+        var log: [String] = [], fails = 0
+        func note(_ s: String) { log.append(s); try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8) }
+        func check(_ name: String, _ ok: Bool) { note((ok ? "PASS " : "FAIL ") + name); if !ok { fails += 1 } }
+        note("provider \(CloudAI.provider.rawValue), model \(CloudAI.model()), active \(CloudAI.active)")
+        let models = (try? await CloudAI.models(CloudAI.provider)) ?? []
+        check("lists models, without embedding ones: \(models)", models.contains("mock-large") && !models.contains { $0.contains("embedding") })
+        do { let r = try await CloudAI.complete(system: "Be brief.", prompt: "Say hello."); check("plain answer: \(r)", r.contains("Hello from mock")) }
+        catch { check("plain answer: \(error.localizedDescription)", false) }
+        if let img = AISelfTest.render(["Invoice 4417"]), let jpg = CloudAI.jpeg(img) {
+            do { let r = try await CloudAI.complete(system: "Describe it.", prompt: "What does this say?", images: [jpg]); check("sends a picture: \(r)", r.contains("4417")) }
+            catch { check("sends a picture: \(error.localizedDescription)", false) }
+        }
+        let ai = Assistant.shared
+        ai.reset(); ai.agentMode = true
+        ai.send("Please work out 17 times 23 for my homework")   // not a bare sum, which Onyx answers itself without a model
+        let t0 = Date()
+        while ai.busy && Date().timeIntervalSince(t0) < 30 { try? await Task.sleep(for: .milliseconds(100)) }
+        let answer = ai.messages.last { $0.role == .assistant }?.text ?? ai.messages.last?.text ?? ""
+        note("chat: " + ai.messages.map { "[\($0.role)] \($0.text)" }.joined(separator: " | "))
+        check("chat turn used the calculator tool", ai.messages.contains { $0.role == .tool && $0.text.hasPrefix("calculate") })
+        check("chat answer came back: \(answer)", answer.contains("391"))
+        note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
+        exit(0)
+    }
+}
+
+// MARK: - Self-test (debug): ONYX_AIPLUSTEST=<file> checks web answers, meaning-based search (on made-up notes, not yours),
+// translation, the lettering detector and painting versions of a picture. Nothing of yours is read or changed.
+enum AIPlusTest {
+    @MainActor static func run(_ file: String) async {
+        var log: [String] = [], fails = 0
+        func note(_ s: String) { log.append(s); try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8) }
+        func check(_ name: String, _ ok: Bool) { note((ok ? "PASS " : "FAIL ") + name); if !ok { fails += 1 } }
+
+        let t0 = Date()
+        let web = await WebAnswers.context(for: "who won the 2024 NBA finals", limit: 2400)
+        note(String(format: "web (%.1f s): %@ …", Date().timeIntervalSince(t0), web.text.prefix(300).replacingOccurrences(of: "\n", with: " ")))
+        check("web answer has sources (\(web.sources.compactMap(\.host).joined(separator: ", ")))", !web.sources.isEmpty)
+        check("web text mentions the Celtics", web.text.lowercased().contains("celtics"))
+
+        let docs = [PersonalSearch.Hit(source: "Note", title: "Bio", text: "Mitosis is how one cell splits into two identical daughter cells: prophase, metaphase, anaphase, telophase.", score: 0),
+                    PersonalSearch.Hit(source: "Note", title: "Groceries", text: "Milk, eggs, basil, coffee beans, oat milk.", score: 0),
+                    PersonalSearch.Hit(source: "Copied", title: "Today", text: "1600 Amphitheatre Parkway, Mountain View, CA", score: 0),
+                    PersonalSearch.Hit(source: "Note", title: "Chem", text: "Photosynthesis turns light, water and carbon dioxide into glucose and oxygen.", score: 0)]
+        check("\"how do cells divide\" finds the mitosis note", PersonalSearch.rank(docs, query: "how do cells divide", limit: 1).first?.title == "Bio")
+        check("\"that address I copied\" finds the address", PersonalSearch.rank(docs, query: "what was that address I copied", limit: 1).first?.source == "Copied")
+        check("\"what's on my shopping list\" finds groceries", PersonalSearch.rank(docs, query: "shopping list milk", limit: 1).first?.title == "Groceries")
+
+        check("memory: same-subject facts replace each other", AIMemory.subject("Their favorite color is teal") == AIMemory.subject("their favorite color is blue"))
+        if let t = await OnDeviceTranslate.translate("Good morning, how are you?", to: "Spanish") { note("on-device translation: \(t)"); check("translates with Apple's models", t.lowercased().contains("buen")) }
+        else { note("on-device translation: Spanish isn't downloaded on this Mac, so the chat model translates instead") }
+
+        if let text = AISelfTest.render(["SALE 50% OFF", "Visit our store"]),
+           let plain = CGContext(data: nil, width: 400, height: 300, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            plain.setFillColor(CGColor(red: 0.3, green: 0.5, blue: 0.8, alpha: 1)); plain.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+            let flags = await LoopMaker.lettering([text, plain.makeImage()!])
+            check("spots lettering (\(flags))", flags == [true, false])
+        }
+
+        if DiffusionStyle.anime.ready, let start = AISelfTest.render(["~"]) {
+            let t1 = Date()
+            var made: [CGImage] = []
+            do {
+                try await Task.detached {
+                    var out: [CGImage] = []
+                    try Diffusion(.anime).paint("a calm lake under a pink sky", count: 1, from: start, strength: 0.5, progress: { _, _ in }, each: { out.append($0) })
+                    return out
+                }.value.forEach { made.append($0) }
+            } catch { note("variation error: \(error.localizedDescription)") }
+            check(String(format: "paints a version of a picture (%.0f s)", Date().timeIntervalSince(t1)), made.first?.width == 512)
+        }
+        note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
+        exit(0)
+    }
+}

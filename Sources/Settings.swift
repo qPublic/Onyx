@@ -790,8 +790,16 @@ struct LockSettings: View {
                 permission("Location", "Accurate weather & rain alerts", "Privacy_LocationServices")
                 Button("Re-run setup…") { (NSApp.delegate as? AppDelegate)?.showOnboarding() }
             }
+            Section("AI model") {
+                AIModelSettings()
+            }
+            Section("Memory") {
+                AIMemorySettings()
+            }
+            Section("How well it's doing") {
+                AIEvalSettings()
+            }
             Section("AI") {
-                LabeledContent("Model", value: "Apple on-device (free, private)")
                 LabeledContent("Status", value: Assistant.shared.unavailableReason ?? "Ready")
                 Picker("Effort", selection: $effort) {
                     ForEach(AIEffort.allCases) { Text($0.title).tag($0.rawValue) }

@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.7.1
+
+### New
+- **Use Claude, ChatGPT, Gemini and more.** In **Settings › Privacy › AI › AI model**, switch Onyx AI from Apple's on-device model to Claude, ChatGPT, Gemini, Grok, Mistral, DeepSeek, Groq, OpenRouter, a model running on your Mac with Ollama, or any OpenAI-compatible server. Paste your own API key (kept in your Keychain), pick a model from the provider's list, and tap **Test**. Big models see your pictures and screen directly, read whole files at once, and power Circle to Search, briefings, flashcards and Create with AI's planning too. Apple's model stays the default: free, private and offline.
+- **Web answers.** Ask about current events, prices, scores or anything the model isn't sure of, and Onyx AI searches the web, reads the top pages and answers from them, listing its sources.
+- **Memory.** Tell Onyx AI your name, your classes or your favorites, or say "remember that…", and it keeps that in mind from then on. Everything it remembers is listed in **Settings › Privacy › AI › Memory**, where you can add, delete or turn it off. It stays on your Mac.
+- **Ask about your own stuff.** "What did my bio notes say about mitosis?" or "what was that address I copied?": Onyx AI searches your notes, Shelf files, clipboard history, Canvas, reminders and calendar by meaning, not just exact words.
+- **Onyx AI can do more.** It can start a focus session, open a workspace, switch Dark Mode, keep your Mac awake, tell you what's due on Canvas, make notes, give you a briefing, and remember or forget things.
+- **Test Onyx AI.** **Settings › Privacy › AI** can run 20 questions with known answers (math, facts, actions, honesty) and score them. It's a quick way to compare models.
+- **More like this.** In Create with AI, pick a picture and tap **More like this** for two new versions of it.
+
+### Improved
+- **Better translation.** Translate uses Apple's translation models when your languages are downloaded (System Settings › General › Language & Region), which translate far better than the chat model.
+- **Long chats keep going.** When a conversation outgrows the on-device model, Onyx AI keeps a short summary of it instead of forgetting everything.
+- **Onyx AI picks tools better.** For each question, the on-device model only sees the tools that could help, which makes it faster and less likely to do something you didn't ask for.
+- **Create with AI looks less AI-made.** Pictures with stray lettering or fake watermarks are moved to the end, or repainted if they all have it. With the picture checker downloaded, the pictures that best match your art style come first.
+
 ## 1.7.0
 
 ### New

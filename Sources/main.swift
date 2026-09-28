@@ -108,6 +108,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let file = ProcessInfo.processInfo.environment["ONYX_AICHECKTEST"] { Task { @MainActor in await AICheckTest.run(file) }; return }
         // Debug: ONYX_LAUNCHERPINTEST=<dir> checks pinned apps and the by-category view, with screenshots (see LauncherPinTest).
         if let dir = ProcessInfo.processInfo.environment["ONYX_LAUNCHERPINTEST"] { Task { @MainActor in await LauncherPinTest.run(dir) }; return }
+        // Debug: ONYX_CLOUDTEST=<file> checks the cloud-model path against a stand-in server (see CloudTest).
+        if let file = ProcessInfo.processInfo.environment["ONYX_CLOUDTEST"] { Task { @MainActor in await CloudTest.run(file) }; return }
+        // Debug: ONYX_AIPLUSTEST=<file> checks web answers, search, translation, lettering and picture versions (see AIPlusTest).
+        if let file = ProcessInfo.processInfo.environment["ONYX_AIPLUSTEST"] { Task { @MainActor in await AIPlusTest.run(file) }; return }
+        // Debug: ONYX_AIEVAL=<file> runs the 100-question AI test suite (ONYX_AIEVAL_QUICK=1: 20 of them) and writes the report.
+        if let file = ProcessInfo.processInfo.environment["ONYX_AIEVAL"] {
+            Task { @MainActor in
+                let quick = ProcessInfo.processInfo.environment["ONYX_AIEVAL_QUICK"] != nil
+                let r = await AIEval.run(quick ? AIEval.quick : AIEval.cases) { d, t in try? "running \(d)/\(t)".write(toFile: file, atomically: true, encoding: .utf8) }
+                try? AIEval.report(r).write(toFile: file, atomically: true, encoding: .utf8)
+                exit(0)
+            }
+            return
+        }
         // Debug: ONYX_VIEWSHOT=<dir> renders the new panels offscreen to PNGs (see ViewShot).
         if let dir = ProcessInfo.processInfo.environment["ONYX_VIEWSHOT"] { ViewShot.run(dir); return }
         // Debug: ONYX_EXTRASTEST=<file> checks the launcher actions, file reading, OCR, briefing and more (see ExtrasTest).

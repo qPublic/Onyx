@@ -185,6 +185,13 @@ enum AgentTools {
     static var all: [AgentTool] {
         [
             calculator,
+            AgentTool(name: "onyx_help", description: "Find where an Onyx feature or setting is, e.g. low battery mode, live wallpapers, notch size",
+                      params: [("feature", "The feature or setting, in a few words", false)],
+                      requires: ["onyx", "setting", "where", "how do i", "how can i", "how to", "turn on", "turn off", "enable", "disable", "change", "find"]) { a in
+                guard let q = arg(a, "feature") else { return "Missing feature" }
+                let hits = await MainActor.run { SettingsIndex.search(q).prefix(3).map { "Settings › \($0.section.title) › \($0.group) › \($0.title)" } }
+                return hits.isEmpty ? "No Onyx setting matches \"\(q)\". Say you're not sure where it is." : hits.joined(separator: "\n")
+            },
             AgentTool(name: "open_app", description: "Launch or switch to a Mac app by name", params: [("name", "App name, e.g. Safari", false)], requires: ["open", "launch", "start", "switch to"]) { a in
                 guard let n = arg(a, "name") else { return "Missing app name" }
                 guard let u = findApp(n) else { return "Couldn't find an app named \(n)" }
@@ -389,6 +396,7 @@ final class Assistant: ObservableObject {
         let image = attachment
         attachment = nil
         messages.append(Msg(role: .user, text: text, image: image.map { NSImage(cgImage: $0, size: .zero) }))
+        let start = messages.count   // this turn's replies and tool calls come after here
         busy = true
         Self.currentRequest = text
         let agent = agentMode, look = seeScreen, effort = AIEffort.current
@@ -419,6 +427,9 @@ final class Assistant: ObservableObject {
                 }
                 status = "Writing…"
                 try await answer(request, notes: notes, agent: agent, effort: effort)
+
+                // 3. Check the work against what was asked, and finish anything missed (not on Low, which is for speed).
+                if effort != .low { try await review(text, since: start, agent: agent, effort: effort) }
             } catch is CancellationError {
             } catch {
                 messages.append(Msg(role: .error, text: error.localizedDescription))
@@ -481,6 +492,48 @@ final class Assistant: ObservableObject {
                 return
             }
         }
+    }
+
+    static let reviewSchema = try? GenerationSchema(root: DynamicGenerationSchema(name: "Review", properties: [
+        .init(name: "parts", description: "Each separate thing the user asked for, a few words each",
+              schema: DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(type: String.self), minimumElements: 1, maximumElements: 5)),
+        .init(name: "complete", description: "True if the reply answers every question and every action asked for was confirmed by a tool result",
+              schema: DynamicGenerationSchema(type: Bool.self)),
+        .init(name: "missing", description: "If not complete: what's missing, in a few words. Otherwise an empty string",
+              schema: DynamicGenerationSchema(type: String.self)),
+    ]), dependencies: [])
+
+    /// Reads the finished reply back against the request: every part answered, and every action really done (a tool
+    /// confirmed it, not just the reply saying so). If something was missed, it finishes the job once, then the
+    /// complete reply takes the first one's place.
+    @MainActor private func review(_ asked: String, since start: Int, agent: Bool, effort: AIEffort) async throws {
+        guard let schema = Self.reviewSchema, let last = messages.indices.last, last >= start, messages[last].role == .assistant,
+              !messages[last].text.isEmpty else { return }
+        let actions = messages[start...].filter { $0.role == .tool }.map(\.text)
+        status = "Checking…"
+        let check = "The user asked:\n\(asked.prefix(1500))\n\nThe assistant replied:\n\(messages[last].text.prefix(2000))\n\n"
+            + (agent ? "Actions confirmed by tools: " + (actions.isEmpty ? "none" : actions.joined(separator: "; ")) : "The assistant can't take actions, only answer.")
+        let verdict: GeneratedContent
+        do {
+            verdict = try await Self.retrying {
+                try await LanguageModelSession(instructions: """
+                    You check whether an assistant fully did what a user asked. List each separate thing the user asked for, \
+                    then decide if the reply covers all of them. Style, length and wording don't matter; only a missing answer or \
+                    an action that no tool confirmed counts as incomplete.
+                    """).respond(to: check, schema: schema, options: GenerationOptions(sampling: .greedy)).content
+            }
+        } catch is CancellationError { throw CancellationError() } catch { return }   // checking is a bonus; the reply stands
+        let missing = ((try? verdict.value(String.self, forProperty: "missing")) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Only act on a gap that's really about the request (the small model can imagine ones).
+        let askedWords = Set(asked.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
+        guard (try? verdict.value(Bool.self, forProperty: "complete")) == false, !missing.isEmpty,
+              missing.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).contains(where: { $0.count >= 3 && askedWords.contains(String($0)) })
+        else { return }
+        status = "Finishing: \(missing)…"
+        let before = messages.count
+        try await answer("My request: \(asked.prefix(1500))\n\nYour last reply missed this part: \(missing). Do it now" + (agent ? " (use a tool if it's an action)" : "")
+                         + ", then give one complete reply to everything I asked.", notes: nil, agent: agent, effort: effort)
+        if messages.count > before, messages.last?.role == .assistant, messages.last?.text.isEmpty == false { messages.remove(at: last) }
     }
 
     @MainActor private func answerWithoutTools(_ prompt: String, effort: AIEffort) async throws {

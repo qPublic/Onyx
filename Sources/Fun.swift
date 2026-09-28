@@ -359,7 +359,7 @@ final class GooseController {
 
     private func step() {
         guard let w = window else { return }
-        if Date() < idleUntil {
+        if Date() < idleUntil || LowBatteryMode.shared.active {   // stands still in Low Battery Mode
             if model.walking { model.walking = false }
             return
         }

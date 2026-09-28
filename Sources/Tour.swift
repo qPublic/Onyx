@@ -59,18 +59,17 @@ enum TourStep: Int, CaseIterable {
 
 struct FeatureTour: View {
     @Binding var step: Int
-    @State private var start = Date()
+    @State private var elapsed = 0.0   // how long this slide has been up, not counting while you hover
     @State private var hovering = false
     static let duration = 6.0
+    private let tick = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
     private var last: Int { TourStep.allCases.count - 1 }
 
     var body: some View {
-        TimelineView(.animation) { ctx in
-            let t = ctx.date.timeIntervalSince(start)
-            let s = TourStep(rawValue: step) ?? .notch
+        let s = TourStep(rawValue: step) ?? .notch
             VStack(spacing: 16) {
-                bars(t)
-                TourDemo(step: s, t: t)
+                bars
+                TourSlide(step: s)
                     .frame(height: 250)
                     .frame(maxWidth: .infinity)
                     .background(RadialGradient(colors: [s.tint.opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 260))
@@ -85,24 +84,25 @@ struct FeatureTour: View {
                 .transition(.opacity.combined(with: .offset(y: 8)))
             }
             .padding(.horizontal, 24).padding(.top, 14)
-        }
         .onHover { hovering = $0 }
-        .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
-            if hovering { start = start.addingTimeInterval(0.1); return }   // hovering holds the slide
-            if Date().timeIntervalSince(start) > Self.duration && step < last { withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) { step += 1 } }
+        .onReceive(tick) { _ in
+            guard !hovering else { return }   // hovering holds the slide; its demo keeps playing
+            elapsed += 0.1
+            if elapsed >= Self.duration && step < last { withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) { step += 1 } }
         }
-        .onChange(of: step) { _, _ in start = Date() }
+        .onChange(of: step) { _, _ in elapsed = 0 }
     }
 
     /// Story-style progress: done segments full, the current one filling.
-    private func bars(_ t: Double) -> some View {
+    private var bars: some View {
         HStack(spacing: 4) {
             ForEach(0...last, id: \.self) { i in
                 GeometryReader { g in
                     Capsule().fill(.white.opacity(0.15))
                         .overlay(alignment: .leading) {
                             Capsule().fill(.white.opacity(0.85))
-                                .frame(width: g.size.width * (i < step ? 1 : i > step ? 0 : min(t / Self.duration, 1)))
+                                .frame(width: g.size.width * (i < step ? 1 : i > step ? 0 : min(elapsed / Self.duration, 1)))
+                                .animation(.linear(duration: 0.1), value: elapsed)
                         }
                 }
                 .frame(height: 3)
@@ -113,7 +113,19 @@ struct FeatureTour: View {
     }
 }
 
-// MARK: - The demos (each is a function of t, the seconds since its slide appeared, and loops on its own)
+/// One slide's demo on its own clock, started when the slide appears, so the one sliding out keeps playing where it was
+/// instead of jumping back to its start. 60 frames a second is plenty for these and half the work on a 120 Hz display.
+private struct TourSlide: View {
+    let step: TourStep
+    @State private var born = Date()
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60)) { ctx in
+            TourDemo(step: step, t: ctx.date.timeIntervalSince(born))
+        }
+    }
+}
+
+// MARK: - The demos (each is a function of t, the seconds since its slide appeared)
 
 private func clamp01(_ x: Double) -> Double { min(max(x, 0), 1) }
 /// Smooth 0→1 between times a and b.
@@ -123,8 +135,17 @@ private func mix(_ a: CGFloat, _ b: CGFloat, _ k: Double) -> CGFloat { a + (b - 
 struct TourDemo: View {
     let step: TourStep
     let t: Double
+    /// Every demo plays once per loop. A loop is a little longer than a slide, so it only repeats while you hover, and
+    /// then it fades out and back in rather than jumping to the start.
+    static let loop = 6.5
+    private var p: Double { t.truncatingRemainder(dividingBy: Self.loop) }
+    private var fade: Double { (t < Self.loop ? 1 : seg(p, 0, 0.3)) * (1 - seg(p, Self.loop - 0.3, Self.loop)) }
 
     var body: some View {
+        demo.opacity(fade)
+    }
+
+    @ViewBuilder private var demo: some View {
         switch step {
         case .notch: notch
         case .media: media
@@ -158,7 +179,6 @@ struct TourDemo: View {
     }
 
     private var notch: some View {
-        let p = t.truncatingRemainder(dividingBy: 4.6)
         let open = seg(p, 1.1, 1.6) * (1 - seg(p, 3.9, 4.3))
         return desktop {
             ZStack(alignment: .top) {
@@ -207,8 +227,8 @@ struct TourDemo: View {
                 ProgressView(value: (t / 20).truncatingRemainder(dividingBy: 1) * 0.6 + 0.2).tint(.white).frame(width: 110)
             }
             VStack(spacing: 14) {
-                hud("speaker.wave.2.fill", 0.35 + 0.4 * seg(t.truncatingRemainder(dividingBy: 3), 0.3, 1.4))
-                hud("sun.max.fill", 0.8 - 0.35 * seg((t + 1.5).truncatingRemainder(dividingBy: 3), 0.3, 1.4))
+                hud("speaker.wave.2.fill", 0.55 + 0.2 * sin(t * 1.6))   // smooth back and forth, no jumps
+                hud("sun.max.fill", 0.62 - 0.18 * sin(t * 1.2 + 1))
             }
         }
     }
@@ -226,7 +246,6 @@ struct TourDemo: View {
     }
 
     private var shelf: some View {
-        let p = t.truncatingRemainder(dividingBy: 3.6)
         let fly = seg(p, 0.4, 1.4)
         return desktop {
             pill(300, 96, radius: 22)
@@ -253,7 +272,6 @@ struct TourDemo: View {
     }
 
     private var ai: some View {
-        let p = t.truncatingRemainder(dividingBy: 6)
         let q = "Remind me to call Mom at 6"
         let typed = String(q.prefix(Int(clamp01((p - 0.3) / 1.6) * Double(q.count))))
         return VStack(alignment: .leading, spacing: 10) {
@@ -282,7 +300,6 @@ struct TourDemo: View {
     }
 
     private var circle: some View {
-        let p = t.truncatingRemainder(dividingBy: 5)
         let draw = seg(p, 0.5, 1.8)
         return ZStack {
             RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.06)).frame(width: 380, height: 220)
@@ -309,7 +326,7 @@ struct TourDemo: View {
     }
 
     private var widgets: some View {
-        let rain = seg(t.truncatingRemainder(dividingBy: 6), 2.0, 2.5)
+        let rain = seg(p, 2.0, 2.5)
         return VStack(spacing: 12) {
             HStack(spacing: 12) {
                 widget {
@@ -353,7 +370,6 @@ struct TourDemo: View {
     }
 
     private var notes: some View {
-        let p = t.truncatingRemainder(dividingBy: 6)
         let text = "Grocery list\n• Oat milk\n• Basil\n• Coffee beans"
         return HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
@@ -378,7 +394,6 @@ struct TourDemo: View {
     }
 
     private var snap: some View {
-        let p = t.truncatingRemainder(dividingBy: 5)
         let drag = seg(p, 0.3, 1.3), picker = seg(p, 1.2, 1.5) * (1 - seg(p, 2.4, 2.6)), snapped = seg(p, 2.4, 2.9)
         return desktop {
             pill(110, 22, radius: 11)
@@ -398,8 +413,15 @@ struct TourDemo: View {
 
     private var wallpapers: some View {
         desktop {
+            // All three stay made (a new Metal view each time was a hitch); only the one showing runs, and they cross-fade.
             let i = Int(t / 2.4) % 3
-            TourScene(scene: [WallpaperScene.synthwave, .rainCity, .pixelDusk][i]).frame(width: 420, height: 230).id(i).transition(.opacity)
+            ZStack {
+                ForEach(0..<3, id: \.self) { k in
+                    TourScene(scene: [WallpaperScene.synthwave, .rainCity, .pixelDusk][k], running: k == i)
+                        .opacity(k == i ? 1 : 0).animation(.easeInOut(duration: 0.6), value: i)
+                }
+            }
+            .frame(width: 420, height: 230)
             Rectangle().fill(.black.opacity(0.35)).frame(height: 16)
             HStack(spacing: 6) { ForEach(0..<7, id: \.self) { _ in RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.5)).frame(width: 18, height: 18) } }
                 .padding(6).glassEffect(.regular, in: .rect(cornerRadius: 10)).frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, 8)
@@ -407,10 +429,10 @@ struct TourDemo: View {
     }
 
     private var create: some View {
-        let p = t.truncatingRemainder(dividingBy: 6)
-        let idea = "a blocky voxel forest at sunset"
+        // Four versions of what's typed: retro sunsets, from two of the built-in scenes at different moments.
+        let idea = "a retro sunset on the horizon"
         let typed = String(idea.prefix(Int(clamp01((p - 0.2) / 1.4) * Double(idea.count))))
-        let scenes: [WallpaperScene] = [.pixelDusk, .synthwave, .rainCity, .hyperspace]
+        let versions: [(WallpaperScene, Float)] = [(.pixelDusk, 14), (.synthwave, 14), (.pixelDusk, 31), (.synthwave, 27)]
         return VStack(spacing: 10) {
             HStack {
                 Image(systemName: "wand.and.sparkles").foregroundStyle(.purple)
@@ -425,7 +447,7 @@ struct TourDemo: View {
             }
             HStack(spacing: 8) {
                 ForEach(0..<4, id: \.self) { i in
-                    TourStill(scene: scenes[i]).frame(width: 76, height: 50).clipShape(RoundedRectangle(cornerRadius: 8))
+                    TourStill(scene: versions[i].0, time: versions[i].1).frame(width: 76, height: 50).clipShape(RoundedRectangle(cornerRadius: 8))
                         .overlay { if i == 0 && p > 3.4 { RoundedRectangle(cornerRadius: 8).stroke(.cyan, lineWidth: 2) } }
                         .opacity(seg(p, 1.8 + Double(i) * 0.3, 2.1 + Double(i) * 0.3)).scaleEffect(0.9 + 0.1 * seg(p, 1.8 + Double(i) * 0.3, 2.1 + Double(i) * 0.3))
                 }
@@ -440,7 +462,6 @@ struct TourDemo: View {
 
     private var launcher: some View {
         let apps = ["Safari", "Music", "Photos", "Maps", "Notes", "Calendar", "Messages", "Mail", "FaceTime", "App Store", "Weather", "Freeform"]
-        let p = t.truncatingRemainder(dividingBy: 6)
         let q = "saf"
         let typed = String(q.prefix(Int(clamp01((p - 2.6) / 0.6) * 3)))
         return VStack(spacing: 12) {
@@ -466,7 +487,6 @@ struct TourDemo: View {
     }
 
     private var optimize: some View {
-        let p = t.truncatingRemainder(dividingBy: 6)
         let k = seg(p, 0.4, 2.4)
         return HStack(spacing: 26) {
             ZStack {
@@ -545,21 +565,24 @@ private struct AppIcon: View {
 /// A live GPU scene inside the tour.
 private struct TourScene: NSViewRepresentable {
     let scene: WallpaperScene
-    func makeNSView(context: Context) -> ShaderView { ShaderView(scene: scene, frame: .zero) }
-    func updateNSView(_ v: ShaderView, context: Context) {}
+    var running = true
+    func makeNSView(context: Context) -> ShaderView { let v = ShaderView(scene: scene, frame: .zero); v.setRunning(running); return v }
+    func updateNSView(_ v: ShaderView, context: Context) { v.setRunning(running) }
 }
 
 /// A still of a GPU scene, standing in for a painting in the Create demo.
 private struct TourStill: View {
     let scene: WallpaperScene
-    @MainActor private static var cache: [WallpaperScene: CGImage] = [:]
+    var time: Float = 14
+    @MainActor private static var cache: [String: CGImage] = [:]
     var body: some View {
-        if let cg = Self.still(scene) { Image(decorative: cg, scale: 1).resizable() } else { Color.white.opacity(0.1) }
+        if let cg = Self.still(scene, time) { Image(decorative: cg, scale: 1).resizable() } else { Color.white.opacity(0.1) }
     }
-    @MainActor static func still(_ s: WallpaperScene) -> CGImage? {
-        if let c = cache[s] { return c }
-        let img = GPU.snapshot(s, size: CGSize(width: 152, height: 100))
-        cache[s] = img
+    @MainActor static func still(_ s: WallpaperScene, _ time: Float) -> CGImage? {
+        let key = "\(s.rawValue)@\(time)"
+        if let c = cache[key] { return c }
+        let img = GPU.snapshot(s, size: CGSize(width: 152, height: 100), time: time)
+        cache[key] = img
         return img
     }
 }

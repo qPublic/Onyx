@@ -28,6 +28,8 @@ enum Prefs {
     static let eyeBreak = "eyeBreak"
     static let hoverDelay = "hoverDelay"
     static let notes = "notes"
+    static let lowBattery = "lowBattery", lowBatteryLevel = "lowBatteryLevel"
+    static let autoClose = "autoClose", autoCloseDelay = "autoCloseDelay"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -50,6 +52,10 @@ enum Prefs {
             eyeBreak: false,
             hoverDelay: 0.12,
             notes: "",
+            lowBattery: true,
+            lowBatteryLevel: 15,
+            autoClose: true,
+            autoCloseDelay: 20,
         ].merging(AP.defaults) { a, _ in a }.merging(Fun.defaults) { a, _ in a }.merging(Opt.defaults) { a, _ in a }
          .merging(WallpaperEngine.defaults) { a, _ in a })
     }
@@ -613,4 +619,38 @@ final class NotchController {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: w)
         }
     }
+}
+
+// MARK: - Windows that close themselves
+
+/// Settings, Optimization, Live Wallpapers and the tour close by themselves once you've clicked away from them for a
+/// while (Settings › Behavior › System; on, 20 seconds by default). One with a sheet or dialog open waits.
+@MainActor enum AutoClose {
+    private static var timers: [ObjectIdentifier: Timer] = [:]
+    private static var watched = Set<ObjectIdentifier>()
+
+    static func watch(_ w: NSWindow) {
+        guard watched.insert(ObjectIdentifier(w)).inserted else { return }
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: NSWindow.didResignKeyNotification, object: w, queue: .main) { [weak w] _ in
+            MainActor.assumeIsolated { if let w { schedule(w) } }
+        }
+        for n in [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification] {
+            nc.addObserver(forName: n, object: w, queue: .main) { [weak w] _ in MainActor.assumeIsolated { if let w { cancel(w) } } }
+        }
+    }
+
+    private static func schedule(_ w: NSWindow) {
+        cancel(w)
+        guard Prefs.bool(Prefs.autoClose) else { return }
+        timers[ObjectIdentifier(w)] = Timer.scheduledTimer(withTimeInterval: max(Prefs.double(Prefs.autoCloseDelay), 5), repeats: false) { [weak w] _ in
+            MainActor.assumeIsolated {
+                guard let w, w.isVisible, !w.isKeyWindow, !w.isMiniaturized else { return }
+                if w.attachedSheet != nil || NSApp.modalWindow != nil { schedule(w); return }   // busy (a sheet or a file picker): later
+                w.close()
+            }
+        }
+    }
+
+    private static func cancel(_ w: NSWindow) { timers.removeValue(forKey: ObjectIdentifier(w))?.invalidate() }
 }

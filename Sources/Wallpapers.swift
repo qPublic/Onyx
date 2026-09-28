@@ -282,6 +282,7 @@ final class WallpaperEngine: ObservableObject {
         let battery = BatteryMonitor.shared.hasBattery && !BatteryMonitor.shared.pluggedIn
         var reason: String?
         if asleep || locked { reason = "Paused while your Mac is locked or asleep" }
+        else if LowBatteryMode.shared.active { reason = "Paused in Low Battery Mode" }
         else if Prefs.bool(K.pauseLowPower) && lowPower { reason = "Paused in Low Power Mode" }
         else if Prefs.bool(K.pauseBattery) && battery { reason = "Paused on battery power" }
         for (k, w) in windows {

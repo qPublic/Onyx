@@ -1,4 +1,6 @@
 import AppKit
+import SwiftUI
+import Combine
 import AVFoundation
 import Speech
 import ImagePlayground
@@ -653,5 +655,143 @@ enum SDSelfTest {
         }
         note("done")
         exit(0)
+    }
+}
+
+// MARK: - Self-test (debug): ONYX_LOWBATTERYTEST=<file> sets Low Battery Mode's level to 100% and then 5% on this Mac's real
+// battery, and checks the mode and the wallpaper pause follow. Your own settings are put back afterward.
+enum LowBatteryTest {
+    @MainActor static func run(_ file: String) {
+        var log: [String] = []
+        func check(_ name: String, _ ok: Bool) { log.append((ok ? "PASS " : "FAIL ") + name) }
+        let d = UserDefaults.standard, mine = d.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "") ?? [:]
+        let saved = (mine[Prefs.lowBattery], mine[Prefs.lowBatteryLevel])   // only what you set, not the built-in defaults
+        let b = BatteryMonitor.shared, mode = LowBatteryMode.shared
+        b.update()
+        let onBattery = b.hasBattery && !b.pluggedIn
+        log.append("battery \(b.percent)%, on battery: \(onBattery)")
+        d.set(true, forKey: Prefs.lowBattery); d.set(100, forKey: Prefs.lowBatteryLevel); mode.evaluate()
+        check("level 100% → on (only on battery): \(mode.active)", mode.active == onBattery)
+        check("wallpaper: \(WallpaperEngine.shared.pausedReason ?? "playing")", WallpaperEngine.shared.pausedReason == (onBattery ? "Paused in Low Battery Mode" : nil))
+        check("notch says so: \(NotchModel.shared.hud.map { "\($0)" } ?? "nothing")", !onBattery || NotchModel.shared.hud == .message(icon: "leaf.fill", text: "Low Battery Mode", tint: .yellow))
+        d.set(false, forKey: Prefs.lowBattery); mode.evaluate()
+        check("switched off → off", !mode.active && WallpaperEngine.shared.pausedReason == nil)
+        d.set(true, forKey: Prefs.lowBattery); d.set(5, forKey: Prefs.lowBatteryLevel); mode.evaluate()
+        check("level 5% → off at \(b.percent)%", mode.active == (onBattery && b.percent <= 5))
+        for (k, v) in [(Prefs.lowBattery, saved.0), (Prefs.lowBatteryLevel, saved.1)] { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } }
+        try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8)
+        exit(0)
+    }
+}
+
+// MARK: - Self-test (debug): ONYX_AICHECKTEST=<file> asks Onyx AI a few multi-part questions in Agent mode and logs each
+// step it went through (including "Checking…" and any "Finishing: …") and everything it said.
+enum AICheckTest {
+    @MainActor static func run(_ file: String) async {
+        var log: [String] = []
+        func note(_ s: String) { log.append(s); try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8) }
+        let ai = Assistant.shared
+        note("effort: \(AIEffort.current.rawValue), model: \(ai.unavailableReason ?? "ready")")
+        for q in ["What's the capital of Australia, and how many legs does a spider have?",
+                  "Set a timer for 2 minutes and tell me one fun fact about otters.",
+                  "Where do I turn on Low Battery Mode in Onyx?"] {
+            ai.reset(); ai.agentMode = true; ai.seeScreen = false
+            let t0 = Date()
+            var steps: [String] = []
+            ai.send(q)
+            while ai.busy {
+                if let s = ai.status, steps.last != s { steps.append(s) }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            note("\n=== \(q) (\(String(format: "%.1f", Date().timeIntervalSince(t0))) s)\nsteps: \(steps.joined(separator: " → "))")
+            for m in ai.messages.dropFirst() { note("[\(m.role)] \(m.text)") }
+        }
+        exit(0)
+    }
+}
+
+// MARK: - Self-test (debug): ONYX_LAUNCHERPINTEST=<dir> pins two apps, checks they come first (in the grid, in search and
+// by category), then puts your launcher layout back exactly as it was. (No screenshots: they ask for screen access.)
+enum LauncherPinTest {
+    @MainActor static func run(_ dir: String) async {
+        var log: [String] = []
+        func check(_ name: String, _ ok: Bool) { log.append((ok ? "PASS " : "FAIL ") + name) }
+        let store = LauncherStore.shared, d = UserDefaults.standard
+        let file = Prefs.supportDir.appendingPathComponent("launcher.json")
+        let savedFile = try? Data(contentsOf: file), savedMode = d.object(forKey: "launcher.byCategory")
+        await store.refresh()
+        let byName = Dictionary(store.apps.values.map { ($0.name, $0.path) }, uniquingKeysWith: { a, _ in a })
+        guard let calc = byName["Calculator"], let notes = byName["Notes"] else { log.append("FAIL Calculator/Notes not found"); finish(); return }
+        store.pin(notes); store.pin(calc)
+        check("pinned apps lead the grid, in pin order", store.visible.prefix(2).map(\.id) == [notes, calc])
+        check("a pinned app isn't also shown further down", store.visible.filter { $0.id == calc }.count == 1)
+        check("pinned apps come first in search (\"c\" → \(store.search("c").first?.name ?? "-"))", store.search("c").first?.path == calc)
+        let sections = store.sections
+        check("by category starts with Pinned", sections.first?.name == "Pinned" && sections.first?.apps.map(\.path) == [notes, calc])
+        log.append("categories: " + sections.map { "\($0.name) \($0.apps.count)" }.joined(separator: ", "))
+        check("every app is in exactly one section", sections.flatMap(\.apps).count == store.apps.values.filter { !store.hidden.contains($0.path) }.count)
+        store.unpin(notes); store.unpin(calc)
+        check("unpinning puts them back", !store.visible.prefix(2).contains { $0.id == calc || $0.id == notes } || store.visible.first?.id == calc)
+        finish()
+
+        func finish() {
+            if let savedFile { try? savedFile.write(to: file, options: .atomic) } else { try? FileManager.default.removeItem(at: file) }
+            if let savedMode { d.set(savedMode, forKey: "launcher.byCategory") } else { d.removeObject(forKey: "launcher.byCategory") }
+            try? log.joined(separator: "\n").write(toFile: dir + "/launcher.log", atomically: true, encoding: .utf8)
+            exit(0)
+        }
+    }
+}
+
+// MARK: - Self-test (debug): ONYX_TOURTEST=<file> plays the feature tour in a corner window for 13 s, without taking focus,
+// starting at slide ONYX_TOURTEST_STEP (0), and logs how far it got (it should advance twice) and the CPU it used.
+private final class TourTestBox: ObservableObject { @Published var step = 0 }
+private struct TourTestHost: View {
+    @ObservedObject var box: TourTestBox
+    var body: some View { FeatureTour(step: $box.step).frame(width: 520, height: 420).background(Color(hex: "0B0B12")).environment(\.colorScheme, .dark) }
+}
+enum TourTest {
+    @MainActor static func run(_ file: String) {
+        let box = TourTestBox()
+        box.step = Int(ProcessInfo.processInfo.environment["ONYX_TOURTEST_STEP"] ?? "") ?? 0
+        let first = box.step
+        let w = NSWindow(contentRect: NSRect(x: 20, y: 20, width: 520, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
+        w.contentView = NSHostingView(rootView: TourTestHost(box: box))
+        w.level = .floating; w.orderFrontRegardless()   // on top, so macOS doesn't throttle a covered window's timers
+        _ = ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "Tour test")
+        var times: [String] = []
+        let t0 = Date()
+        let watch = box.$step.dropFirst().sink { times.append(String(format: "%d at %.1f s", $0, Date().timeIntervalSince(t0))) }
+        func cpu() -> Double { var u = rusage(); getrusage(RUSAGE_SELF, &u); return Double(u.ru_utime.tv_sec + u.ru_stime.tv_sec) + Double(u.ru_utime.tv_usec + u.ru_stime.tv_usec) / 1e6 }
+        let c0 = cpu()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 13) {
+            let used = (cpu() - c0) / 13 * 100
+            let line = "slides \(first) → \(box.step) (expect \(first + 2))  " + (box.step == first + 2 ? "PASS" : "FAIL") + String(format: "\nCPU %.0f%% of one core", used)
+                + "\nchanges: " + times.joined(separator: ", ") + "\npointer over it at the end: \(w.frame.contains(NSEvent.mouseLocation))"
+            watch.cancel()
+            try? line.write(toFile: file, atomically: true, encoding: .utf8)
+            exit(0)
+        }
+    }
+}
+
+// MARK: - Self-test (debug): ONYX_AUTOCLOSETEST=<file> opens a small window, acts as if you clicked away from it, and checks
+// it's still open just before the delay (Settings › Behavior › System) and closed just after. Pass -autoCloseDelay 5 to be quick.
+enum AutoCloseTest {
+    @MainActor static func run(_ file: String) {
+        let w = NSWindow(contentRect: NSRect(x: 20, y: 20, width: 220, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+        w.isReleasedWhenClosed = false
+        w.orderFrontRegardless()
+        AutoClose.watch(w)
+        let delay = max(Prefs.double(Prefs.autoCloseDelay), 5)
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: w)   // as if you'd clicked another app
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay - 1) {
+            let before = w.isVisible
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                let ok = before && !w.isVisible
+                try? "delay \(Int(delay)) s: open 1 s before \(before), closed 1 s after \(!w.isVisible)  \(ok ? "PASS" : "FAIL")".write(toFile: file, atomically: true, encoding: .utf8)
+                exit(0)
+            }
+        }
     }
 }

@@ -23,18 +23,19 @@ enum DiffusionStyle: String, CaseIterable {
     var ready: Bool { FileManager.default.fileExists(atPath: folder.appendingPathComponent("Unet.mlmodelc").path) }
 
     /// The words that steer each model toward its look (the scene goes in the middle; CLIP reads 75 tokens).
-    func prompt(_ scene: String) -> String {
+    func prompt(_ scene: String, people: Bool = false) -> String {
         switch self {
         case .realistic: "RAW photo, \(scene), landscape photography, natural light, highly detailed, sharp focus, dslr, film grain"
-        case .anime: "anime scenery, no humans, \(scene), beautiful detailed background art, soft lighting, vivid colors, masterpiece"
+        case .anime: "anime scenery, \(people ? "" : "no humans, ")\(scene), beautiful detailed background art, soft lighting, vivid colors, masterpiece"
         case .painted: "digital painting, concept art, \(scene), painterly brushstrokes, dramatic lighting, highly detailed"
         }
     }
-    var negative: String {
-        let common = "people, person, character, text, watermark, signature, logo, frame, border, lowres, blurry, jpeg artifacts, deformed"
+    /// What to steer away from. People are left out unless you asked for a character.
+    func negative(people: Bool = false) -> String {
+        let common = (people ? "" : "people, person, character, ") + "text, watermark, signature, logo, frame, border, lowres, blurry, jpeg artifacts, deformed"
         switch self {
         case .realistic: return "cartoon, anime, painting, illustration, drawing, 3d render, cgi, oversaturated, " + common
-        case .anime: return "photo, realistic, 3d, girl, boy, " + common
+        case .anime: return "photo, realistic, 3d, " + (people ? "" : "girl, boy, ") + common
         case .painted: return "photo, 3d render, " + common
         }
     }
@@ -96,13 +97,13 @@ final class Diffusion {
     }
 
     /// Paints `count` pictures of the scene. progress(done, total) counts denoising steps across all of them.
-    func paint(_ scene: String, count: Int, steps: Int = 20, guidance: Float = 7, seed: UInt64 = .random(in: 0...UInt64(UInt32.max)),
+    func paint(_ scene: String, people: Bool = false, count: Int, steps: Int = 20, guidance: Float = 7, seed: UInt64 = .random(in: 0...UInt64(UInt32.max)),
                isCancelled: () -> Bool = { false }, progress: @escaping (Int, Int) -> Void, each: (CGImage) -> Void) throws {
         // 1. Text → embeddings (the "unconditional" one is the negative prompt, for classifier-free guidance).
         var cond: [Float] = [], uncond: [Float] = []
         try autoreleasepool {
             let text = try load("TextEncoder")   // let go of each model as soon as it's done, to keep memory down
-            cond = try encode(style.prompt(scene), text); uncond = try encode(style.negative, text)
+            cond = try encode(style.prompt(scene, people: people), text); uncond = try encode(style.negative(people: people), text)
         }
         let tokens = cond.count / 768
 

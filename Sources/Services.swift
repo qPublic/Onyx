@@ -203,6 +203,23 @@ final class BatteryMonitor: ObservableObject {
             minutesLeft = (t ?? -1) > 0 ? t : nil
         }
         loaded = true
+        LowBatteryMode.shared.evaluate()
+    }
+}
+
+/// Onyx's own Low Battery Mode: on battery at or below the level set in Settings › Behavior (15% by default), live
+/// wallpapers and Onyx's decorative animations pause and it stops sampling the screen behind the notch, until you plug in.
+final class LowBatteryMode: ObservableObject {
+    static let shared = LowBatteryMode()
+    @Published private(set) var active = false
+
+    func evaluate() {
+        let b = BatteryMonitor.shared
+        let on = Prefs.bool(Prefs.lowBattery) && b.hasBattery && !b.pluggedIn && b.percent <= Int(Prefs.double(Prefs.lowBatteryLevel))
+        guard on != active else { return }
+        active = on
+        if on { NotchModel.shared.flash(.message(icon: "leaf.fill", text: "Low Battery Mode", tint: .yellow), for: 3) }
+        WallpaperEngine.shared.evaluate()
     }
 }
 

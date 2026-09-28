@@ -362,8 +362,9 @@ struct AlbumArt: View {
 
 struct MusicBars: View {
     var playing: Bool
+    @ObservedObject var saver = LowBatteryMode.shared
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.12, paused: !playing)) { ctx in
+        TimelineView(.animation(minimumInterval: 0.12, paused: !playing || saver.active)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             HStack(alignment: .center, spacing: 2) {
                 ForEach(0..<4, id: \.self) { i in

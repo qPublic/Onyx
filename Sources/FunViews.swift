@@ -7,11 +7,12 @@ import SwiftUI
 struct VinylView: View {
     var size: CGFloat
     @ObservedObject var media = MediaController.shared
+    @ObservedObject var saver = LowBatteryMode.shared
     @State private var base = 0.0
     @State private var since: Date?
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !media.isPlaying)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !media.isPlaying || saver.active)) { ctx in
             let angle = base + (since.map { ctx.date.timeIntervalSince($0) } ?? 0) * 200
             record.rotationEffect(.degrees(angle.truncatingRemainder(dividingBy: 360)))
         }

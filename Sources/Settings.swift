@@ -158,7 +158,7 @@ struct SettingsView: View {
                     Text("Onyx").font(.system(size: 15, weight: .bold))
                     Text("MacOS").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
                 }
-                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · Everything free").font(.system(size: 10)).foregroundStyle(.secondary)
+                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · Free, forever").font(.system(size: 10)).foregroundStyle(.secondary)
             }
             Spacer()
         }
@@ -404,6 +404,12 @@ struct BehaviorSettings: View {
     @AppStorage(AP.dodgeMenus) var dodgeMenus = true
     @AppStorage(AP.interceptVolume) var interceptVolume = true
     @AppStorage(AP.menuBarIcon) var menuBarIcon = true
+    @AppStorage(Prefs.lowBattery) var lowBattery = true
+    @AppStorage(Prefs.lowBatteryLevel) var lowBatteryLevel = 15.0
+    @AppStorage(Prefs.autoClose) var autoClose = true
+    @AppStorage(Prefs.autoCloseDelay) var autoCloseDelay = 20.0
+    @ObservedObject private var battery = BatteryMonitor.shared
+    @ObservedObject private var saver = LowBatteryMode.shared
     @State private var loginItem = LoginItem.enabled
     @State private var axTrusted = MenuBarDodger.shared.trusted
 
@@ -435,8 +441,38 @@ struct BehaviorSettings: View {
                 }
                 Toggle("Haptic feedback on open", isOn: $haptics)
             }
+            if battery.hasBattery {
+                Section("Battery") {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Toggle("Low Battery Mode", isOn: $lowBattery).onChange(of: lowBattery) { _, _ in LowBatteryMode.shared.evaluate() }
+                        Text("On battery at or below this level, Onyx pauses live wallpapers and its animations and stops watching the screen behind the notch, until you plug in.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if lowBattery {
+                        LabeledContent("Turn on at") {
+                            HStack {
+                                Slider(value: $lowBatteryLevel, in: 5...50, step: 5).onChange(of: lowBatteryLevel) { _, _ in LowBatteryMode.shared.evaluate() }
+                                Text("\(Int(lowBatteryLevel))%").monospacedDigit().foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
+                            }
+                        }
+                        if saver.active {
+                            Label("On now (battery at \(battery.percent)%)", systemImage: "leaf.fill").font(.caption).foregroundStyle(.yellow)
+                        }
+                    }
+                }
+            }
             Section("System") {
                 Toggle("Hide while an app is fullscreen", isOn: $hideFullscreen)
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Close Onyx windows when you click away", isOn: $autoClose)
+                    if autoClose {
+                        Picker("After", selection: $autoCloseDelay) {
+                            ForEach([10.0, 20, 30, 60, 120, 300], id: \.self) { Text($0 < 60 ? "\(Int($0)) seconds" : "\(Int($0 / 60)) min").tag($0) }
+                        }
+                    }
+                    Text("Settings, Optimization, Live Wallpapers and the tour close by themselves after this long in the background. One with something open in it, like Create with AI, waits.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Toggle("Snap layouts", isOn: $snapLayouts)
                     Text("Drag a window up to the notch to pick a layout: halves, top/bottom, thirds, quarters and more. Needs Accessibility.")

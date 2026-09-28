@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.6.1
+
+### New
+- **Low Battery Mode.** When your Mac is on battery at or below 15%, Onyx pauses live wallpapers, its music animations and the goose, and stops watching the screen behind the notch, until you plug in. The notch lets you know when it turns on. Change the level or turn it off in **Settings › Behavior › Battery**.
+- **Create with AI checks its own work.** Ask for a character or creature, like "an Elden Ring character" or "a fox in a snowy forest", and Onyx paints it in the scene, then looks at every picture to make sure it's really there. The ones that show it come first, with a note saying so. If none do, it paints again with the character up front. The checker is Apple's MobileCLIP model, which downloads once (200 MB) and runs on your Mac.
+- **Onyx AI checks its answers.** After it replies, Onyx AI reads its answer back against what you asked. If it missed part of the question, or said it did something without actually doing it, it finishes the job before you see the final answer. This happens on Medium, High and Max; Low stays as fast as before.
+- **Onyx AI knows its way around Onyx.** Ask "where do I turn on Low Battery Mode?" and it looks the setting up and tells you where it is.
+- **Pin apps in the App Launcher.** Right-click an app › **Pin to Front** to keep it first, ahead of everything else, marked with a pin. Pinned apps also come first in search results.
+- **App Launcher by category.** A new switch next to the search field shows your apps grouped by category (Productivity, Utilities, Games and so on) in one scrolling list, with pinned apps on top. Switch back to your own arranged pages any time.
+- **Windows close when you click away.** Settings, Optimization, Live Wallpapers and the tour close by themselves after 20 seconds in the background. A window with something open in it, like Create with AI, waits. Change the time or turn it off in **Settings › Behavior › System**.
+
+### Improved
+- **Create with AI plans better scenes.** Apple Intelligence now keeps everything you asked for (like the village and the night in "Minecraft village at night"), and it picks effects that really fit, like bubbles on a reef or snow and glowing windows for a snowy cabin, with no more stars in a sunny sky. If a game's name trips Apple's safety filter, it tries again with just the game's look.
+- **Create with AI keeps working in the background.** macOS no longer slows painting down when you switch to another app.
+- The version line in Settings now reads "Free, forever".
+
+### Fixed
+- **The feature tour plays smoothly.** Its animations no longer stutter while your pointer is over the window, a slide no longer jumps back to its start as it slides out, and each demo plays once per slide instead of snapping back halfway through. The Live Wallpapers slide cross-fades between scenes without a hitch.
+- The tour's Create with AI demo now shows pictures that match what it types.
+
 ## 1.6.0
 
 ### New

@@ -41,21 +41,25 @@ extension LoopEffect: Identifiable {
     /// Its switch in the shader.
     var bit: UInt32 { 1 << UInt32(Self.allCases.firstIndex(of: self)!) }
 
-    /// Without Apple Intelligence: a best guess from the words in the idea.
-    static func guess(_ text: String) -> [LoopEffect] {
-        let t = text.lowercased()
-        let words: [(LoopEffect, [String])] = [
+    /// Words that hint at each effect. They make the guess below, and back up (or veto) the on-device model's picks.
+    static let clues: [(LoopEffect, [String])] = [
             (.rain, ["rain", "storm", "cyberpunk", "neon", "monsoon", "wet"]), (.snow, ["snow", "winter", "christmas", "ice", "frozen", "arctic", "skyrim"]),
-            (.embers, ["fire", "lava", "volcano", "forge", "campfire", "hell", "ember", "dragon", "nether"]),
+            (.embers, ["fire", "lava", "volcano", "forge", "campfire", "hell", "ember", "dragon", "nether", "torch", "flame", "fiery", "molten", "underworld"]),
             (.fireflies, ["firefl", "forest", "swamp", "meadow", "summer night", "garden", "zelda"]),
             (.stars, ["night", "space", "star", "galaxy", "moon", "cosmic"]), (.fog, ["fog", "mist", "haunt", "spooky", "horror", "ghost", "lake", "mountain", "morning"]),
             (.leaves, ["autumn", "fall", "leaves", "harvest"]), (.petals, ["sakura", "cherry", "blossom", "spring", "japan"]),
             (.dust, ["desert", "sunbeam", "library", "cozy", "ruins", "dusty", "attic"]), (.bubbles, ["underwater", "ocean", "reef", "aquarium", "sea floor", "subnautica"]),
             (.wind, ["grass", "field", "prairie", "windy", "plains", "minecraft"]),
-            (.lights, ["lantern", "castle", "village", "cabin", "window", "street", "tavern", "candle", "town"]),
+            (.lights, ["lantern", "castle", "village", "cabin", "window", "street", "tavern", "candle", "town", "lamp", "neon", "torch", "lighthouse", "city"]),
         ]
-        let hits = words.filter { $0.1.contains { t.contains($0) } }.map(\.0)
+    /// Without Apple Intelligence: a best guess from the words in the idea.
+    static func guess(_ text: String) -> [LoopEffect] {
+        let hits = LoopEffect.hinted(by: text)
         return hits.isEmpty ? [.dust, .wind] : Array(hits.prefix(2))
+    }
+    static func hinted(by text: String) -> [LoopEffect] {
+        let t = text.lowercased()
+        return clues.filter { $0.1.contains { t.contains($0) } }.map(\.0)
     }
 }
 
@@ -63,12 +67,22 @@ extension LoopEffect: Identifiable {
 enum LoopPlan {
     static let schema: GenerationSchema? = try? GenerationSchema(root: DynamicGenerationSchema(name: "LoopPlan", properties: [
         .init(name: "name", description: "A short name for the wallpaper, 1 to 4 words", schema: DynamicGenerationSchema(type: String.self)),
-        .init(name: "scene", description: "One wide, scenic view for an image generator, under 40 words: the setting, time of day, light, colors and mood. Describe how things look instead of naming games, films, brands or characters. No people.",
+        .init(name: "subject", description: "The character or creature the user asked to see, described only by how it looks: what it is, its shape and colors, and clothes or armor if it wears any, under 15 words (for example 'a tall knight in ornate golden armor with a tattered red cape'). Not scenery. An empty string if the user didn't ask for one.",
               schema: DynamicGenerationSchema(type: String.self)),
-        .init(name: "effects", description: "One or two gentle animated effects that clearly belong in the scene (lights only if it has lamps, windows or glowing things)",
-              schema: DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(name: "Effect", anyOf: LoopEffect.allCases.map(\.rawValue)),
-                                              minimumElements: 1, maximumElements: 2)),
-    ]), dependencies: [])
+        .init(name: "scene", description: "One wide, scenic view for an image generator, under 40 words. If there is a subject, start with it, in the foreground. Keep every place, thing and time of day from the idea, and add the light, colors and mood. Describe how things look instead of naming games, films, brands or characters.",
+              schema: DynamicGenerationSchema(type: String.self)),
+    ] + questions.map { .init(name: $0.0.rawValue, description: $0.1, schema: DynamicGenerationSchema(type: Bool.self)) }), dependencies: [])
+
+    /// A yes or no for each effect about the scene it just wrote (the small model picks far better this way than from a
+    /// list), in the order they win when more than two fit.
+    static let questions: [(LoopEffect, String)] = [
+        (.rain, "Is it raining in the scene?"), (.snow, "Is there snow or is it winter?"), (.bubbles, "Is the scene underwater?"),
+        (.embers, "Is there fire, lava, torches or a forge?"), (.petals, "Are there blossoming trees, like cherry blossoms?"),
+        (.leaves, "Is it autumn with colored leaves?"), (.lights, "Are there lit windows, lamps, lanterns or neon signs?"),
+        (.fireflies, "Is it a forest, meadow or garden at dusk or night?"), (.stars, "Is the sky dark enough to see stars?"),
+        (.fog, "Is there mist or fog?"), (.dust, "Is it dry and dusty, like a desert, ruins or a sunlit room?"),
+        (.wind, "Is there grass or leafy trees outdoors?"),
+    ]
 }
 
 extension ImagePlaygroundStyle {
@@ -119,6 +133,9 @@ enum ArtStyle: String, CaseIterable, Identifiable {
     @Published var detail = ""                 // what's happening while it paints
     @Published var progress = 0.0
     @Published private(set) var art: ArtStyle?  // how the pictures on offer were made (nil for your own picture)
+    @Published var subject = ""                // the character or thing you asked for, if any
+    @Published var checkNote: String?          // what checking the pictures found
+    @Published var checkOK = false
     static let grain: UInt32 = 1 << 12          // the shader's film-grain switch, for photo-like loops
     private var task: Task<Void, Never>?
     private var painting: Task<Void, Error>?
@@ -136,35 +153,44 @@ enum ArtStyle: String, CaseIterable, Identifiable {
     /// Plans the loop from an idea, then paints versions of it to choose from: two with Stable Diffusion (Realistic, Anime,
     /// Painted), up to four with Image Playground (Animated, Illustration).
     func imagine(_ idea: String, art: ArtStyle, picture: CGImage? = nil) {
-        images = []; step = .thinking; detail = ""; progress = 0; self.art = art
+        images = []; step = .thinking; detail = ""; progress = 0; self.art = art; checkNote = nil; checkOK = false
         task = Task {
+            let awake = ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "Painting a live wallpaper")   // no App Nap if you switch away
+            defer { ProcessInfo.processInfo.endActivity(awake) }
             let p = await Self.plan(idea, style: art.title)
-            name = p.name; scene = p.scene; effects = Set(p.effects)
+            name = p.name; scene = p.scene; effects = Set(p.effects); subject = p.subject
             step = .drawing
             do {
-                if let sd = art.diffusion, picture == nil {
-                    if !sd.ready {
-                        detail = "Downloading the \(art.title) style (2 GB, just this once)…"
-                        try await sd.download { p in Task { @MainActor in LoopMaker.shared.progress = p } }
+                @MainActor func paint(_ scene: String) async throws {
+                    if let sd = art.diffusion, picture == nil {
+                        if !sd.ready {
+                            detail = "Downloading the \(art.title) style (2 GB, just this once)…"
+                            try await sd.download { p in Task { @MainActor in LoopMaker.shared.progress = p } }
+                        }
+                        detail = "Painting…"; progress = 0
+                        let people = !p.subject.isEmpty
+                        painting = Task.detached(priority: .userInitiated) {
+                            try Diffusion(sd).paint(scene, people: people, count: 2, isCancelled: { Task.isCancelled }, progress: { done, total in
+                                Task { @MainActor in LoopMaker.shared.progress = Double(done) / Double(total) }
+                            }, each: { img in
+                                let made = img
+                                Task { @MainActor in LoopMaker.shared.images.append(made) }
+                            })
+                        }
+                        try await painting?.value
+                        try await Task.sleep(for: .milliseconds(100))   // let the last picture land
+                    } else {
+                        NSApp.activate()   // Image Playground only draws for the app in front
+                        let creator = try await ImageCreator()
+                        var concepts: [ImagePlaygroundConcept] = [.text(scene)]
+                        if let picture { concepts.insert(.image(picture), at: 0) }
+                        for try await made in creator.images(for: concepts, style: art.playground ?? .animation, limit: 4) { images.append(made.cgImage) }
                     }
-                    detail = "Painting…"; progress = 0
-                    let scene = p.scene
-                    painting = Task.detached(priority: .userInitiated) {
-                        try Diffusion(sd).paint(scene, count: 2, isCancelled: { Task.isCancelled }, progress: { done, total in
-                            Task { @MainActor in LoopMaker.shared.progress = Double(done) / Double(total) }
-                        }, each: { img in
-                            let made = img
-                            Task { @MainActor in LoopMaker.shared.images.append(made) }
-                        })
-                    }
-                    try await painting?.value
-                    try await Task.sleep(for: .milliseconds(100))   // let the last picture land
-                } else {
-                    NSApp.activate()   // Image Playground only draws for the app in front
-                    let creator = try await ImageCreator()
-                    var concepts: [ImagePlaygroundConcept] = [.text(p.scene)]
-                    if let picture { concepts.insert(.image(picture), at: 0) }
-                    for try await made in creator.images(for: concepts, style: art.playground ?? .animation, limit: 4) { images.append(made.cgImage) }
+                }
+                try await paint(p.scene)
+                // Asked for someone or something? Look for it in what got painted, and paint again if it's missing.
+                if !p.subject.isEmpty && !images.isEmpty && picture == nil {
+                    try await checkWork(p.subject) { try await paint(p.subject + ", " + p.scene) }
                 }
                 step = images.isEmpty ? .failed("Nothing got painted. Try describing it differently.") : .pick
             } catch let e as ImageCreator.Error {
@@ -175,9 +201,38 @@ enum ArtStyle: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Checks each picture for the subject with MobileCLIP, puts the ones that show it first, and paints once more with the
+    /// subject up front if none do. Checking is a bonus: if it can't run, the pictures are offered as they are.
+    private func checkWork(_ subject: String, repaint: () async throws -> Void) async throws {
+        do {
+            if !LoopChecker.ready {
+                detail = "Getting the picture checker (200 MB, just this once)…"; progress = 0
+                try await LoopChecker.download { p in Task { @MainActor in LoopMaker.shared.progress = p } }
+            }
+            let who = LoopChecker.label(subject)
+            detail = "Checking the pictures for \(who)"
+            var found = try await LoopChecker.scores(images, subject: subject)
+            if !found.contains(where: { $0 >= LoopChecker.threshold }) {
+                detail = "Painting again: those were missing \(who)"
+                let before = images.count
+                try await repaint()
+                found += try await LoopChecker.scores(Array(images[before...]), subject: subject)
+            }
+            let order = found.indices.sorted { found[$0] > found[$1] }
+            images = order.map { images[$0] }
+            let hits = found.filter { $0 >= LoopChecker.threshold }.count
+            checkOK = hits > 0
+            checkNote = hits > 0 ? "Checked: \(hits) of \(found.count) show \(who)" : "None clearly show \(who), so the closest are first. Try describing it differently."
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            checkNote = nil
+        }
+    }
+
     /// Your own picture, used as it is.
     func use(_ picture: CGImage, name: String, idea: String) {
-        art = nil
+        art = nil; checkNote = nil
         task = Task {
             images = [picture]; step = .thinking
             let p = await Self.plan(idea.isEmpty ? name : idea)
@@ -193,6 +248,8 @@ enum ArtStyle: String, CaseIterable, Identifiable {
         let fx = effects.reduce(art == .realistic ? Self.grain : 0) { $0 | $1.bit }, prompt = scene, title = name.isEmpty ? "AI Loop" : name
         step = .working("Getting started…", 0)
         task = Task {
+            let awake = ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "Making a live wallpaper")
+            defer { ProcessInfo.processInfo.endActivity(awake) }
             do {
                 let url = try await Self.build(picture, fx: fx, motion: motion) { stage, p in
                     Task { @MainActor in if self.busy { self.step = .working(stage, p) } }
@@ -268,29 +325,80 @@ enum ArtStyle: String, CaseIterable, Identifiable {
 
     nonisolated(unsafe) static var planError: String?   // why the last plan fell back to the word-based guess (for tests)
 
-    nonisolated static func plan(_ idea: String, style: String? = nil) async -> (name: String, scene: String, effects: [LoopEffect]) {
+    nonisolated static func plan(_ idea: String, style: String? = nil) async -> (name: String, scene: String, effects: [LoopEffect], subject: String) {
         let trimmed = idea.trimmingCharacters(in: .whitespacesAndNewlines)
         let look = look(for: trimmed)
+        let someone = asksForSomeone(trimmed)
         let fallback = (name: trimmed.split(separator: " ").prefix(4).joined(separator: " ").capitalized, scene: (look.map { $0 + ", " } ?? "") + trimmed + ", wide scenic landscape",
-                        effects: LoopEffect.guess(trimmed))
+                        effects: LoopEffect.guess(trimmed), subject: someone ? trimmed : "")
+        planError = nil
         guard case .available = SystemLanguageModel.default.availability, !trimmed.isEmpty, let schema = LoopPlan.schema else { return fallback }
-        do {
-            let s = LanguageModelSession(instructions: """
-                You plan looping animated desktop wallpapers. If the idea names a video game, film, show or other world, \
-                describe its distinctive art style first (for example blocky voxel cubes, pixel art, cel-shaded, low-poly or painterly) \
-                and its signature scenery, colors and lighting, without using its name. Pick effects that fit the weather and time \
-                of day in the scene; leave out effects that don't belong.
-                """)
-            let prompt = "Wallpaper idea: \(trimmed)" + (look.map { "\nIts art style: \($0)" } ?? "") + (style.map { "\nIt will be drawn in a \($0.lowercased()) style." } ?? "")
-            let p = try await s.respond(to: prompt, schema: schema, options: GenerationOptions(temperature: 0.6)).content
-            var fx: [LoopEffect] = []
-            for e in (try p.value([String].self, forProperty: "effects")).compactMap(LoopEffect.init(rawValue:)) where !fx.contains(e) { fx.append(e) }
-            var name = try p.value(String.self, forProperty: "name").trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"")))
-            if name == name.lowercased() { name = name.capitalized }
-            var scene = try p.value(String.self, forProperty: "scene")
-            if let look, !scene.lowercased().contains(look.split(separator: " ").prefix(2).joined(separator: " ").lowercased()) { scene = look + ". " + scene }   // keep the look
-            return (name.isEmpty ? fallback.name : name, scene.isEmpty ? fallback.scene : scene, fx.isEmpty ? fallback.effects : fx)
-        } catch { planError = "\(error)"; return fallback }
+        let styleLine = style.map { "\nIt will be drawn in a \($0.lowercased()) style." } ?? ""
+        let who = someone ? "\nThe idea asks for a character or creature. Keep the one it names; if it just says character, invent one that fits this world."
+            : "\nNo characters, people or animals: just the place."
+        var prompt = "Wallpaper idea: \(trimmed)" + (look.map { "\nIts art style: \($0)" } ?? "") + who + styleLine
+        for attempt in 0..<3 {
+            do {
+                let s = LanguageModelSession(instructions: """
+                    You plan looping animated desktop wallpapers. If the idea names a video game, film, show or other world, \
+                    describe its distinctive art style first (for example blocky voxel cubes, pixel art, cel-shaded, low-poly or painterly) \
+                    and its signature scenery, colors and lighting (and its typical characters, if asked for one), without using its name. \
+                    Then answer each question about your scene.
+                    """)
+                let p = try await s.respond(to: prompt, schema: schema, options: GenerationOptions(temperature: 0.6)).content
+                var name = try p.value(String.self, forProperty: "name").trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"")))
+                if name == name.lowercased() { name = name.capitalized }
+                var scene = brief(try p.value(String.self, forProperty: "scene"), dropping: style.map { "\($0.lowercased()) style" })   // it sometimes repeats the style line
+                if let look, !look.split(separator: ",").contains(where: { scene.lowercased().contains($0.split(separator: " ").prefix(2).joined(separator: " ").lowercased()) }) {
+                    scene = look + ". " + scene   // keep the look
+                }
+                // A yes only counts when the words back it up, so a sunny meadow doesn't get stars.
+                let dark = ["night", "dusk", "evening", "twilight", "dark", "moon"].contains { (trimmed + " " + scene).lowercased().contains($0) }
+                let hinted = LoopEffect.hinted(by: trimmed + " " + scene).filter { dark || $0 != .fireflies }   // no fireflies in daylight
+                let fx = LoopPlan.questions.map(\.0).filter { (try? p.value(Bool.self, forProperty: $0.rawValue)) == true && hinted.contains($0) }
+                let picks = Array((fx.isEmpty ? hinted : fx).prefix(2))
+                // A subject only when the idea asks for someone or something, not one it made up for a plain landscape.
+                var subject = (try? p.value(String.self, forProperty: "subject"))?.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\".'"))) ?? ""
+                if !someone || ["none", "n/a", "nothing"].contains(subject.lowercased()) { subject = "" }
+                if someone && subject.isEmpty { subject = trimmed }
+                subject = subject.split(separator: " ").prefix(18).joined(separator: " ")
+                // The painter pays most attention to the start, so that's where the subject goes.
+                if !subject.isEmpty && !scene.lowercased().hasPrefix(subject.lowercased().prefix(12)) { scene = subject + ". " + brief(scene, words: 35) }
+                return (name.isEmpty ? fallback.name : name, scene.isEmpty ? fallback.scene : scene, picks.isEmpty ? [.dust, .wind] : picks, subject)
+            } catch let e as LanguageModelSession.GenerationError where attempt < 2 {
+                planError = "\(e)"
+                switch e {
+                case .rateLimited, .concurrentRequests: try? await Task.sleep(for: .seconds(1.5 * Double(attempt + 1)))   // busy: wait a moment
+                case .guardrailViolation, .refusal:   // some game names trip the safety filter: ask again with just the look
+                    guard let look else { return fallback }
+                    prompt = "Wallpaper idea: a scenic world drawn as \(look)" + who + styleLine
+                default: return fallback
+                }
+            } catch { planError = "\(error)"; return fallback }
+        }
+        return fallback
+    }
+
+    /// Whether the idea asks for a character, creature or thing to be in it, not just a place.
+    nonisolated static func asksForSomeone(_ idea: String) -> Bool {
+        let words = Set(idea.lowercased().split { !$0.isLetter }.map(String.init))
+        let who = ["character", "characters", "hero", "heroine", "boss", "knight", "warrior", "soldier", "samurai", "ninja", "wizard", "witch",
+                   "mage", "king", "queen", "princess", "prince", "girl", "boy", "man", "woman", "person", "people", "player", "villain",
+                   "creature", "monster", "dragon", "robot", "mech", "cat", "dog", "fox", "wolf", "bird", "horse", "deer", "owl", "car",
+                   "ship", "spaceship", "astronaut", "portrait"]
+        return who.contains(where: words.contains)
+    }
+
+    /// The first sentences, up to about 50 words (the painters only read so much, and the model can ramble).
+    nonisolated static func brief(_ text: String, dropping: String? = nil, words limit: Int = 50) -> String {
+        var kept: [String] = [], count = 0
+        for sentence in text.split(separator: ".").map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+        where !sentence.isEmpty && !(dropping.map { sentence.lowercased().contains($0) } ?? false) {
+            let n = sentence.split(separator: " ").count
+            if !kept.isEmpty && count + n > limit { break }
+            kept.append(sentence); count += n
+        }
+        return kept.isEmpty ? "" : kept.joined(separator: ". ") + "."
     }
 
     // MARK: Building the loop (off the main thread)
@@ -464,6 +572,90 @@ enum ArtStyle: String, CaseIterable, Identifiable {
         input.markAsFinished()
         await writer.finishWriting()
         if writer.status != .completed { throw writer.error ?? VoiceError("Couldn't finish the video.") }
+    }
+}
+
+// MARK: - Checking its own work (MobileCLIP-S2, Apple's image–text model in Core ML; downloads once, 200 MB)
+
+enum LoopChecker {
+    static let base = "https://huggingface.co/apple/coreml-mobileclip/resolve/main/mobileclip_s2_"
+    static let tokenizer = "https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/"   // MobileCLIP reads CLIP's tokens
+    static var dir: URL { DepthModel.dir.appendingPathComponent("MobileCLIP", isDirectory: true) }
+    static var ready: Bool { ["image.mlmodelc", "text.mlmodelc", "merges.txt"].allSatisfy { FileManager.default.fileExists(atPath: dir.appendingPathComponent($0).path) } }
+    /// A picture counts as showing the subject when it's clearly likelier to be "a picture of <subject>" than an empty
+    /// landscape (a 0.05 margin: in tests, pictures with the character scored 0.11–0.21, ones without it 0.02 at most).
+    static let threshold: Float = 0.5
+
+    /// Just who or what it is, without where it's standing ("a fox with a bushy tail, standing in the snow" → "a fox
+    /// with a bushy tail"), so scenery in the picture doesn't count as finding it.
+    static func core(_ subject: String) -> String {
+        var s = subject.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
+        for cut in [" standing ", " sitting ", " walking ", " floating ", " perched ", " in a ", " in the ", " on a ", " on the ", " at "] {
+            if let r = s.range(of: cut, options: .caseInsensitive), r.lowerBound > s.startIndex { s = String(s[..<r.lowerBound]) }
+        }
+        return s.trimmingCharacters(in: .whitespaces.union(CharacterSet(charactersIn: ",")))
+    }
+
+    /// A short name for it in messages: "a tall humanoid figure with golden skin…".
+    static func label(_ subject: String) -> String {
+        let words = core(subject).split(separator: " ")
+        let s = words.prefix(7).joined(separator: " ") + (words.count > 7 ? "…" : "")
+        return s.prefix(1).lowercased() + s.dropFirst()
+    }
+
+    static func download(progress: @escaping @Sendable (Double) -> Void) async throws {
+        func fetch(_ url: String, to dest: URL) async throws {
+            try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let (tmp, resp) = try await URLSession.shared.download(from: URL(string: url)!)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw VoiceError("Couldn't download the picture checker. Check your internet connection.") }
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.moveItem(at: tmp, to: dest)
+        }
+        for f in ["vocab.json", "merges.txt.part"] { try await fetch(tokenizer + f.replacingOccurrences(of: ".part", with: ""), to: dir.appendingPathComponent(f)) }
+        for (i, part) in ["image", "text"].enumerated() {
+            let pkg = FileManager.default.temporaryDirectory.appendingPathComponent("onyx-clip-\(UUID().uuidString).mlpackage")
+            defer { try? FileManager.default.removeItem(at: pkg) }
+            for f in DepthModel.files { try await fetch(base + part + ".mlpackage/" + f, to: pkg.appendingPathComponent(f)) }
+            let c = try await MLModel.compileModel(at: pkg)
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(part).mlmodelc"))
+            try FileManager.default.moveItem(at: c, to: dir.appendingPathComponent("\(part).mlmodelc"))
+            progress(Double(i + 1) / 2)
+        }
+        // merges.txt last, since `ready` looks for it: a download that stopped halfway starts over next time.
+        try FileManager.default.moveItem(at: dir.appendingPathComponent("merges.txt.part"), to: dir.appendingPathComponent("merges.txt"))
+    }
+
+    /// For each picture, how sure it is (0…1) that the subject is in it.
+    static func scores(_ images: [CGImage], subject: String) async throws -> [Float] {
+        let folder = dir
+        return try await Task.detached(priority: .userInitiated) {
+            let cfg = MLModelConfiguration(); cfg.computeUnits = .cpuAndNeuralEngine
+            let tokens = try CLIPTokenizer(vocab: folder.appendingPathComponent("vocab.json"), merges: folder.appendingPathComponent("merges.txt"))
+            func unit(_ out: MLFeatureProvider) throws -> [Float] {
+                guard let a = out.featureValue(for: "final_emb_1")?.multiArrayValue else { throw VoiceError("The picture checker didn't answer.") }
+                var v = (0..<a.count).map { Float(truncating: a[$0]) }
+                let n = max(sqrt(v.reduce(0) { $0 + $1 * $1 }), 1e-6)
+                for i in v.indices { v[i] /= n }
+                return v
+            }
+            let textModel = try MLModel(contentsOf: folder.appendingPathComponent("text.mlmodelc"), configuration: cfg)
+            func text(_ s: String) throws -> [Float] {
+                var ids = tokens.encode(s)
+                if let end = ids.firstIndex(of: 49407) { for i in (end + 1)..<ids.count { ids[i] = 0 } }   // padded with 0s, as it was trained
+                let a = try MLMultiArray(shape: [1, 77], dataType: .int32)
+                for (i, t) in ids.enumerated() { a[i] = NSNumber(value: t) }
+                return try unit(textModel.prediction(from: MLDictionaryFeatureProvider(dictionary: ["text": a])))
+            }
+            let want = try text("a picture of " + LoopChecker.core(subject)), empty = try text("a picture of an empty landscape with nobody in it")
+            let imageModel = try MLModel(contentsOf: folder.appendingPathComponent("image.mlmodelc"), configuration: cfg)
+            guard let c = imageModel.modelDescription.inputDescriptionsByName["image"]?.imageConstraint else { throw VoiceError("The picture checker didn't load right.") }
+            return try images.map { img in
+                let v = try MLFeatureValue(cgImage: img, constraint: c, options: [.cropAndScale: VNImageCropAndScaleOption.scaleFill.rawValue])
+                let e = try unit(imageModel.prediction(from: MLDictionaryFeatureProvider(dictionary: ["image": v])))
+                let margin = zip(e, want).reduce(0) { $0 + $1.0 * $1.1 } - zip(e, empty).reduce(0) { $0 + $1.0 * $1.1 }
+                return 1 / (1 + exp(-100 * (margin - 0.05)))   // CLIP's usual logit scale, centered on the 0.05 margin
+            }
+        }.value
     }
 }
 
@@ -791,6 +983,10 @@ struct CreateLoopSheet: View {
 
     private var pick: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let note = maker.checkNote {
+                Label(note, systemImage: maker.checkOK ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 12)).foregroundStyle(maker.checkOK ? .green : .orange)
+            }
             ScrollView { grid(selectable: true) }.frame(height: maker.images.count <= 2 ? 180 : 310).scrollIndicators(.hidden)
             HStack {
                 Text("Name").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)

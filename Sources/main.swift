@@ -50,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                             CGImageDestinationAddImage(d, img, nil); CGImageDestinationFinalize(d)
                         }
                     }
-                    let log = "step: \(m.step)\nimages: \(m.images.count)\nname: \(m.name)\neffects: \(m.effects.map(\.rawValue).sorted())\nscene: \(m.scene)\nplan error: \(LoopMaker.planError ?? "none")\nseconds: \(Int(Date().timeIntervalSince(start)))\n"
+                    let log = "step: \(m.step)\nimages: \(m.images.count)\nname: \(m.name)\neffects: \(m.effects.map(\.rawValue).sorted())\nscene: \(m.scene)\nsubject: \(m.subject)\ncheck: \(m.checkNote ?? "none")\nplan error: \(LoopMaker.planError ?? "none")\nseconds: \(Int(Date().timeIntervalSince(start)))\n"
                     try? log.write(toFile: dir + "/imagine.log", atomically: true, encoding: .utf8)
                     exit(0)
                 }
@@ -104,6 +104,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // Debug: ONYX_SDTEST=<dir> runs the Stable Diffusion styles and a parallax loop (see SDSelfTest), before any services start.
         if let dir = ProcessInfo.processInfo.environment["ONYX_SDTEST"] { Task { @MainActor in await SDSelfTest.run(dir) }; return }
+        // Debug: ONYX_AICHECKTEST=<file> asks Onyx AI a few questions and logs how it checks its answers (see AICheckTest).
+        if let file = ProcessInfo.processInfo.environment["ONYX_AICHECKTEST"] { Task { @MainActor in await AICheckTest.run(file) }; return }
+        // Debug: ONYX_LAUNCHERPINTEST=<dir> checks pinned apps and the by-category view, with screenshots (see LauncherPinTest).
+        if let dir = ProcessInfo.processInfo.environment["ONYX_LAUNCHERPINTEST"] { Task { @MainActor in await LauncherPinTest.run(dir) }; return }
+        // Debug: ONYX_TOURTEST=<file> plays the feature tour for 13 s (see TourTest).
+        if let file = ProcessInfo.processInfo.environment["ONYX_TOURTEST"] { TourTest.run(file); return }
+        // Debug: ONYX_AUTOCLOSETEST=<file> checks a watched window closes once you've clicked away for the set time (see AutoCloseTest).
+        if let file = ProcessInfo.processInfo.environment["ONYX_AUTOCLOSETEST"] { AutoCloseTest.run(file); return }
+        // Debug: ONYX_LOWBATTERYTEST=<file> checks Low Battery Mode against this Mac's battery (see LowBatteryTest).
+        if let file = ProcessInfo.processInfo.environment["ONYX_LOWBATTERYTEST"] { LowBatteryTest.run(file); return }
         // Debug: ONYX_SCENETEST=<dir> plays the GPU scenes on the desktop and measures them (see ScenePerfTest).
         if let dir = ProcessInfo.processInfo.environment["ONYX_SCENETEST"] { Task { @MainActor in await ScenePerfTest.run(dir) }; return }
         if Updater.shared.installPendingAtLaunch() { NSApp.terminate(nil); return }   // swap in a downloaded update, then reopen
@@ -561,6 +571,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             w.setContentSize(NSSize(width: 760, height: 580))
             w.center()
             settingsWindow = w
+            MainActor.assumeIsolated { AutoClose.watch(w) }
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
@@ -581,6 +592,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             w.setContentSize(NSSize(width: 720, height: 600))
             w.center()
             optimizeWindow = w
+            MainActor.assumeIsolated { AutoClose.watch(w) }
         }
         NSApp.activate(ignoringOtherApps: true)
         optimizeWindow?.makeKeyAndOrderFront(nil)
@@ -602,6 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             w.setContentSize(NSSize(width: 960, height: 680))
             w.center()
             wallpapersWindow = w
+            MainActor.assumeIsolated { AutoClose.watch(w) }
         }
         NSApp.activate(ignoringOtherApps: true)
         wallpapersWindow?.makeKeyAndOrderFront(nil)
@@ -622,6 +635,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         w.contentViewController = NSHostingController(rootView: OnboardingView(done: { [weak self] in self?.tourWindow?.close() }, tourOnly: true))
         w.center()
         tourWindow = w
+        MainActor.assumeIsolated { AutoClose.watch(w) }
         NSApp.activate(ignoringOtherApps: true)
         w.makeKeyAndOrderFront(nil)
     }

@@ -6,6 +6,7 @@ import SwiftUI
 struct LaunchApp: Hashable, Identifiable {
     let path: String
     let name: String
+    var category = "Other"   // from the app's LSApplicationCategoryType, like "Productivity"
     var id: String { path }
 }
 
@@ -21,16 +22,20 @@ enum LaunchItem: Codable, Hashable, Identifiable {
     @Published private(set) var apps: [String: LaunchApp] = [:]
     @Published private(set) var items: [LaunchItem] = []
     @Published private(set) var hidden: Set<String> = []
+    @Published private(set) var pinned: [String] = []   // always first, in this order
+    @Published var byCategory = UserDefaults.standard.bool(forKey: "launcher.byCategory") {
+        didSet { UserDefaults.standard.set(byCategory, forKey: "launcher.byCategory") }
+    }
     private var icons: [String: NSImage] = [:]
     private var file: URL { Prefs.supportDir.appendingPathComponent("launcher.json") }
-    private struct Saved: Codable { var items: [LaunchItem]; var hidden: [String] }
+    private struct Saved: Codable { var items: [LaunchItem]; var hidden: [String]; var pinned: [String]? }
 
     init() {
-        if let d = try? Data(contentsOf: file), let s = try? JSONDecoder().decode(Saved.self, from: d) { items = s.items; hidden = Set(s.hidden) }
+        if let d = try? Data(contentsOf: file), let s = try? JSONDecoder().decode(Saved.self, from: d) { items = s.items; hidden = Set(s.hidden); pinned = s.pinned ?? [] }
     }
 
     private func save() {
-        if let d = try? JSONEncoder().encode(Saved(items: items, hidden: Array(hidden))) { try? d.write(to: file, options: .atomic) }
+        if let d = try? JSONEncoder().encode(Saved(items: items, hidden: Array(hidden), pinned: pinned)) { try? d.write(to: file, options: .atomic) }
     }
 
     func icon(_ path: String) -> NSImage {
@@ -69,7 +74,8 @@ enum LaunchItem: Codable, Hashable, Identifiable {
                 if n.hasSuffix(".app") {
                     var name = fm.displayName(atPath: p)
                     if name.hasSuffix(".app") { name = String(name.dropLast(4)) }
-                    out.append(LaunchApp(path: p, name: name))
+                    let type = NSDictionary(contentsOfFile: p + "/Contents/Info.plist")?["LSApplicationCategoryType"] as? String
+                    out.append(LaunchApp(path: p, name: name, category: categoryName(type) ?? "Other"))
                 } else if depth > 0 {
                     var isDir: ObjCBool = false
                     if fm.fileExists(atPath: p, isDirectory: &isDir), isDir.boolValue { add(p, depth: depth - 1) }   // e.g. "Microsoft Office/"
@@ -129,7 +135,9 @@ enum LaunchItem: Codable, Hashable, Identifiable {
         items[i] = .folder(id: id, name: name.isEmpty ? "Folder" : name, apps: list); save()
     }
 
-    func hide(_ path: String) { hidden.insert(path); save() }
+    func hide(_ path: String) { hidden.insert(path); pinned.removeAll { $0 == path }; save() }
+    func pin(_ path: String) { if !pinned.contains(path) { pinned.append(path); save() } }
+    func unpin(_ path: String) { pinned.removeAll { $0 == path }; save() }
     func showHidden() { hidden = []; save() }
     func resetLayout() { items = []; save(); Task { await refresh() } }
 
@@ -141,23 +149,42 @@ enum LaunchItem: Codable, Hashable, Identifiable {
     static func folderName(for paths: [String], apps: [String: LaunchApp]) -> String {
         let cats = paths.compactMap { Bundle(path: $0)?.object(forInfoDictionaryKey: "LSApplicationCategoryType") as? String }
         guard let c = cats.first, cats.allSatisfy({ $0 == c }) else { return "Folder" }
+        return categoryName(c) ?? "Folder"
+    }
+
+    /// "public.app-category.developer-tools" → "Developer".
+    nonisolated static func categoryName(_ type: String?) -> String? {
+        guard let type else { return nil }
         let names = ["games": "Games", "productivity": "Productivity", "utilities": "Utilities", "developer-tools": "Developer",
                      "graphics-design": "Design", "social-networking": "Social", "music": "Music", "video": "Video", "photography": "Photos",
-                     "education": "Education", "business": "Business", "entertainment": "Entertainment", "finance": "Finance", "news": "News"]
-        return names.first { c.hasSuffix($0.key) }?.value ?? "Folder"
+                     "education": "Education", "business": "Business", "entertainment": "Entertainment", "finance": "Finance", "news": "News",
+                     "reference": "Reference", "books": "Books", "travel": "Travel", "weather": "Weather", "lifestyle": "Lifestyle",
+                     "sports": "Sports", "healthcare-fitness": "Health & Fitness", "medical": "Health & Fitness"]
+        return names.first { type.hasSuffix($0.key) }?.value
     }
 
     // MARK: What's shown
 
+    /// Your layout, with pinned apps pulled out of it (and out of folders) to the front.
     var visible: [LaunchItem] {
-        items.compactMap { item in
+        let pins = pinned.filter { apps[$0] != nil && !hidden.contains($0) }
+        return pins.map { .app($0) } + items.compactMap { item in
             switch item {
-            case .app(let p): return hidden.contains(p) ? nil : item
+            case .app(let p): return hidden.contains(p) || pins.contains(p) ? nil : item
             case .folder(let id, let name, let list):
-                let l = list.filter { !hidden.contains($0) }
+                let l = list.filter { !hidden.contains($0) && !pins.contains($0) }
                 return l.isEmpty ? nil : .folder(id: id, name: name, apps: l)
             }
         }
+    }
+
+    /// By category: pinned apps, then each category A–Z (Other last), apps A–Z within it.
+    var sections: [(name: String, apps: [LaunchApp])] {
+        let pins = pinned.compactMap { apps[$0] }.filter { !hidden.contains($0.path) }
+        let rest = apps.values.filter { !hidden.contains($0.path) && !pinned.contains($0.path) }
+        let groups = Dictionary(grouping: rest, by: \.category).map { (name: $0.key, apps: $0.value.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) }
+            .sorted { ($0.name == "Other" ? 1 : 0, $0.name) < ($1.name == "Other" ? 1 : 0, $1.name) }
+        return (pins.isEmpty ? [] : [(name: "Pinned", apps: pins)]) + groups
     }
 
     /// Search: names that start with what you typed first, then words that do, then anywhere in the name.
@@ -174,7 +201,7 @@ enum LaunchItem: Codable, Hashable, Identifiable {
         }
         return apps.values.filter { !hidden.contains($0.path) }
             .compactMap { a in rank(a).map { (a, $0) } }
-            .sorted { ($0.1, $0.0.name.count, $0.0.name) < ($1.1, $1.0.name.count, $1.0.name) }
+            .sorted { (pinned.contains($0.0.path) ? 0 : 1, $0.1, $0.0.name.count, $0.0.name) < (pinned.contains($1.0.path) ? 0 : 1, $1.1, $1.0.name.count, $1.0.name) }
             .map(\.0)
     }
 }
@@ -221,7 +248,7 @@ final class LauncherPanel: NSPanel {
         Task { await LauncherStore.shared.refresh() }
         // A mouse wheel flips pages, like Launchpad (trackpads swipe the pages directly).
         monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
-            guard let self, !e.hasPreciseScrollingDeltas else { return e }
+            guard let self, !e.hasPreciseScrollingDeltas, !LauncherStore.shared.byCategory else { return e }   // by category, it scrolls
             wheelSum += e.scrollingDeltaY
             if abs(wheelSum) > 3 { nav.step(wheelSum > 0 ? -1 : 1); wheelSum = 0 }
             return nil
@@ -268,8 +295,8 @@ struct LauncherView: View {
                     .dropDestination(for: String.self) { ids, _ in ids.forEach { store.move($0, to: nil) }; return true }
 
                 VStack(spacing: 0) {
-                    searchField.padding(.top, max(geo.safeAreaInsets.top, 40) + 18)
-                    if query.isEmpty { pages(m, width: geo.size.width) } else { results(m) }
+                    HStack(spacing: 10) { searchField; arrange }.padding(.top, max(geo.safeAreaInsets.top, 40) + 18)
+                    if !query.isEmpty { results(m) } else if store.byCategory { categories(m) } else { pages(m, width: geo.size.width) }
                 }
                 if let fid = openFolder, case .folder(_, let name, let list)? = store.visible.first(where: { $0.id == fid }) {
                     folderOverlay(fid, name: name, apps: list, m: m)
@@ -321,6 +348,41 @@ struct LauncherView: View {
         .glassEffect(.regular, in: .capsule)
     }
 
+    /// Your own order (pages you arrange) or by category.
+    private var arrange: some View {
+        Picker("", selection: $store.byCategory) {
+            Image(systemName: "square.grid.3x3").help("Your order").tag(false)
+            Image(systemName: "list.bullet.below.rectangle").help("By category").tag(true)
+        }
+        .pickerStyle(.segmented).labelsHidden().frame(width: 86)
+    }
+
+    // MARK: By category
+
+    private func categories(_ m: Metrics) -> some View {
+        ScrollView {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(m.cell.width), spacing: 0), count: m.cols), spacing: 22) {
+                ForEach(store.sections, id: \.name) { section in
+                    Section {
+                        ForEach(section.apps) { app in
+                            AppTile(app: app, icon: store.icon(app.path), size: m.icon, pinned: store.pinned.contains(app.path)) { store.open(app.path); close() }
+                                .frame(width: m.cell.width, height: m.cell.height)
+                                .contextMenu { appMenu(app.path, inFolder: false) }
+                        }
+                    } header: {
+                        Text(section.name).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
+                            .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 18).padding(.leading, 12)
+                    }
+                }
+            }
+            .frame(width: CGFloat(m.cols) * m.cell.width)
+            .padding(.top, 18).padding(.bottom, 60)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollIndicators(.hidden)
+    }
+
     // MARK: Pages
 
     private func pages(_ m: Metrics, width: CGFloat) -> some View {
@@ -370,7 +432,7 @@ struct LauncherView: View {
         switch item {
         case .app(let path):
             if let app = store.apps[path] {
-                AppTile(app: app, icon: store.icon(path), size: m.icon) { store.open(path); close() }
+                AppTile(app: app, icon: store.icon(path), size: m.icon, pinned: store.pinned.contains(path)) { store.open(path); close() }
                     .frame(width: m.cell.width, height: m.cell.height)
                     .draggable(path) { Image(nsImage: store.icon(path)).resizable().frame(width: m.icon, height: m.icon) }
                     .modifier(DropOnTile(id: path, width: m.cell.width, store: store))
@@ -390,6 +452,7 @@ struct LauncherView: View {
     @ViewBuilder private func appMenu(_ path: String, inFolder: Bool) -> some View {
         Button("Open") { store.open(path); close() }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]); close() }
+        if store.pinned.contains(path) { Button("Unpin") { store.unpin(path) } } else { Button("Pin to Front") { store.pin(path) } }
         if inFolder { Button("Move Out of Folder") { store.moveOutOfFolder(path) } }
         Divider()
         Button("Hide from Launcher") { store.hide(path) }
@@ -408,7 +471,7 @@ struct LauncherView: View {
             } else {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(m.cell.width), spacing: 0), count: m.cols), spacing: 22) {
                     ForEach(Array(found.enumerated()), id: \.element.id) { i, app in
-                        AppTile(app: app, icon: store.icon(app.path), size: m.icon, highlighted: i == min(selected, found.count - 1)) {
+                        AppTile(app: app, icon: store.icon(app.path), size: m.icon, highlighted: i == min(selected, found.count - 1), pinned: store.pinned.contains(app.path)) {
                             store.open(app.path); close()
                         }
                         .frame(width: m.cell.width, height: m.cell.height)
@@ -485,6 +548,7 @@ struct AppTile: View {
     let icon: NSImage
     let size: CGFloat
     var highlighted = false
+    var pinned = false
     let open: () -> Void
     @State private var hover = false
     var body: some View {
@@ -492,6 +556,12 @@ struct AppTile: View {
             VStack(spacing: 8) {
                 Image(nsImage: icon).resizable().interpolation(.high).frame(width: size, height: size)
                     .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
+                    .overlay(alignment: .topTrailing) {
+                        if pinned {
+                            Image(systemName: "pin.fill").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                                .padding(5).background(.orange, in: Circle()).shadow(radius: 2).offset(x: 4, y: -4)
+                        }
+                    }
                 Text(app.name).font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
                     .foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 3, y: 1)
             }

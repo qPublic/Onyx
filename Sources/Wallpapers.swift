@@ -240,8 +240,10 @@ final class WallpaperEngine: ObservableObject {
         ws.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in self?.evaluate() }
         BatteryMonitor.shared.$pluggedIn.removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] _ in self?.evaluate() }.store(in: &bag)
         clock = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.minuteTick() }.tolerant()
+        locked = Self.screenLocked   // started while locked: that notification already went out
         rebuild()
     }
+    static var screenLocked: Bool { (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false }
     private var bag = Set<AnyCancellable>()
 
     func setEnabled(_ on: Bool) {
@@ -319,6 +321,7 @@ final class WallpaperEngine: ObservableObject {
 
     private func minuteTick() {
         guard enabled else { return }
+        if Self.screenLocked != locked { locked.toggle(); evaluate() }   // in case a lock/unlock notification was missed
         let night = Self.isNight()
         if let was = wasNight, was != night, !(UserDefaults.standard.string(forKey: K.night) ?? "").isEmpty { rebuild() }
         wasNight = night

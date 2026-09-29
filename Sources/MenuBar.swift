@@ -8,7 +8,7 @@ final class MenuBarDodger {
 
     /// Global (top-left origin) X where the frontmost app's menus end, or nil when dodging is off/untrusted.
     private(set) var rightEdge: CGFloat?
-    private(set) var iconsEdge: CGFloat?   // only tracked on a screen with a built-in notch
+    private(set) var iconsEdge: CGFloat?   // left edge of the menu bar icons on the notch's screen
     var onChange: (() -> Void)?
     private var timer: Timer?
 
@@ -62,10 +62,10 @@ final class MenuBarDodger {
         // Asking another app for its menus is an IPC round-trip; do it off the main thread.
         guard !inFlight else { return }
         inFlight = true
-        let g = NotchModel.shared.geometry, notchScreen = g.hasNotch ? g.screenFrame : nil
+        let screen = NotchModel.shared.geometry.screenFrame
         queue.async {
             let edge = Self.frontAppMenusRightEdge()
-            let icons = notchScreen.flatMap { Self.statusItemsLeftEdge(in: $0) }
+            let icons = Self.statusItemsLeftEdge(in: screen)
             DispatchQueue.main.async {
                 self.inFlight = false
                 if edge != self.rightEdge || icons != self.iconsEdge { self.rightEdge = edge; self.iconsEdge = icons; self.onChange?() }
@@ -85,6 +85,33 @@ final class MenuBarDodger {
                   let x = b["X"], let y = b["Y"], y < 2, x >= screen.minX, x < screen.maxX,
                   x > screen.midX - 100 else { return nil }   // status icons live on the right half
             return x
+        }
+        return xs.min() ?? agentItemsLeftEdge(in: screen)
+    }
+
+    /// macOS 27 draws every menu bar icon inside MenuBarAgent's one bar window instead of separate status
+    /// windows, so read the icons' frames there through Accessibility.
+    private static func agentItemsLeftEdge(in screen: NSRect) -> CGFloat? {
+        guard AXIsProcessTrusted(),
+              let agent = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first else { return nil }
+        var barsRef: CFTypeRef?   // its bar window (every app's icons) and Apple's own "Menu Extras"
+        guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(agent.processIdentifier), kAXChildrenAttribute as CFString, &barsRef) == .success,
+              let bars = barsRef as? [AXUIElement] else { return nil }
+        let top = (NSScreen.screens.first?.frame.maxY ?? screen.maxY) - screen.maxY   // this screen's top, in top-left coordinates
+        var xs: [CGFloat] = []
+        for bar in bars {
+            var kidsRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(bar, kAXChildrenAttribute as CFString, &kidsRef) == .success,
+                  let kids = kidsRef as? [AXUIElement] else { continue }
+            for k in kids {
+                var pRef: CFTypeRef?, sRef: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(k, kAXPositionAttribute as CFString, &pRef) == .success,
+                      AXUIElementCopyAttributeValue(k, kAXSizeAttribute as CFString, &sRef) == .success else { continue }
+                var pos = CGPoint.zero, size = CGSize.zero
+                AXValueGetValue(pRef as! AXValue, .cgPoint, &pos)
+                AXValueGetValue(sRef as! AXValue, .cgSize, &size)
+                if abs(pos.y - top) < 8, size.width > 0, pos.x >= screen.minX, pos.x < screen.maxX, pos.x > screen.midX - 100 { xs.append(pos.x) }
+            }
         }
         return xs.min()
     }

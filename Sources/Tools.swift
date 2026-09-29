@@ -196,7 +196,8 @@ enum Calc {
         let target = s[split.upperBound...].trimmingCharacters(in: .whitespaces)
         guard let to = units[target],
               let name = unitNames.first(where: { left.hasSuffix($0) && Self.boundary(left, before: $0) }),
-              let from = units[name], type(of: from) == type(of: to) else { return nil }
+              // Same kind of unit (macOS 27 hands out built-in units as private subclasses, so compare base units, not classes).
+              let from = units[name], type(of: from).baseUnit().symbol == type(of: to).baseUnit().symbol else { return nil }
         let expr = String(left.dropLast(name.count)).trimmingCharacters(in: .whitespaces)
         guard let v = expr.isEmpty ? 1 : Parser(expr)?.parse(), v.isFinite else { return nil }
         let out = Measurement(value: v, unit: from).converted(to: to).value

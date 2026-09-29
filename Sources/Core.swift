@@ -381,7 +381,7 @@ final class NotchController {
         if g.centerX - pillW / 2 < edge + gap {
             // Split the difference: center the notch in the free space between the app's menus
             // and the status icons (battery, Wi-Fi, …).
-            let right = MenuBarDodger.statusItemsLeftEdge(in: g.screenFrame) ?? g.screenFrame.maxX
+            let right = MenuBarDodger.shared.iconsEdge ?? g.screenFrame.maxX
             let mid = (edge + right) / 2
             g.centerX = min(max(mid, g.screenFrame.minX + pillW / 2 + 8), g.screenFrame.maxX - pillW / 2 - 8)
         }

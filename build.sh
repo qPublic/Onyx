@@ -15,6 +15,7 @@ cp CHANGELOG.md "$APP/Contents/Resources/"   # What's New reads the new version'
 # Sign with a stable local identity if one exists, so Accessibility grants survive rebuilds.
 # (Ad-hoc signatures change every build, and macOS then treats Onyx as a new app.)
 IDENTITY="${ONYX_SIGN_ID:-Onyx Local Signing}"
+xattr -cr "$APP"   # iCloud Drive tags files with Finder info, which codesign refuses
 if [ -n "$ONYX_SIGN_ID" ]; then
   # Developer ID: Apple's hardened runtime (needed for notarization), with the permissions Onyx asks for.
   codesign --force --deep --options runtime --timestamp --entitlements Resources/Onyx.entitlements --sign "$IDENTITY" "$APP"
@@ -25,10 +26,12 @@ else
 fi
 echo "Built $APP"
 if [ "$1" = "dmg" ]; then
-  rm -rf build/dmg build/Onyx.dmg; mkdir -p build/dmg
-  cp -R "$APP" build/dmg/; ln -s /Applications build/dmg/Applications
-  hdiutil create -volname Onyx -srcfolder build/dmg -ov -format UDZO build/Onyx.dmg >/dev/null
-  rm -rf build/dmg
+  # Staged outside the project: iCloud Drive tags files there with Finder info, which breaks the signature check.
+  STAGE=$(mktemp -d); rm -f build/Onyx.dmg; mkdir -p "$STAGE/dmg"
+  ditto --noextattr --norsrc "$APP" "$STAGE/dmg/Onyx.app"; ln -s /Applications "$STAGE/dmg/Applications"
+  codesign -v --strict --deep "$STAGE/dmg/Onyx.app"
+  hdiutil create -volname Onyx -srcfolder "$STAGE/dmg" -ov -format UDZO "$STAGE/Onyx.dmg" >/dev/null
+  ditto --noextattr "$STAGE/Onyx.dmg" build/Onyx.dmg; rm -rf "$STAGE"
   echo "Built build/Onyx.dmg"
   if [ "$2" = "notarize" ]; then
     [ -n "$ONYX_SIGN_ID" ] || { echo "Set ONYX_SIGN_ID to your Developer ID Application identity first."; exit 1; }

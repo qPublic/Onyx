@@ -486,7 +486,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if let p = ProcessInfo.processInfo.environment["ONYX_AXDEBUG"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                let s = "trusted=\(MenuBarDodger.shared.trusted) enabled=\(MenuBarDodger.shared.enabled) edge=\(String(describing: MenuBarDodger.frontAppMenusRightEdge()))\n"
+                let g = NotchModel.shared.geometry
+                let s = "trusted=\(MenuBarDodger.shared.trusted) enabled=\(MenuBarDodger.shared.enabled) edge=\(String(describing: MenuBarDodger.frontAppMenusRightEdge())) icons=\(String(describing: MenuBarDodger.statusItemsLeftEdge(in: g.screenFrame))) screen=\(g.screenFrame) centerX=\(g.centerX) notchWidth=\(g.notchWidth) height=\(g.notchHeight) hasNotch=\(g.hasNotch)\n"
                 try? s.write(toFile: p, atomically: true, encoding: .utf8)
             }
         }

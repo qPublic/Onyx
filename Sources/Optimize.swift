@@ -235,7 +235,7 @@ final class MaintenanceModel: ObservableObject {
         MaintTask(id: "dock", title: "Restart Dock", detail: "Fixes a stuck Dock, Mission Control or Launchpad.", icon: "dock.rectangle", admin: false,
                   command: "killall Dock"),
         MaintTask(id: "menubar", title: "Restart menu bar", detail: "Fixes menu bar icons or Control Center acting up.", icon: "menubar.rectangle", admin: false,
-                  command: "killall SystemUIServer ControlCenter"),
+                  command: "killall SystemUIServer ControlCenter && { pgrep -xq MenuBarAgent && killall MenuBarAgent || true; }"),   // MenuBarAgent draws the icons on macOS 27
         MaintTask(id: "verify", title: "Check startup disk", detail: "Read-only check for disk errors, like Disk Utility's First Aid without repairing. Takes a few minutes.", icon: "internaldrive", admin: true,
                   command: "diskutil verifyVolume /"),
     ]

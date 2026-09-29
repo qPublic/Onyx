@@ -985,6 +985,23 @@ enum AIPlusTest {
         func note(_ s: String) { log.append(s); try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8) }
         func check(_ name: String, _ ok: Bool) { note((ok ? "PASS " : "FAIL ") + name); if !ok { fails += 1 } }
 
+        // Tool calls macOS 27's model wrote out as text (from a real test run), and replies that aren't tool calls.
+        for (text, name, args) in [("calculate{expression:<ctrl46>sqrt(144)<ctrl46>}", "calculate", ["expression": "sqrt(144)"]),
+                                   ("create_note{title:<ctrl46>Groceries<ctrl46>,text:<ctrl46>milk and eggs<ctrl46>}", "create_note", ["title": "Groceries", "text": "milk and eggs"]),
+                                   ("search_web.", "search_web", [:]),
+                                   ("Translate: language: French, text: thank you", "translate", ["language": "French", "text": "thank you"]),
+                                   (#"Translate: 'good morning' into Spanish.  tool_call: {   "language": "Spanish",   "text": "good morning" } <start_of_turn>model yes"#, "translate", ["language": "Spanish", "text": "good morning"]),
+                                   ("The capital of Australia is Canberra.", "", [:]), ("Remember to drink water.", "", [:])] {
+            let got = Assistant.leakedCall(text)
+            check("leaked tool call \"\(text.prefix(40))\" → \(got.map { "\($0.name) \($0.args)" } ?? "none")", got?.name ?? "" == name && (got?.args ?? [:]) == args)
+        }
+        check("control tokens are stripped", Assistant.plain("Hola<ctrl46> amigo<end_of_turn>") == "Hola amigo")
+        let conv = [Assistant.quickMath("How many seconds are in 3 hours?"), Assistant.quickMath("How many minutes are in a week?")]
+        check("unit questions go to the calculator (\(conv))", conv[0]?.contains("10,800") == true && conv[1]?.contains("10,080") == true)
+        let clock = ["What day of the week is it today?", "What's the date?", "What time is it?", "What year is it?", "What is a day?"].map { Assistant.quickClock($0) }
+        check("date and time questions answer from the clock (\(clock))", clock[0]?.hasPrefix("Today is ") == true && clock[1] != nil && clock[2] != nil && clock[3] != nil && clock[4] == nil)
+        check("\"only a number\" turns words into digits", Assistant.enforceFormat("Reply with only a number: how many legs?", "eight") == "8")
+
         let t0 = Date()
         let web = await WebAnswers.context(for: "who won the 2024 NBA finals", limit: 2400)
         note(String(format: "web (%.1f s): %@ …", Date().timeIntervalSince(t0), web.text.prefix(300).replacingOccurrences(of: "\n", with: " ")))

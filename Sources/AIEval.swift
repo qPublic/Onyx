@@ -101,7 +101,12 @@ enum AIEval {
     static var quick: [Case] { cases.enumerated().filter { $0.offset % 5 == 0 }.map(\.element) }
 
     static func passes(_ e: Expect, _ answer: String, _ tools: [String]) -> Bool {
-        let a = answer.lowercased().replacingOccurrences(of: #"(?<=\d),(?=\d{3})"#, with: "", options: .regularExpression)
+        var a = answer.lowercased().replacingOccurrences(of: #"(?<=\d),(?=\d{3})"#, with: "", options: .regularExpression)
+        if case .number = e {   // "Nine eggs" is right too
+            for (i, w) in ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"].enumerated() {
+                a = a.replacingOccurrences(of: #"\b\#(w)\b"#, with: String(i), options: .regularExpression)
+            }
+        }
         let called = tools.map { $0.lowercased().replacingOccurrences(of: " ", with: "_") }
         switch e {
         case .any(let w): return w.contains { a.contains($0.lowercased()) }
@@ -134,7 +139,7 @@ enum AIEval {
             ai.send(c.q)
             while ai.busy && Date().timeIntervalSince(t0) < 120 { try? await Task.sleep(for: .milliseconds(150)) }
             if ai.busy { ai.stop() }
-            let answer = ai.messages.last { $0.role == .assistant }?.text ?? ai.messages.last { $0.role == .error }.map { "ERROR: " + $0.text } ?? ""
+            let answer = ai.messages.last.flatMap { $0.role == .error ? "ERROR: " + $0.text : nil } ?? ai.messages.last { $0.role == .assistant }?.text ?? ""
             let tools = AgentTools.dryCalls.map { String($0.split(separator: " ").first ?? "") } + ai.messages.filter { $0.role == .tool }.map { String($0.text.split(separator: ":").first ?? "") }
             out.append(Result(c: c, pass: passes(c.expect, answer, tools), answer: answer, tools: tools, seconds: Date().timeIntervalSince(t0)))
         }

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.3
+
+### Fixed
+- **Keep clear of app menus on macOS 27.** macOS 27 draws every menu bar icon in one new system bar, so Onyx couldn't see where the icons began. The notch then moved over them when it stepped aside for an app's menus. It now finds the icons again and sits in the free space between the menus and the icons, as it did before. Macs with a built-in notch also fold side widgets away from the icons correctly again.
+- **Onyx AI on macOS 27.** macOS 27 comes with a new on-device model that reads instructions more literally. It answered simple questions with "Yes." or "No.", and it sometimes wrote tool calls out as text (like `create_note{title:…}`) instead of making them. Onyx now words its instructions so the new model answers normally, only tells it about tools it can use, and carries out a tool call that comes back as text (with the same safety checks) or answers in words. It also strips the model's stray control codes from replies. When macOS stops the model partway through, Onyx now tries again and, if that fails too, tells you instead of leaving the question unanswered. Questions like "how many minutes are in a week?" go straight to the calculator.
+- **Live wallpapers pause on the lock screen again** when Onyx starts while your Mac is already locked. Onyx now also re-checks the lock once a minute, in case macOS doesn't announce it. macOS 27's lock screen shows your desktop behind it, so a wallpaper left playing there used power for nothing.
+- **Unit conversions with weeks, days or years** ("2 weeks in days", "1 year in hours") work again on macOS 27, in the App Launcher, the calculator and Onyx AI.
+- **Restart menu bar** (Optimization › Maintain) also restarts macOS 27's new menu bar process, so it fixes stuck icons there too.
+
 ## 1.7.2
 
 ### New

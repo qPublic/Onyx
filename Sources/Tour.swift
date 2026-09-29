@@ -150,8 +150,12 @@ private struct TourSlide: View {
     let step: TourStep
     @State private var born = Date()
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60)) { ctx in
-            TourDemo(step: step, t: ctx.date.timeIntervalSince(born))
+        if Motion.reduced {
+            TourDemo(step: step, t: 5.5)   // Reduce Motion: each demo as a still, finished frame
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 60)) { ctx in
+                TourDemo(step: step, t: ctx.date.timeIntervalSince(born))
+            }
         }
     }
 }

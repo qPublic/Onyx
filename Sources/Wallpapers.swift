@@ -209,10 +209,10 @@ final class WallpaperEngine: ObservableObject {
     enum K {
         static let enabled = "wall.enabled", current = "wall.current", screens = "wall.screens", shuffle = "wall.shuffle"
         static let night = "wall.night", pauseBattery = "wall.pauseBattery", pauseLowPower = "wall.pauseLowPower"
-        static let sound = "wall.sound", still = "wall.still"
+        static let sound = "wall.sound", still = "wall.still", reduceMotion = "wall.reduceMotion"
     }
     static let defaults: [String: Any] = [K.enabled: false, K.current: WallpaperScene.aurora.rawValue, K.shuffle: 0, K.night: "",
-                                          K.pauseBattery: false, K.pauseLowPower: true, K.sound: false, K.still: false, WallWeather.key: true]
+                                          K.pauseBattery: false, K.pauseLowPower: true, K.sound: false, K.still: false, WallWeather.key: true, K.reduceMotion: true]
 
     @Published private(set) var pausedReason: String?
     private var windows: [String: WallpaperWindow] = [:]   // by display name
@@ -237,6 +237,7 @@ final class WallpaperEngine: ObservableObject {
         dn.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in self?.locked = false; self?.evaluate() }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in self?.rebuild() }
         NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in self?.evaluate() }
+        ws.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in self?.evaluate() }
         BatteryMonitor.shared.$pluggedIn.removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] _ in self?.evaluate() }.store(in: &bag)
         clock = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.minuteTick() }.tolerant()
         rebuild()
@@ -305,6 +306,7 @@ final class WallpaperEngine: ObservableObject {
         var reason: String?
         if asleep || locked { reason = "Paused while your Mac is locked or asleep" }
         else if LowBatteryMode.shared.active { reason = "Paused in Low Battery Mode" }
+        else if Motion.reduced && Prefs.bool(K.reduceMotion) { reason = "Paused because Reduce Motion is on" }
         else if Prefs.bool(K.pauseLowPower) && lowPower { reason = "Paused in Low Power Mode" }
         else if Prefs.bool(K.pauseBattery) && battery { reason = "Paused on battery power" }
         for (k, w) in windows {

@@ -112,6 +112,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let file = ProcessInfo.processInfo.environment["ONYX_CLOUDTEST"] { Task { @MainActor in await CloudTest.run(file) }; return }
         // Debug: ONYX_AIPLUSTEST=<file> checks web answers, search, translation, lettering and picture versions (see AIPlusTest).
         if let file = ProcessInfo.processInfo.environment["ONYX_AIPLUSTEST"] { Task { @MainActor in await AIPlusTest.run(file) }; return }
+        // Debug: ONYX_SAFETYTEST=<file> and ONYX_ENERGYTEST=<file> (see SafetyTest and EnergyTest; ./test.sh runs them all).
+        if let file = ProcessInfo.processInfo.environment["ONYX_SAFETYTEST"] { Task { @MainActor in await SafetyTest.run(file) }; return }
+        if let file = ProcessInfo.processInfo.environment["ONYX_ENERGYTEST"] { EnergyTest.run(file); return }
         // Debug: ONYX_AIEVAL=<file> runs the 100-question AI test suite (ONYX_AIEVAL_QUICK=1: 20 of them) and writes the report.
         if let file = ProcessInfo.processInfo.environment["ONYX_AIEVAL"] {
             Task { @MainActor in
@@ -496,6 +499,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         if !UserDefaults.standard.bool(forKey: "didOnboard") { showOnboarding() }
+        NSApp.servicesProvider = services   // right-click › Services › Ask Onyx AI / Summarize with Onyx
+        NSUpdateDynamicServices()
+        MainActor.assumeIsolated {
+            Feedback.checkForCrash()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { MainActor.assumeIsolated { WhatsNew.show() } }
+        }
     }
 
     private func setupStatusItem() {
@@ -520,6 +529,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "Take the Tour…", action: #selector(showTour), keyEquivalent: "").target = self
         menu.addItem(withTitle: "App Launcher", action: #selector(openLauncher), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Set Up Permissions…", action: #selector(showOnboarding), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "What's New…", action: #selector(showWhatsNew), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Report a Problem…", action: #selector(reportProblem), keyEquivalent: "").target = self
         let upd = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
         upd.target = self
         menu.addItem(upd)
@@ -557,6 +568,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func captureRegion() { QuickCapture.shared.screenshot(.region) }
+    private let services = OnyxServices()
+
+    /// onyx:// links (from Shortcuts, Siri, Spotlight or anywhere).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        MainActor.assumeIsolated { for u in urls { OnyxLinks.handle(u) } }
+    }
+
+    @objc func showWhatsNew() { MainActor.assumeIsolated { WhatsNew.show(force: true) } }
+    @objc func reportProblem() { Feedback.report(includeCrash: false) }
+
     @objc func checkForUpdates() {
         if case .ready = Updater.shared.state { Updater.shared.restartNow() } else { Updater.shared.check(user: true) }
     }

@@ -533,6 +533,16 @@ struct BehaviorSettings: View {
                 Text("Click a shortcut, then press the new keys (must include ⌘, ⌥ or ⌃). Esc cancels, ✕ clears.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Shortcuts & Siri") { ShortcutsSettings() }
+            Section("Help") {
+                HStack {
+                    Button("What's New") { WhatsNew.show(force: true) }
+                    Button("Report a Problem…") { Feedback.report(includeCrash: false) }
+                    if Feedback.latestCrash() != nil { Button("Report the Last Crash…") { Feedback.report(includeCrash: true) } }
+                }
+                Text("Reports open as a GitHub issue you can read and edit before sending. They include Onyx's version, macOS, your Mac's model and which AI model you use (never your keys), plus the crash details if you choose.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }

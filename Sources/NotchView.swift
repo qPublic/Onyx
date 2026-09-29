@@ -481,17 +481,17 @@ struct ExpandedView: View {
                         if model.tab == .shelf && Prefs.bool(AP.shelfStays) {
                             Button { NotchController.current?.collapse() } label: {
                                 Image(systemName: "xmark.circle").foregroundStyle(Color.primary.opacity(0.6))
-                            }.buttonStyle(.plain).help("Close the Shelf")
+                            }.buttonStyle(.plain).help("Close the Shelf").accessibilityLabel("Close the Shelf")
                         }
                         Button { model.pinned.toggle() } label: {
                             Image(systemName: model.pinned ? "pin.fill" : "pin").foregroundStyle(model.pinned ? Color.yellow : Color.primary.opacity(0.6))
-                        }.buttonStyle(.plain).help("Keep the notch open")
+                        }.buttonStyle(.plain).help("Keep the notch open").accessibilityLabel(model.pinned ? "Unpin the notch" : "Keep the notch open")
                         Button { (NSApp.delegate as? AppDelegate)?.openOptimization() } label: {
                             Image(systemName: "gauge.with.dots.needle.67percent").foregroundStyle(Color.primary.opacity(0.6))
-                        }.buttonStyle(.plain).help("Optimization")
+                        }.buttonStyle(.plain).help("Optimization").accessibilityLabel("Optimization")
                         Button { (NSApp.delegate as? AppDelegate)?.openSettings() } label: {
                             Image(systemName: "gearshape").foregroundStyle(Color.primary.opacity(0.6))
-                        }.buttonStyle(.plain).help("Settings")
+                        }.buttonStyle(.plain).help("Settings").accessibilityLabel("Settings")
                         Menu {
                             Button { (NSApp.delegate as? AppDelegate)?.openLauncher() } label: { Label("App Launcher", systemImage: "square.grid.3x3.fill") }
                             Button { (NSApp.delegate as? AppDelegate)?.openWallpapers() } label: { Label("Live Wallpapers…", systemImage: "play.rectangle.on.rectangle") }
@@ -505,7 +505,7 @@ struct ExpandedView: View {
                         } label: {
                             Image(systemName: "ellipsis.circle").foregroundStyle(Color.primary.opacity(0.6))
                         }
-                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("More")
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("More").accessibilityLabel("More")
                     }
                 }
                 .font(.system(size: 12, weight: .medium))
@@ -613,6 +613,7 @@ struct TabBar: View {
                 }
                 .buttonStyle(.plain)
                 .help(editing ? "Drag to reorder" : t.title)
+                .accessibilityLabel(t.title + " tab")
                 // Resting on a tab briefly switches to it, so just passing over the bar doesn't
                 // (clicking still switches instantly, and focuses AI's text box).
                 .onHover { inside in

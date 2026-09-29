@@ -225,5 +225,6 @@ struct MicButton: View {
         }
         .buttonStyle(.plain)
         .help(voice.state == .listening ? "Listening. Stop talking to send, or click to stop" : "Ask by voice (recognized on this Mac)")
+        .accessibilityLabel(voice.state == .listening ? "Stop listening" : "Ask by voice")
     }
 }

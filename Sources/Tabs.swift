@@ -70,9 +70,10 @@ struct MusicCard: View {
 
     private func controls(size: CGFloat, play: CGFloat, spacing: CGFloat) -> some View {
         HStack(spacing: spacing) {
-            Button { media.previous() } label: { Image(systemName: "backward.fill") }
+            Button { media.previous() } label: { Image(systemName: "backward.fill") }.accessibilityLabel("Previous track")
             Button { media.playPause() } label: { Image(systemName: media.isPlaying ? "pause.fill" : "play.fill").font(.system(size: play)) }
-            Button { media.next() } label: { Image(systemName: "forward.fill") }
+                .accessibilityLabel(media.isPlaying ? "Pause" : "Play")
+            Button { media.next() } label: { Image(systemName: "forward.fill") }.accessibilityLabel("Next track")
         }
         .buttonStyle(.plain)
         .font(.system(size: size))
@@ -500,7 +501,7 @@ struct AITab: View {
                 Button { ai.seeScreen.toggle() } label: {
                     Image(systemName: ai.seeScreen ? "eye.fill" : "eye.slash").foregroundStyle(ai.seeScreen ? .cyan : .secondary)
                 }
-                .buttonStyle(.plain).help("Let the AI read your screen")
+                .buttonStyle(.plain).help("Let the AI read your screen").accessibilityLabel(ai.seeScreen ? "Stop letting the AI see your screen" : "Let the AI see your screen")
                 Menu {
                     Button { ai.captureArea() } label: { Label("Capture an area of the screen…", systemImage: "viewfinder") }
                     Button { ai.chooseImage() } label: { Label("Choose an image…", systemImage: "photo") }
@@ -510,7 +511,7 @@ struct AITab: View {
                     Button { ai.chooseFile() } label: { Label("Choose a file (PDF, Word, text)…", systemImage: "doc.text") }
                     Button { Task { await SelectionGrabber.askAI() } } label: { Label("Use the text selected in the app behind", systemImage: "text.quote") }
                 } label: { Image(systemName: "paperclip") }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Ask about an image, a file or selected text")
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Ask about an image, a file or selected text").accessibilityLabel("Attach")
                 Menu {
                     Section("Model: \(CloudAI.label)") {
                         Button("Change model in Settings…") { (NSApp.delegate as? AppDelegate)?.openSettings() }
@@ -533,15 +534,15 @@ struct AITab: View {
                     .onChange(of: voice.transcript) { _, t in if voice.state == .listening { input = t } }
                 MicButton { text in input = ""; Speaker.askedByVoice = true; ai.send(text) }
                 if ai.busy {
-                    Button { ai.stop() } label: { Image(systemName: "stop.circle.fill").font(.system(size: 18)) }.buttonStyle(.plain)
+                    Button { ai.stop() } label: { Image(systemName: "stop.circle.fill").font(.system(size: 18)) }.buttonStyle(.plain).accessibilityLabel("Stop")
                 } else {
                     Button(action: submit) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 18)) }
-                        .buttonStyle(.plain).disabled(input.isEmpty)
+                        .buttonStyle(.plain).disabled(input.isEmpty).accessibilityLabel("Send")
                 }
                 Button { CircleToSearch.shared.begin() } label: { Image(systemName: "circle.dashed.inset.filled") }
-                    .buttonStyle(.plain).help("Circle to Search (⌃⌥Space)")
+                    .buttonStyle(.plain).help("Circle to Search (⌃⌥Space)").accessibilityLabel("Circle to Search")
                 Button { ai.reset() } label: { Image(systemName: "square.and.pencil") }
-                    .buttonStyle(.plain).help("New chat")
+                    .buttonStyle(.plain).help("New chat").accessibilityLabel("New chat")
             }
             .font(.system(size: 13))
         }

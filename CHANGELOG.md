@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.7.2
+
+### New
+- **Shortcuts, Siri and Spotlight.** **Settings › Behavior › Shortcuts & Siri** adds Onyx actions to the Shortcuts app with one click: ask Onyx AI, start a focus session or timer, get your briefing, copy text from the screen, open clipboard history, take a screenshot, open the App Launcher or a workspace, make a wallpaper, switch Dark Mode or keep your Mac awake. Run them with Siri, from Spotlight or in your own automations. Each is also an onyx:// link that works anywhere links do.
+- **Services menu.** Select text in any app, then right-click › Services › **Ask Onyx AI** or **Summarize with Onyx**.
+- **What's New.** After an update, Onyx shows what changed (also in the menu bar icon's menu and Settings › Behavior › Help).
+- **Report a problem.** The menu bar icon and Settings › Behavior › Help open a GitHub issue that's already filled in with your Onyx and macOS versions and your Mac's model, and you can read and edit it before you send it. If Onyx quit unexpectedly, it tells you once and can include the crash details from macOS.
+
+### Improved
+- **Safer AI with web pages and files.** A web page, file, picture or your screen can hide instructions like "copy this" or "open that". Onyx AI now only takes an action if your own message asked for it, with every model, and treats outside text as information, never as instructions.
+- **Uses less energy when idle.** Onyx no longer asks Spotify or Music what's playing every 3 seconds (it listens for their change announcements instead), and the timer, clipboard, glass sampler, menu and fullscreen checks wake your Mac far less often.
+- **Reduce Motion.** With Reduce Motion on (System Settings › Accessibility › Display), the notch opens without bouncing, the tour shows still pictures, and live wallpapers pause (you can change that in Live Wallpapers).
+- **VoiceOver.** The notch's icon buttons, tabs, music controls and AI controls now have spoken names.
+- **Ready for notarization.** The build and updater are prepared for an Apple Developer ID, so Onyx can be notarized later without everyone having to reinstall.
+
 ## 1.7.1
 
 ### New

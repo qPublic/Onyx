@@ -64,9 +64,15 @@ final class MediaController: ObservableObject {
         dnc.addObserver(self, selector: #selector(changed), name: .init("com.apple.Music.playerInfo"), object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(changed),
                                                           name: NSWorkspace.didTerminateApplicationNotification, object: nil)
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refresh() }.tolerant()
+        // Spotify and Music announce every change, so polling (an AppleScript round trip) is just a safety net:
+        // every 10 s while something plays, every 30 s otherwise. It used to be every 3 s, even with nothing playing.
+        timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if self.isPlaying || Date().timeIntervalSince(self.lastPoll) >= 30 { self.refresh() }
+        }.tolerant(0.3)
         refresh()
     }
+    private var lastPoll = Date.distantPast
 
     @objc private func changed(_ n: Notification) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.refresh() }
@@ -77,6 +83,7 @@ final class MediaController: ObservableObject {
     }
 
     func refresh() {
+        lastPoll = Date()
         let candidates = [Player.spotify, .music].filter(running)
         queue.async {
             var best: (Player, [String])?
@@ -508,7 +515,7 @@ final class ClipboardHistory: ObservableObject {
 
     func start() {
         if let d = try? Data(contentsOf: file), let c = try? JSONDecoder().decode([Clip].self, from: d) { clips = c }
-        Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in self?.poll() }.tolerant()
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.poll() }.tolerant(0.25)
     }
 
     private func poll() {
@@ -564,8 +571,15 @@ final class FocusTimer: ObservableObject {
         return max(0, (endDate ?? now).timeIntervalSince(now))
     }
 
-    func start() {
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.tick() }.tolerant(0.1)
+    private var clock: Timer?
+    func start() { schedule() }
+
+    /// Twice a second while a timer counts down; every 15 s otherwise (enough for the 20-minute eye breaks).
+    private func schedule() {
+        let fast = endDate != nil
+        if let c = clock, c.isValid, (c.timeInterval < 1) == fast { return }
+        clock?.invalidate()
+        clock = Timer.scheduledTimer(withTimeInterval: fast ? 0.5 : 15, repeats: true) { [weak self] _ in self?.tick() }.tolerant(fast ? 0.1 : 0.2)
     }
 
     func begin(minutes: Double) {
@@ -573,14 +587,16 @@ final class FocusTimer: ObservableObject {
         pausedRemaining = nil
         now = Date()
         endDate = now.addingTimeInterval(total)
+        schedule()
     }
 
     func togglePause() {
         if let p = pausedRemaining { now = Date(); endDate = now.addingTimeInterval(p); pausedRemaining = nil }
         else if endDate != nil { pausedRemaining = remaining; endDate = nil }
+        schedule()
     }
 
-    func cancel() { endDate = nil; pausedRemaining = nil }
+    func cancel() { endDate = nil; pausedRemaining = nil; schedule() }
 
     private func tick() {
         // Only publish the clock while counting down: the whole notch observes this object,
@@ -589,6 +605,7 @@ final class FocusTimer: ObservableObject {
         if endDate != nil { self.now = now }
         if let e = endDate, now >= e {
             endDate = nil
+            schedule()
             FocusSession.shared.finish(completed: true)   // a focus session that ran its course counts toward the streak
             if Fun.has(Fun.bomb) {
                 SoundBoard.play(.boom)

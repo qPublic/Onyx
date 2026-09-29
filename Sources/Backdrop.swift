@@ -17,8 +17,14 @@ final class BackdropSampler: ObservableObject {
     /// Adaptive text is on whenever the notch uses Clear glass.
     static var enabled: Bool { AP.notchStyle == .glass && Prefs.string(AP.glassVariant) == "clear" }
 
-    func start() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }.tolerant()
+    func start() { schedule() }
+
+    /// Every second with Clear glass (it has to follow what's behind the notch); every 5 s otherwise, just to notice it being turned on.
+    private func schedule() {
+        let every: TimeInterval = Self.enabled ? 1 : 5
+        guard timer?.timeInterval != every else { return }
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: every, repeats: true) { [weak self] _ in self?.schedule(); self?.tick() }.tolerant()
     }
 
     private func tick() {

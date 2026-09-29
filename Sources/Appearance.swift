@@ -159,7 +159,8 @@ enum AP {
     }
 
     static var animationValue: Animation? {
-        switch AnimationStyle(rawValue: Prefs.string(animation)) ?? .bouncy {
+        if Motion.reduced { return .easeOut(duration: 0.18) }   // Reduce Motion: a short fade-like change, no bounce
+        return switch AnimationStyle(rawValue: Prefs.string(animation)) ?? .bouncy {
         case .bouncy: .spring(response: 0.42, dampingFraction: 0.72)
         case .smooth: .spring(response: 0.5, dampingFraction: 1.0)
         case .snappy: .spring(response: 0.24, dampingFraction: 0.9)
@@ -227,7 +228,7 @@ final class FullscreenWatcher {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self?.check() }
             }
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.check() }.tolerant()
+        timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in self?.check() }.tolerant(0.3)   // space and app changes re-check at once
     }
 
     func check() {

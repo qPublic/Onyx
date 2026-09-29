@@ -1,4 +1,5 @@
 import AppKit
+import FoundationModels
 import SwiftUI
 import Combine
 import EventKit
@@ -1023,5 +1024,78 @@ enum AIPlusTest {
         }
         note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
         exit(0)
+    }
+}
+
+// MARK: - Self-test (debug): ONYX_SAFETYTEST=<file> (run with -ai.provider anthropic, no key needed) checks that text from a
+// web page can't make Onyx AI act, plus onyx:// links, the Shortcuts file, What's New and crash-report reading.
+enum SafetyTest {
+    @MainActor static func run(_ file: String) async {
+        var log: [String] = [], fails = 0
+        func note(_ s: String) { log.append(s); try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8) }
+        func check(_ name: String, _ ok: Bool) { note((ok ? "PASS " : "FAIL ") + name); if !ok { fails += 1 } }
+        note("cloud model active (so the on-device word check is off): \(CloudAI.active)")
+        AgentTools.dryRun = true
+        defer { AgentTools.dryRun = false }
+        let copy = AgentTools.all.first { $0.name == "copy_to_clipboard" }!
+        func call(_ request: String, untrusted: Bool) async -> String {
+            Assistant.currentRequest = request; Assistant.untrusted = untrusted; ToolBudget.reset()
+            guard let args = try? GeneratedContent(json: #"{"text": "pwned"}"#) else { return "bad args" }
+            return (try? await copy.call(arguments: args)) ?? "error"
+        }
+        check("an instruction hidden in a web page is refused", (await call("Summarize this web page", untrusted: true)).hasPrefix("Not done"))
+        check("the user's own request still works on a page", await call("Copy the phone number from this page", untrusted: true) == "Done.")
+        check("with no outside text, a cloud model can act", await call("Summarize this web page", untrusted: false) == "Done.")
+
+        for (u, want) in [("onyx://focus?minutes=45", "focus 45"), ("onyx://timer", "timer 10"), ("onyx://ask?q=hello", "ask hello"),
+                          ("onyx://copy-text", "copy text"), ("onyx://screenshot?mode=screen", "screenshot screen"), ("onyx://nope", "unknown link nope")] {
+            let got = OnyxLinks.handle(URL(string: u)!, dry: true)
+            check("\(u) → \(got)", got == want)
+        }
+        if let d = OnyxLinks.shortcutFile(name: "Onyx – Focus", url: "onyx://focus"),
+           let p = try? PropertyListSerialization.propertyList(from: d, format: nil) as? [String: Any] {
+            check("Shortcuts file has the URL and Open URLs actions", (p["WFWorkflowActions"] as? [[String: Any]])?.compactMap { $0["WFWorkflowActionIdentifier"] as? String } == ["is.workflow.actions.url", "is.workflow.actions.openurl"])
+        }
+        let notes = WhatsNew.notes(for: "1.7.1")
+        check("What's New reads the bundled changelog (\(notes.count) items, first \"\(notes.first?.0 ?? "-")\")", notes.count >= 5 && notes.allSatisfy { !$0.1.contains("**") })
+
+        let ips = FileManager.default.temporaryDirectory.appendingPathComponent("Onyx-test.ips")
+        let body: [String: Any] = ["exception": ["type": "EXC_BAD_ACCESS", "signal": "SIGSEGV"], "faultingThread": 0,
+                                   "threads": [["frames": [["imageIndex": 0, "symbol": "WallpaperWindow.show(_:sound:)"], ["imageIndex": 1, "symbol": "objc_msgSend"]]]],
+                                   "usedImages": [["name": "Onyx"], ["name": "libobjc.A.dylib"]]]
+        let json = String(decoding: try! JSONSerialization.data(withJSONObject: body), as: UTF8.self)
+        try? (#"{"app_name":"Onyx","bug_type":"309"}"# + "\n" + json).write(to: ips, atomically: true, encoding: .utf8)
+        let s = Feedback.summary(of: ips)
+        check("reads a crash report: \(s.replacingOccurrences(of: "\n", with: " | "))", s.contains("EXC_BAD_ACCESS") && s.contains("Onyx  WallpaperWindow.show"))
+        try? FileManager.default.removeItem(at: ips)
+        note("Reduce Motion is \(Motion.reduced ? "on" : "off") on this Mac")
+        note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
+        exit(0)
+    }
+}
+
+// MARK: - Self-test (debug): ONYX_ENERGYTEST=<file> starts the background services that run all the time, lets them idle
+// for 40 s, and measures CPU use and how often they wake the Mac up.
+enum EnergyTest {
+    @MainActor static func run(_ file: String) {
+        MediaController.shared.start(); BatteryMonitor.shared.start(); ClipboardHistory.shared.start()
+        FocusTimer.shared.start(); BackdropSampler.shared.start(); DownloadMonitor.shared.start()
+        func sample() -> (cpu: Double, wakeups: UInt64) {
+            var ru = rusage(); getrusage(RUSAGE_SELF, &ru)
+            let cpu = Double(ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) + Double(ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 1e6
+            var info = rusage_info_v4()
+            _ = withUnsafeMutablePointer(to: &info) { p in p.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(getpid(), RUSAGE_INFO_V4, $0) } }
+            return (cpu, info.ri_pkg_idle_wkups + info.ri_interrupt_wkups)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {   // let start-up settle
+            let a = sample(), t0 = Date()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 40) {
+                let b = sample(), secs = Date().timeIntervalSince(t0)
+                let cpu = (b.cpu - a.cpu) / secs * 100, wake = Double(b.wakeups - a.wakeups) / secs
+                let ok = cpu < 1 && wake < 5
+                try? String(format: "idle %.0f s: %.2f%% CPU, %.1f wake-ups a second  %@", secs, cpu, wake, ok ? "PASS" : "FAIL").write(toFile: file, atomically: true, encoding: .utf8)
+                exit(0)
+            }
+        }
     }
 }

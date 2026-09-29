@@ -56,8 +56,10 @@ final class DownloadMonitor: ObservableObject {
 
     private func tick() {
         guard enabled else { if !items.isEmpty { items = [] }; return }
-        // Look at the folder every 3s when nothing is downloading, every second while something is.
-        if items.isEmpty && tracked.isEmpty && partials.isEmpty && Date().timeIntervalSince(lastScan) < 3 { return }
+        // Look at the folder every 3 s when nothing is downloading, every second while something is. (Browsers also
+        // announce their downloads, which starts the fast pace right away.)
+        let idle = items.isEmpty && tracked.isEmpty && partials.isEmpty
+        if idle && Date().timeIntervalSince(lastScan) < 3 { return }
         lastScan = Date()
         // Fallback: partial files the browser didn't publish progress for.
         let urls = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []

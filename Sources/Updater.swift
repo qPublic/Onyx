@@ -152,7 +152,15 @@ final class Updater: ObservableObject {
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(app as CFURL, [], &code) == errSecSuccess, let code else { return false }
         let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSCheckNestedCode | kSecCSStrictValidate)
-        return SecStaticCodeCheckValidity(code, flags, req) == errSecSuccess
+        if SecStaticCodeCheckValidity(code, flags, req) == errSecSuccess { return true }
+        // Once Onyx is notarized, updates are signed with an Apple Developer ID instead of the local certificate.
+        // Accept those too, but only from the team named in this copy's Info.plist (OnyxTeamID).
+        guard let team = Bundle.main.object(forInfoDictionaryKey: "OnyxTeamID") as? String, !team.isEmpty,
+              team.allSatisfy({ $0.isLetter || $0.isNumber }) else { return false }
+        var dev: SecRequirement?
+        let text = "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and identifier \"\(Bundle.main.bundleIdentifier ?? "")\""
+        guard SecRequirementCreateWithString(text as CFString, [], &dev) == errSecSuccess, let dev else { return false }
+        return SecStaticCodeCheckValidity(code, flags, dev) == errSecSuccess
     }
 
     /// This copy's designated requirement, but only when it's signed with a certificate (ad-hoc builds can't update).

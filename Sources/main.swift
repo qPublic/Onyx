@@ -110,6 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let dir = ProcessInfo.processInfo.environment["ONYX_LAUNCHERPINTEST"] { Task { @MainActor in await LauncherPinTest.run(dir) }; return }
         // Debug: ONYX_CLOUDTEST=<file> checks the cloud-model path against a stand-in server (see CloudTest).
         if let file = ProcessInfo.processInfo.environment["ONYX_CLOUDTEST"] { Task { @MainActor in await CloudTest.run(file) }; return }
+        // Debug: ONYX_MAILTEST=<file> checks email reading and events (see MailTest; ./test.sh runs it with a stand-in mail server).
+        if let file = ProcessInfo.processInfo.environment["ONYX_MAILTEST"] { Task { @MainActor in await MailTest.run(file) }; return }
         // Debug: ONYX_AIPLUSTEST=<file> checks web answers, search, translation, lettering and picture versions (see AIPlusTest).
         if let file = ProcessInfo.processInfo.environment["ONYX_AIPLUSTEST"] { Task { @MainActor in await AIPlusTest.run(file) }; return }
         // Debug: ONYX_SAFETYTEST=<file> and ONYX_ENERGYTEST=<file> (see SafetyTest and EnergyTest; ./test.sh runs them all).
@@ -170,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AutoQuit.shared.start()                 // optional: quit apps that have no windows
         OnyxReminders.shared.start()            // AI-set reminders that ring in the notch
         MainActor.assumeIsolated { Briefing.watch() }   // the morning briefing
+        MainActor.assumeIsolated { MailWatch.shared.start() }   // events from your email (once an account is added)
         MeetingWatch.shared.start()             // video calls: countdown + Join in the notch
         Updater.shared.start()                  // new GitHub releases download in the background
         NotesSync.shared.start()                // optional two-way sync with Apple Notes

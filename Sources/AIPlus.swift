@@ -108,7 +108,7 @@ enum PersonalSearch {
         for r in OnyxReminders.shared.upcoming { docs.append(Hit(source: "Reminder", title: r.due.formatted(date: .abbreviated, time: .shortened), text: r.title, score: 0)) }
         if CalendarService.shared.authorized {
             let s = CalendarService.shared.store, now = Date()
-            for e in s.events(matching: s.predicateForEvents(withStart: now.addingTimeInterval(-7 * 86400), end: now.addingTimeInterval(30 * 86400), calendars: nil)).prefix(80) {
+            for e in CalendarAccounts.events(s, from: now.addingTimeInterval(-7 * 86400), to: now.addingTimeInterval(30 * 86400)).prefix(80) {
                 docs.append(Hit(source: "Calendar", title: e.startDate.formatted(date: .abbreviated, time: .shortened), text: (e.title ?? "") + (e.notes.map { ". " + $0.prefix(200) } ?? ""), score: 0))
             }
         }

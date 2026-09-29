@@ -4,8 +4,10 @@
 set -e
 cd "$(dirname "$0")"
 SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
-APP=build/Onyx.app
-rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+# Put together and signed in a temporary folder, then swapped in at the end, so build/Onyx.app is never half-built
+# (an Onyx that starts while it's building would run unsigned, with none of its settings).
+OUT=build/Onyx.app; WORK=$(mktemp -d); APP="$WORK/Onyx.app"
+mkdir -p build "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -sdk "$SDK" -target arm64-apple-macosx26.0 -swift-version 5 -O \
   -o "$APP/Contents/MacOS/Onyx" Sources/*.swift
 cp Resources/Info.plist "$APP/Contents/"
@@ -24,6 +26,7 @@ elif security find-certificate -c "$IDENTITY" >/dev/null 2>&1; then
 else
   codesign --force --deep --sign - "$APP"
 fi
+rm -rf "$OUT"; ditto --noextattr "$APP" "$OUT"; rm -rf "$WORK"; APP="$OUT"
 echo "Built $APP"
 if [ "$1" = "dmg" ]; then
   # Staged outside the project: iCloud Drive tags files there with Finder info, which breaks the signature check.

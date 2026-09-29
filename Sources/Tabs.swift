@@ -238,6 +238,7 @@ struct DancingCow: View {
 
 struct CalendarCard: View {
     @ObservedObject var cal = CalendarService.shared
+    @ObservedObject var mail = MailWatch.shared
 
     var body: some View {
         Card {
@@ -257,6 +258,11 @@ struct CalendarCard: View {
                         if cal.dayEvents.isEmpty {
                             Text("No events").font(.caption).foregroundStyle(.secondary)
                         }
+                        if !mail.suggestions.isEmpty {
+                            Button { SettingsView.open(.accounts) } label: {
+                                Label("\(mail.suggestions.count) from email to review", systemImage: "envelope.badge").font(.system(size: 10.5, weight: .medium))
+                            }.buttonStyle(.plain).foregroundStyle(.red)
+                        }
                         ScrollView {
                             VStack(alignment: .leading, spacing: 6) {
                                 ForEach(cal.dayEvents, id: \.eventIdentifier) { e in
@@ -266,6 +272,12 @@ struct CalendarCard: View {
                                             Text(e.title ?? "").font(.system(size: 11.5, weight: .medium)).lineLimit(1)
                                             Text(e.isAllDay ? "All day" : "\(e.startDate.formatted(date: .omitted, time: .shortened)) – \(e.endDate.formatted(date: .omitted, time: .shortened))")
                                                 .font(.system(size: 10)).foregroundStyle(.secondary)
+                                        }
+                                        if let more = cal.copies[e.eventIdentifier ?? ""], !more.isEmpty {   // also on these accounts
+                                            HStack(spacing: 2) { ForEach(more.indices, id: \.self) { Circle().fill(Color(nsColor: more[$0])).frame(width: 5, height: 5) } }.padding(.top, 4)
+                                        }
+                                        if mail.isFromEmail(e.eventIdentifier) {
+                                            Image(systemName: "envelope.fill").font(.system(size: 8)).foregroundStyle(.secondary).padding(.top, 3).help("Added from an email")
                                         }
                                     }
                                 }

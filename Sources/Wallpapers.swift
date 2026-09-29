@@ -16,6 +16,8 @@ struct Wallpaper: Codable, Identifiable, Hashable {
     var prompt: String?       // what an AI loop was made from
     var dusk: String?, night: String?   // ids of this loop's sunset and night versions, switched by the real sun
     var variantOf: String?    // set on those versions, which don't show up in the library by themselves
+    var source: String?       // AI loops (1.8 on): the painting it was made from, so it can be rebuilt in 4K
+    var fx: UInt32?, motion: Float?, anime: Bool?
 
     var isScene: Bool { file == nil }
     var scene: WallpaperScene? { WallpaperScene(rawValue: id) }
@@ -132,6 +134,24 @@ final class WallpaperLibrary: ObservableObject {
         return w
     }
 
+    /// Keeps an AI loop's painting (and how it moved) next to it, for rebuilding it later at a higher resolution.
+    func keepSource(_ w: Wallpaper, picture: CGImage, fx: UInt32, motion: Float, anime: Bool) {
+        guard let i = videos.firstIndex(where: { $0.id == w.id }) else { return }
+        let dir = folder.appendingPathComponent("Sources", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = w.id + ".png"
+        guard let d = CGImageDestinationCreateWithURL(dir.appendingPathComponent(file) as CFURL, "public.png" as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(d, picture, nil)
+        guard CGImageDestinationFinalize(d) else { return }
+        videos[i].source = file; videos[i].fx = fx; videos[i].motion = motion; videos[i].anime = anime
+        save()
+    }
+
+    func sourceImage(_ w: Wallpaper) -> CGImage? {
+        guard let f = w.source, let src = CGImageSourceCreateWithURL(folder.appendingPathComponent("Sources/" + f) as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(src, 0, nil)
+    }
+
     func rename(_ w: Wallpaper, to name: String) {
         guard let i = videos.firstIndex(where: { $0.id == w.id }), !name.isEmpty else { return }
         videos[i].name = name; save()
@@ -141,6 +161,7 @@ final class WallpaperLibrary: ObservableObject {
         guard !w.isScene else { return }
         for v in [w.dusk, w.night].compactMap({ $0 }).compactMap(item) { remove(v) }   // its sunset and night versions go too
         if let u = url(w) { try? FileManager.default.trashItem(at: u, resultingItemURL: nil) }   // recoverable from the Trash
+        if let f = w.source { try? FileManager.default.removeItem(at: folder.appendingPathComponent("Sources/" + f)) }
         try? FileManager.default.removeItem(at: thumbURL(w))
         videos.removeAll { $0.id == w.id }; save()
         WallpaperEngine.shared.removed(w)

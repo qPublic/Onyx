@@ -21,6 +21,7 @@ struct WallpapersView: View {
     @State private var display = "all"
     @State private var enhancing: Wallpaper?
     @State private var creating = false
+    @State private var remakeIdea = ""
     @State private var renaming: Wallpaper?
     @State private var newName = ""
     @State private var dropping = false
@@ -66,7 +67,7 @@ struct WallpapersView: View {
         .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in importDropped(providers); return true }
         .overlay { if dropping { RoundedRectangle(cornerRadius: 24).strokeBorder(.cyan, style: StrokeStyle(lineWidth: 2, dash: [8])).padding(10) } }
         .sheet(item: $enhancing) { w in EnhanceSheet(wallpaper: w) { enhancing = nil } }
-        .sheet(isPresented: $creating) { CreateLoopSheet { creating = false } }
+        .sheet(isPresented: $creating) { CreateLoopSheet(close: { creating = false; remakeIdea = "" }, initialIdea: remakeIdea) }
         .alert("Rename", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
             Button("Rename") { if let r = renaming { lib.rename(r, to: newName) }; renaming = nil }
@@ -163,6 +164,11 @@ struct WallpapersView: View {
             Divider()
             Button("Enhance with AI…") { enhancing = w }
                 .disabled(enhancer.busy || (VideoEnhancer.scaleFactors(width: w.width, height: w.height).isEmpty && VideoEnhancer.frameRates(from: w.fps).isEmpty))
+            if w.source != nil && w.width < 3800 {
+                Button("Make a 4K Version") { LoopMaker.shared.rebuild4K(w) }.disabled(LoopMaker.shared.busy)
+            } else if let p = w.prompt, w.source == nil {   // made before 1.8: its painting wasn't kept
+                Button("Remake Sharper…") { remakeIdea = p; creating = true }
+            }
             Button("Rename…") { newName = w.name; renaming = w }
             if let u = lib.url(w) { Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([u]) } }
             Divider()

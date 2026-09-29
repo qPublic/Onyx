@@ -95,11 +95,12 @@ extension ImagePlaygroundStyle {
 /// The look of the painting. Realistic, Anime and Painted come from on-device Stable Diffusion models (a one-time
 /// download each); Animated and Illustration from Image Playground.
 enum ArtStyle: String, CaseIterable, Identifiable {
-    case realistic, anime, painted, animated, illustration
+    case auto, realistic, anime, painted, animated, illustration
     var id: String { rawValue }
-    var title: String { rawValue.capitalized }
+    var title: String { self == .auto ? "AI's Choice" : rawValue.capitalized }
     var icon: String {
         switch self {
+        case .auto: "wand.and.stars"
         case .realistic: "camera.fill"
         case .anime: "sparkles"
         case .painted: "paintbrush.pointed.fill"
@@ -109,8 +110,9 @@ enum ArtStyle: String, CaseIterable, Identifiable {
     }
     var blurb: String {
         switch self {
+        case .auto: "Makes its own look"
         case .realistic: "Like a photograph"
-        case .anime: "Anime background art"
+        case .anime: "Anime scenery"
         case .painted: "Painted concept art"
         case .animated: "3D animated film"
         case .illustration: "Bold, flat artwork"
@@ -134,6 +136,7 @@ enum ArtStyle: String, CaseIterable, Identifiable {
     @Published var progress = 0.0
     @Published private(set) var art: ArtStyle?  // how the pictures on offer were made (nil for your own picture)
     @Published var subject = ""                // the character or thing you asked for, if any
+    @Published private(set) var look = ""      // AI's Choice: the style it made for this idea
     @Published var checkNote: String?          // what checking the pictures found
     @Published var checkOK = false
     static let grain: UInt32 = 1 << 12          // the shader's film-grain switch, for photo-like loops
@@ -154,11 +157,18 @@ enum ArtStyle: String, CaseIterable, Identifiable {
     /// Plans the loop from an idea, then paints versions of it to choose from: two with Stable Diffusion (Realistic, Anime,
     /// Painted), up to four with Image Playground (Animated, Illustration).
     func imagine(_ idea: String, art: ArtStyle, picture: CGImage? = nil) {
-        images = []; step = .thinking; detail = ""; progress = 0; self.art = art; checkNote = nil; checkOK = false
+        images = []; step = .thinking; detail = ""; progress = 0; self.art = art; checkNote = nil; checkOK = false; look = ""
         task = Task {
             let awake = ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "Painting a live wallpaper")   // no App Nap if you switch away
             defer { ProcessInfo.processInfo.endActivity(awake) }
-            let p = await Self.plan(idea, style: art.title)
+            var art = art
+            if art == .auto {   // AI's Choice: pick the painter and make a style for this idea
+                detail = "Choosing a style…"
+                let c = await Self.chooseStyle(idea, canDraw: canDraw == true)
+                art = c.art; look = c.look; self.art = art
+            }
+            let lookWords = look.isEmpty ? nil : look
+            let p = await Self.plan(idea, style: lookWords ?? art.title)
             name = p.name; scene = p.scene; effects = Set(p.effects); subject = p.subject
             step = .drawing
             do {
@@ -171,7 +181,7 @@ enum ArtStyle: String, CaseIterable, Identifiable {
                         detail = "Painting…"; progress = 0
                         let people = !p.subject.isEmpty
                         painting = Task.detached(priority: .userInitiated) {
-                            try Diffusion(sd).paint(scene, people: people, count: 2, isCancelled: { Task.isCancelled }, progress: { done, total in
+                            try Diffusion(sd).paint(scene, people: people, look: lookWords, count: 2, isCancelled: { Task.isCancelled }, progress: { done, total in
                                 Task { @MainActor in LoopMaker.shared.progress = Double(done) / Double(total) }
                             }, each: { img in
                                 let made = img
@@ -183,7 +193,7 @@ enum ArtStyle: String, CaseIterable, Identifiable {
                     } else {
                         NSApp.activate()   // Image Playground only draws for the app in front
                         let creator = try await ImageCreator()
-                        var concepts: [ImagePlaygroundConcept] = [.text(scene)]
+                        var concepts: [ImagePlaygroundConcept] = [.text(lookWords.map { scene + ", " + $0 } ?? scene)]
                         if let picture { concepts.insert(.image(picture), at: 0) }
                         for try await made in creator.images(for: concepts, style: art.playground ?? .animation, limit: 4) { images.append(made.cgImage) }
                     }
@@ -270,7 +280,7 @@ enum ArtStyle: String, CaseIterable, Identifiable {
     /// More like this: new versions of the picture you picked (Stable Diffusion repaints it; Image Playground uses it as a starting point).
     func moreLike(_ pic: CGImage) {
         guard !busy else { return }
-        let art = self.art, scene = self.scene, people = !subject.isEmpty
+        let art = self.art, scene = self.scene, people = !subject.isEmpty, lookWords = look.isEmpty ? nil : look
         step = .drawing; detail = "Painting versions like the one you picked…"; progress = 0
         task = Task {
             let awake = ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "Painting a live wallpaper")
@@ -278,7 +288,7 @@ enum ArtStyle: String, CaseIterable, Identifiable {
             do {
                 if let sd = art?.diffusion, sd.ready {
                     painting = Task.detached(priority: .userInitiated) {
-                        try Diffusion(sd).paint(scene, people: people, count: 2, from: pic, strength: 0.5, isCancelled: { Task.isCancelled }, progress: { done, total in
+                        try Diffusion(sd).paint(scene, people: people, look: lookWords, count: 2, from: pic, strength: 0.5, isCancelled: { Task.isCancelled }, progress: { done, total in
                             Task { @MainActor in LoopMaker.shared.progress = Double(done) / Double(total) }
                         }, each: { img in
                             let made = img
@@ -311,25 +321,35 @@ enum ArtStyle: String, CaseIterable, Identifiable {
     }
 
     /// Animates the chosen picture into a loop, adds it to the library and puts it on.
-    func make(_ picture: CGImage, motion: Float) {
+    func make(_ original: CGImage, motion: Float) {
         let fx = effects.reduce(art == .realistic ? Self.grain : 0) { $0 | $1.bit }, prompt = scene, title = name.isEmpty ? "AI Loop" : name
+        let sd = art?.diffusion, kind: Upscaler.Kind = art == .anime ? .anime : .general, people = !subject.isEmpty, lookWords = look.isEmpty ? nil : look
         step = .working("Getting started…", 0)
         task = Task {
             let awake = ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "Making a live wallpaper")
             defer { ProcessInfo.processInfo.endActivity(awake) }
             do {
-                let url = try await Self.build(picture, fx: fx, motion: motion) { stage, p in
-                    Task { @MainActor in if self.busy { self.step = .working(stage, p) } }
+                var picture = original
+                // Stable Diffusion paints at 512 px: double it with the upscaler, then the same painter adds real detail tile by tile.
+                if let sd, sd.ready, picture.width <= 768 {
+                    picture = (try? await Self.detail(picture, style: sd, kind: kind, scene: prompt, people: people, look: lookWords) { stage, p in
+                        Task { @MainActor in if self.busy { self.step = .working(stage, p * 0.3) } }
+                    }) ?? picture
+                    try Task.checkCancellation()
+                }
+                let url = try await Self.build(picture, fx: fx, motion: motion, upscaler: kind) { stage, p in
+                    Task { @MainActor in if self.busy { self.step = .working(stage, sd != nil ? 0.3 + p * 0.7 : p) } }
                 }
                 try Task.checkCancellation()
                 let w = try await WallpaperLibrary.shared.add(url, name: title, move: true, prompt: prompt)
+                WallpaperLibrary.shared.keepSource(w, picture: picture, fx: fx, motion: motion, anime: kind == .anime)
                 if UserDefaults.standard.bool(forKey: Self.dayNightKey) {
                     // The same picture relit for sunset and night, so the three loops match and swap at the real sunset and sunrise.
                     var made: [Wallpaper] = []
                     for phase in [DayPhase.dusk, .night] {
                         guard let lit = DayPhase.relight(picture, for: phase) else { continue }
                         let label = phase == .dusk ? "Sunset version: " : "Night version: "
-                        let u = try await Self.build(lit, fx: fx | phase.extraEffects, motion: motion) { stage, p in
+                        let u = try await Self.build(lit, fx: fx | phase.extraEffects, motion: motion, upscaler: kind) { stage, p in
                             Task { @MainActor in if self.busy { self.step = .working(label + stage.lowercased(), p) } }
                         }
                         try Task.checkCancellation()
@@ -341,6 +361,26 @@ enum ArtStyle: String, CaseIterable, Identifiable {
                 step = .done(w.id)
             } catch is CancellationError {
                 step = .pick
+            } catch {
+                step = .failed((error as? VoiceError)?.message ?? error.localizedDescription)
+            }
+        }
+    }
+
+    /// Rebuilds an AI loop from its kept painting at 4K (3840 px wide), as a new wallpaper next to it.
+    func rebuild4K(_ w: Wallpaper) {
+        guard !busy, let pic = WallpaperLibrary.shared.sourceImage(w) else { return }
+        let kind: Upscaler.Kind = w.anime == true ? .anime : .general
+        step = .working("Getting started…", 0)
+        task = Task {
+            do {
+                let url = try await Self.build(pic, fx: w.fx ?? 0, motion: w.motion ?? 1, upscaler: kind, width: 3840) { stage, p in
+                    Task { @MainActor in if self.busy { self.step = .working(stage, p) } }
+                }
+                let n = try await WallpaperLibrary.shared.add(url, name: w.name + " (4K)", move: true, prompt: w.prompt)
+                WallpaperLibrary.shared.keepSource(n, picture: pic, fx: w.fx ?? 0, motion: w.motion ?? 1, anime: w.anime == true)
+                NotchModel.shared.flash(.message(icon: "sparkles.tv", text: "“\(w.name)” is ready in 4K", tint: .purple), for: 3)
+                step = .idle
             } catch {
                 step = .failed((error as? VoiceError)?.message ?? error.localizedDescription)
             }
@@ -402,6 +442,51 @@ enum ArtStyle: String, CaseIterable, Identifiable {
     nonisolated static func look(for idea: String) -> String? {
         let t = idea.lowercased()
         return looks.first { $0.keys.contains { t.contains($0) } }?.look
+    }
+
+    /// AI's Choice: which painter suits the idea, and a style made for it. Painters already on this Mac come first,
+    /// so it doesn't start a 2 GB download unless another fits much better.
+    nonisolated static func chooseStyle(_ idea: String, canDraw: Bool) async -> (art: ArtStyle, look: String) {
+        let options: [ArtStyle] = [.painted, .realistic, .anime] + (canDraw ? [.animated, .illustration] : [])
+        let here = options.filter { $0.diffusion?.ready ?? true }
+        let ask = "Wallpaper idea: \(idea)\nPainters: " + options.map { "\($0.rawValue) (\($0.blurb.lowercased()))" }.joined(separator: ", ")
+            + "\nAlready on this Mac: " + (here.isEmpty ? "none" : here.map(\.rawValue).joined(separator: ", "))
+        let instructions = """
+            You're an art director. Pick the painter that suits the idea best, preferring one already on this Mac unless another \
+            fits much better. Then describe the look that fits the idea in 8 to 16 words: its art style, palette, lighting and mood. \
+            If the idea is a game, film or book, match its art direction (for Elden Ring: dark fantasy concept art, weathered gothic \
+            ruins, hazy golden light, muted earthy palette). Style words only, no people's names.
+            """
+        var painter = "", look = ""
+        if CloudAI.active, let r = try? await CloudAI.complete(system: instructions + " Reply with JSON only: {\"painter\": \"…\", \"look\": \"…\"}", prompt: ask, maxTokens: 200),
+           let a = r.firstIndex(of: "{"), let b = r.lastIndex(of: "}"), let d = String(r[a...b]).data(using: .utf8),
+           let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            painter = o["painter"] as? String ?? ""; look = o["look"] as? String ?? ""
+        } else if case .available = SystemLanguageModel.default.availability,
+                  let schema = try? GenerationSchema(root: DynamicGenerationSchema(name: "StyleChoice", properties: [
+                    .init(name: "painter", description: "The painter to use", schema: DynamicGenerationSchema(name: "Painter", anyOf: options.map(\.rawValue))),
+                    .init(name: "look", description: "The look, 8 to 16 words", schema: DynamicGenerationSchema(type: String.self)),
+                  ]), dependencies: []),
+                  let out = try? await Assistant.retrying({ try await LanguageModelSession(instructions: instructions).respond(to: ask, schema: schema, options: GenerationOptions(temperature: 0.4)).content }) {
+            painter = (try? out.value(String.self, forProperty: "painter")) ?? ""; look = (try? out.value(String.self, forProperty: "look")) ?? ""
+        }
+        let art = options.first { $0.rawValue == painter.lowercased().trimmingCharacters(in: .whitespaces) } ?? (here.first { $0.diffusion != nil } ?? .painted)
+        if let c = look.lastIndex(of: ":") { look = String(look[look.index(after: c)...]) }   // "Elden Ring castle: dark fantasy…" → the style part
+        // Keep it short: the painter reads 75 tokens, and the scene needs most of them.
+        let words = look.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\".")) ).split(separator: " ").prefix(18)
+        return (art, words.joined(separator: " "))
+    }
+
+    /// Stable Diffusion's 512 px pictures, doubled with the upscaler, then lightly repainted tile by tile by the same painter,
+    /// so the extra pixels hold real, matching detail ("hires fix").
+    nonisolated static func detail(_ pic: CGImage, style: DiffusionStyle, kind: Upscaler.Kind, scene: String, people: Bool, look: String?,
+                                   progress: @escaping @Sendable (String, Double) -> Void) async throws -> CGImage {
+        let big = try await Upscaler.upscale(pic, toWidth: pic.width * 2, kind: kind) { stage, p in progress(stage, p * 0.2) }
+        return try await Task.detached(priority: .userInitiated) {
+            try Diffusion(style).refine(big, scene: scene, people: people, look: look, isCancelled: { Task.isCancelled }) { done, total in
+                progress("Adding fine detail…", 0.2 + 0.8 * Double(done) / Double(total))
+            }
+        }.value
     }
 
     nonisolated(unsafe) static var planError: String?   // why the last plan fell back to the word-based guess (for tests)
@@ -508,15 +593,15 @@ enum ArtStyle: String, CaseIterable, Identifiable {
 
     struct DepthMap: Sendable { var values: [Float]; var width: Int; var height: Int }
 
-    nonisolated static func build(_ picture: CGImage, fx: UInt32, motion: Float, seconds: Double = 12, fps: Int = 30,
-                                  progress: @escaping @Sendable (String, Double) -> Void) async throws -> URL {
+    nonisolated static func build(_ picture: CGImage, fx: UInt32, motion: Float, seconds: Double = 12, fps: Int = 30, upscaler: Upscaler.Kind = .general,
+                                  width: Int? = nil, progress: @escaping @Sendable (String, Double) -> Void) async throws -> URL {
         // The size of your widest display (at least 1440p, at most 4K), in its shape.
         let px: CGSize = await MainActor.run {
             guard let s = NSScreen.screens.max(by: { $0.frame.width < $1.frame.width }) else { return CGSize(width: 2560, height: 1600) }
             return CGSize(width: s.frame.width * s.backingScaleFactor, height: s.frame.height * s.backingScaleFactor)
         }
         let aspect = Double(px.width / px.height)
-        let W = Int(min(max(px.width, 2560), 3840)) / 2 * 2
+        let W = (width ?? Int(min(max(px.width, 2560), 3840))) / 2 * 2
         let H = Int((Double(W) / aspect).rounded()) / 2 * 2
         let art = crop(picture, aspect: aspect)
 
@@ -527,7 +612,12 @@ enum ArtStyle: String, CaseIterable, Identifiable {
         try Task.checkCancellation()
 
         progress("Sharpening it to full resolution…", 0.3)
-        let sharp = await upscale(art, to: W) { p in progress("Downloading Apple's upscaling model (once)…", 0.3 + p * 0.05) } ?? art
+        // Real-ESRGAN paints in the detail; Apple's video upscaler is the fallback (it only sharpens what's there).
+        var sharp = art
+        if art.width < W * 9 / 10 {
+            if let up = try? await Upscaler.upscale(art, toWidth: W, kind: upscaler, progress: { stage, p in progress(stage, 0.3 + p * 0.05) }) { sharp = up }
+            else if let up = await upscale(art, to: W, modelProgress: { p in progress("Downloading Apple's upscaling model (once)…", 0.3 + p * 0.05) }) { sharp = up }
+        }
         try Task.checkCancellation()
 
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("onyx-loop-\(UUID().uuidString).mov")
@@ -927,6 +1017,7 @@ enum DepthModel {
 
 struct CreateLoopSheet: View {
     let close: () -> Void
+    var initialIdea = ""
     @ObservedObject var maker = LoopMaker.shared
     @State private var idea = ""
     @AppStorage("loop.art") private var artRaw = ArtStyle.realistic.rawValue
@@ -962,7 +1053,7 @@ struct CreateLoopSheet: View {
         .padding(22)
         .frame(width: 640, height: 640, alignment: .top)
         .environment(\.colorScheme, .dark)
-        .task { await maker.checkImagePlayground(); if maker.canDraw == false { fromPicture = true } }
+        .task { await maker.checkImagePlayground(); if maker.canDraw == false { fromPicture = true }; if idea.isEmpty { idea = initialIdea } }
     }
 
     // MARK: Step 1: the idea
@@ -1127,6 +1218,9 @@ struct CreateLoopSheet: View {
             if let note = maker.checkNote {
                 Label(note, systemImage: maker.checkOK ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                     .font(.system(size: 12)).foregroundStyle(maker.checkOK ? .green : .orange)
+            }
+            if !maker.look.isEmpty, let a = maker.art {   // what AI's Choice went with
+                Label("AI's Choice: \(a.title) · \(maker.look)", systemImage: "wand.and.stars").font(.system(size: 12)).foregroundStyle(.purple).lineLimit(2)
             }
             ScrollView { grid(selectable: true) }.frame(height: maker.images.count <= 2 ? 180 : 310).scrollIndicators(.hidden)
             HStack {

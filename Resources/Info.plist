@@ -15,7 +15,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.7.3</string>
+	<string>1.8.0</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -28,7 +28,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>15</string>
+	<string>16</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>LSUIElement</key>
@@ -39,11 +39,11 @@
 		<true/>
 	</dict>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Onyx shows and controls what's playing in Spotify and Apple Music, and keeps your notes in sync with Apple Notes if you turn that on.</string>
+	<string>Onyx shows and controls what's playing in Spotify and Apple Music, keeps your notes in sync with Apple Notes, and reads your inbox in Mail to find events, if you turn those on.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Onyx lets you connect paired Bluetooth devices quickly.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Onyx shows your upcoming events in the notch and lets the AI agent add events.</string>
+	<string>Onyx shows all your calendars together in the notch, lets the AI agent add events, and adds events it finds in your email if you turn that on.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Mirror shows your camera so you can check how you look.</string>
 	<key>NSFocusStatusUsageDescription</key>

@@ -225,7 +225,7 @@ enum Briefing {
 
         let calendar = CalendarService.shared
         if calendar.authorized {
-            let events = calendar.store.events(matching: calendar.store.predicateForEvents(withStart: now, end: endOfDay, calendars: nil))
+            let events = CalendarAccounts.events(calendar.store, from: now, to: endOfDay)
                 .sorted { $0.startDate < $1.startDate }
             if events.isEmpty { out.append("No more events on the calendar today.") }
             for e in events.prefix(6) {

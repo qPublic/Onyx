@@ -23,8 +23,10 @@ enum DiffusionStyle: String, CaseIterable {
     var ready: Bool { FileManager.default.fileExists(atPath: folder.appendingPathComponent("Unet.mlmodelc").path) }
 
     /// The words that steer each model toward its look (the scene goes in the middle; CLIP reads 75 tokens).
-    func prompt(_ scene: String, people: Bool = false) -> String {
-        switch self {
+    /// `look`: a style the AI chose for this idea, in place of the model's usual one.
+    func prompt(_ scene: String, people: Bool = false, look: String? = nil) -> String {
+        if let look, !look.isEmpty { return "\(look), \(scene), highly detailed, sharp focus, masterpiece" }
+        return switch self {
         case .realistic: "RAW photo, \(scene), landscape photography, natural light, highly detailed, sharp focus, dslr, film grain"
         case .anime: "anime scenery, \(people ? "" : "no humans, ")\(scene), beautiful detailed background art, soft lighting, vivid colors, masterpiece"
         case .painted: "digital painting, concept art, \(scene), painterly brushstrokes, dramatic lighting, highly detailed"
@@ -98,32 +100,45 @@ final class Diffusion {
 
     /// Paints `count` pictures of the scene. progress(done, total) counts denoising steps across all of them.
     /// With `start`, it paints versions of that picture instead (image to image): `strength` is how far they may wander.
-    func paint(_ scene: String, people: Bool = false, count: Int, steps: Int = 20, guidance: Float = 7, seed: UInt64 = .random(in: 0...UInt64(UInt32.max)),
-               from start: CGImage? = nil, strength: Double = 0.55,
+    /// `tiles`: repaint each of these instead (one picture per tile, with every model loaded just once).
+    func paint(_ scene: String, people: Bool = false, look: String? = nil, count: Int, steps: Int = 20, guidance: Float = 7, seed: UInt64 = .random(in: 0...UInt64(UInt32.max)),
+               from start: CGImage? = nil, tiles: [CGImage] = [], strength: Double = 0.55,
                isCancelled: () -> Bool = { false }, progress: @escaping (Int, Int) -> Void, each: (CGImage) -> Void) throws {
         // 1. Text → embeddings (the "unconditional" one is the negative prompt, for classifier-free guidance).
         var cond: [Float] = [], uncond: [Float] = []
         try autoreleasepool {
             let text = try load("TextEncoder")   // let go of each model as soon as it's done, to keep memory down
-            cond = try encode(style.prompt(scene, people: people), text); uncond = try encode(style.negative(people: people), text)
+            cond = try encode(style.prompt(scene, people: people, look: look), text); uncond = try encode(style.negative(people: people), text)
         }
         let tokens = cond.count / 768
 
-        // 1b. For versions of a picture: the picture → latents, with the image encoder.
-        var startLatent: [Float]?
-        if let start {
+        // 1b. For versions of a picture (or tiles of one): each picture → latents, with the image encoder.
+        var startLatents: [[Float]] = []
+        let starts = (start.map { [$0] } ?? []) + tiles
+        if !starts.isEmpty {
             try autoreleasepool {
                 let enc = try load("VAEEncoder")
-                guard let (name, desc) = enc.modelDescription.inputDescriptionsByName.first,
+                // The picture goes in the 3-channel input. Older conversions (like Realistic's) also take noise and a noise
+                // level and hand back latents already scaled: give them none, and don't scale twice.
+                let ins = enc.modelDescription.inputDescriptionsByName
+                guard let (name, desc) = ins.first(where: { $0.value.multiArrayConstraint?.shape.map(\.intValue).dropFirst().first == 3 }),
                       let shp = desc.multiArrayConstraint?.shape.map(\.intValue), shp.count == 4 else { throw VoiceError("That style can't make versions.") }
-                let H = shp[2], W = shp[3]
-                let px = try array(Self.pixels(start, width: W, height: H), shape: shp, like: desc)
-                let out = try enc.prediction(from: MLDictionaryFeatureProvider(dictionary: [name: px]))
-                guard let key = enc.modelDescription.outputDescriptionsByName.keys.first, let lat = out.featureValue(for: key)?.multiArrayValue else {
-                    throw VoiceError("That style's model didn't answer.")
+                let H = shp[2], W = shp[3], scaled = ins.keys.contains("sqrt_alphas_cumprod")
+                var extra: [String: Any] = [:]
+                for (n, d) in ins where n != name {
+                    guard let c = d.multiArrayConstraint else { continue }
+                    let count = c.shape.reduce(1) { $0 * $1.intValue }
+                    extra[n] = try array([Float](repeating: n == "sqrt_alphas_cumprod" ? 1 : 0, count: count), shape: c.shape.map(\.intValue), like: d)
                 }
-                let n4 = 4 * (H / 8) * (W / 8)
-                startLatent = Array(floats(lat).prefix(n4)).map { $0 * 0.18215 }   // the mean (the rest is its spread)
+                for pic in starts {
+                    let px = try array(Self.pixels(pic, width: W, height: H), shape: shp, like: desc)
+                    let out = try enc.prediction(from: MLDictionaryFeatureProvider(dictionary: extra.merging([name: px]) { a, _ in a }))
+                    guard let key = enc.modelDescription.outputDescriptionsByName.keys.first, let lat = out.featureValue(for: key)?.multiArrayValue else {
+                        throw VoiceError("That style's model didn't answer.")
+                    }
+                    let n4 = 4 * (H / 8) * (W / 8)
+                    startLatents.append(Array(floats(lat).prefix(n4)).map { scaled ? $0 : $0 * 0.18215 })   // the mean (the rest is its spread)
+                }
             }
         }
 
@@ -140,8 +155,9 @@ final class Diffusion {
         let sigmas = Self.karras(steps)
         var latents: [[Float]] = []
         var rng = SplitMix(seed)
-        let s0 = startLatent == nil ? 0 : min(steps - 1, max(0, Int(Double(steps) * (1 - strength))))
+        let s0 = startLatents.isEmpty ? 0 : min(steps - 1, max(0, Int(Double(steps) * (1 - strength))))
         for i in 0..<count {
+            let startLatent = startLatents.isEmpty ? nil : startLatents[i % startLatents.count]
             var x = startLatent.map { l in l.map { $0 + rng.gaussian() * sigmas[s0] } } ?? (0..<n).map { _ in rng.gaussian() * sigmas[0] }
             if x.count != n { throw VoiceError("That picture doesn't fit this style's model.") }
             var old: [Float]?

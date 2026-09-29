@@ -755,6 +755,7 @@ private struct TourTestHost: View {
 enum TourTest {
     @MainActor static func run(_ file: String) {
         let box = TourTestBox()
+        FeatureTour.ignoreHover = true
         box.step = Int(ProcessInfo.processInfo.environment["ONYX_TOURTEST_STEP"] ?? "") ?? 0
         let first = box.step
         let w = NSWindow(contentRect: NSRect(x: 20, y: 20, width: 520, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
@@ -922,6 +923,29 @@ enum ViewShot {
             guard let cg = r.cgImage, let d = CGImageDestinationCreateWithURL(URL(fileURLWithPath: "\(dir)/\(name).png") as CFURL, "public.png" as CFString, 1, nil) else { return }
             CGImageDestinationAddImage(d, cg, nil); CGImageDestinationFinalize(d)
         }
+        if ProcessInfo.processInfo.environment["ONYX_VIEWSHOT_18"] != nil {   // 1.8's new screens, drawn in a window that's never shown
+            func shoot<V: View>(_ name: String, _ v: V, _ size: CGSize) {
+                let host = NSHostingView(rootView: v.frame(width: size.width, height: size.height).background(Color(hex: "1E1E22")).environment(\.colorScheme, .dark))
+                host.frame = CGRect(origin: .zero, size: size)
+                let w = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                w.appearance = NSAppearance(named: .darkAqua); w.contentView = host
+                host.layoutSubtreeIfNeeded()
+                guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {   // let the pages load their lists first
+                shoot("calmail", CalendarMailSettings(), CGSize(width: 532, height: 1100))
+                shoot("signin", MailSignInSheet(), CGSize(width: 440, height: 330))
+                shoot("create", CreateLoopSheet(close: {}), CGSize(width: 640, height: 640))
+                for t in [2.0, 4.8] {
+                    save("tour-calmail-\(Int(t * 10))", TourDemo(step: .calendarMail, t: t).frame(height: 250).frame(maxWidth: .infinity)
+                        .background(RadialGradient(colors: [TourStep.calendarMail.tint.opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 260)), CGSize(width: 472, height: 250))
+                }
+                exit(0)
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["ONYX_VIEWSHOT_TOUR"] != nil {   // the tour's new slides, at two moments each
             let new: [TourStep] = [.meetings, .clipboard, .askAbout, .briefing, .focus, .workspaces, .markup, .livingWalls, .launcherPlus, .system]
             for step in new {
@@ -1039,6 +1063,57 @@ enum AIPlusTest {
             } catch { note("variation error: \(error.localizedDescription)") }
             check(String(format: "paints a version of a picture (%.0f s)", Date().timeIntervalSince(t1)), made.first?.width == 512)
         }
+
+        // The AI upscaler: 4× with real edges, measurably sharper than a plain high-quality resize.
+        func sharpness(_ img: CGImage) -> Double {   // mean squared Laplacian of the brightness
+            let w = img.width, h = img.height
+            guard let px = Upscaler.rgba(img, w, h) else { return 0 }
+            var sum = 0.0
+            for y in 1..<(h - 1) { for x in 1..<(w - 1) {
+                func l(_ x: Int, _ y: Int) -> Double { let i = (y * w + x) * 4; return 0.3 * Double(px[i]) + 0.59 * Double(px[i + 1]) + 0.11 * Double(px[i + 2]) }
+                let v = 4 * l(x, y) - l(x - 1, y) - l(x + 1, y) - l(x, y - 1) - l(x, y + 1)
+                sum += v * v
+            } }
+            return sum / Double((w - 2) * (h - 2))
+        }
+        if let small = AISelfTest.render(["Castle 42", "~ ~ ~"]).flatMap({ Upscaler.resize($0, 300, 225) }) {
+            let t2 = Date()
+            do {
+                let big = try await Upscaler.upscale(small, toWidth: 1200) { _, _ in }
+                let plain = Upscaler.resize(small, 1200, 900)!
+                let (a, b) = (sharpness(big), sharpness(plain))
+                check(String(format: "AI upscaler: %d×%d → %d×%d in %.1f s, sharpness %.0f vs %.0f for a plain resize", small.width, small.height, big.width, big.height,
+                             Date().timeIntervalSince(t2), a, b), big.width == 1200 && big.height == 900 && a > b * 1.5)
+            } catch { check("AI upscaler (\(error.localizedDescription))", false) }
+        }
+
+        // AI's Choice: a game world gets a painter and a look that fit it.
+        let pick = await LoopMaker.chooseStyle("an Elden Ring castle at dusk", canDraw: false)
+        check("AI's Choice for Elden Ring: \(pick.art.rawValue) · \(pick.look)",
+              [.painted, .realistic].contains(pick.art) && ["dark", "gothic", "fantasy", "golden", "ruin", "medieval", "grim", "haz", "gloom"].contains { pick.look.lowercased().contains($0) })
+
+        // Fine detail: a 512 px painting doubled and repainted tile by tile keeps its picture.
+        if let sd = DiffusionStyle.allCases.first(where: \.ready), let start = AISelfTest.render(["~"]).flatMap({ Upscaler.resize($0, 512, 512) }) {
+            let t3 = Date()
+            do {
+                let d = try await LoopMaker.detail(start, style: sd, kind: .general, scene: "a calm lake under a pink sky", people: false, look: nil) { _, _ in }
+                let (a, b) = (Upscaler.rgba(Upscaler.resize(d, 64, 64)!, 64, 64)!, Upscaler.rgba(Upscaler.resize(start, 64, 64)!, 64, 64)!)
+                let diff = zip(a, b).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) } / a.count
+                check(String(format: "fine detail (%@): %d → %d px in %.0f s, still the same picture (average change %d/255)", sd.rawValue, start.width, d.width,
+                             Date().timeIntervalSince(t3), diff), d.width == start.width * 2 && diff < 40)
+                // …and the repaint really changed the fine detail (compared with the upscaler alone, pixel for pixel).
+                let plain = try await Upscaler.upscale(start, toWidth: start.width * 2) { _, _ in }
+                let (x, y) = (Upscaler.rgba(d, d.width, d.height)!, Upscaler.rgba(plain, d.width, d.height)!)
+                let fine = Double(zip(x, y).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }) / Double(x.count)
+                check(String(format: "the repaint added its own detail (%.1f/255 per pixel vs the upscaler alone)", fine), fine >= 0.5)
+                // The whole loop, through the new upscaler: a short one to a temporary file (it never reaches your library).
+                let t4 = Date()
+                let url = try await LoopMaker.build(d, fx: 0, motion: 1, seconds: 2, fps: 30, width: 1920) { _, _ in }
+                let info = try await WallpaperLibrary.info(url)
+                try? FileManager.default.removeItem(at: url)
+                check(String(format: "builds a loop from it: %d×%d, %.0f fps, in %.0f s", info.width, info.height, info.fps, Date().timeIntervalSince(t4)), info.width == 1920)
+            } catch { check("fine detail (\(error.localizedDescription))", false) }
+        }
         note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
         exit(0)
     }
@@ -1114,5 +1189,103 @@ enum EnergyTest {
                 exit(0)
             }
         }
+    }
+}
+
+// MARK: - Self-test (debug): ONYX_MAILTEST=<file> checks email reading and events. With ./test.sh's stand-in mail server on
+// 127.0.0.1:8766 it also signs in, reads the test inbox and finds its events with the on-device model. Nothing is saved:
+// no calendar events, Keychain items or settings.
+enum MailTest {
+    @MainActor static func run(_ file: String) async {
+        var log: [String] = [], fails = 0
+        func note(_ s: String) { log.append(s); try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8) }
+        func check(_ name: String, _ ok: Bool) { note((ok ? "PASS " : "FAIL ") + name); if !ok { fails += 1 } }
+        MailWatch.dryRun = true
+        let cal = Calendar.current, f = DateFormatter()
+        f.dateFormat = "EEE MMM d HH:mm"
+
+        // Reading an email: encoded names and subjects, Latin-1 quoted-printable, quoted replies dropped, HTML.
+        let raw = "From: =?utf-8?q?Ren=C3=A9e?= <Renee@Example.com>\r\nSubject: =?utf-8?B?Q2Fmw6k=?= =?utf-8?B?IG1lZXR1cA==?=\r\n"
+            + "Date: Tue, 29 Sep 2026 12:46:43 -0700\r\nContent-Type: text/plain; charset=\"iso-8859-1\"\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n"
+            + "Coffee at Caf=E9 Nero =\r\ntomorrow?\r\n\r\nOn Mon, Sep 28, 2026 at 9:00 AM Sam wrote:\r\n> Old plans on Friday\r\n"
+        let m = MailMessage(raw: Data(raw.utf8))
+        check("reads an email (\(m.fromName) <\(m.from)> · \(m.subject) · \(m.text))",
+              m.fromName == "Renée" && m.from == "renee@example.com" && m.subject == "Café meetup" && m.text == "Coffee at Café Nero tomorrow?")
+        let html = MailMessage.clean(MailMessage.stripHTML("<style>p{}</style><p>Hi&nbsp;team,</p><p>Practice at <b>4:00 PM</b> &amp; snacks&#33;</p>"))
+        check("reads HTML (\(html.replacingOccurrences(of: "\n", with: " ⏎ ")))", html.contains("Hi team,") && html.contains("Practice at 4:00 PM & snacks!") && !html.contains("p{}"))
+
+        // Invitations: time zones (including Outlook's Windows names), durations, all-day, cancelled.
+        let ny = TimeZone(identifier: "America/New_York")!
+        var c = DateComponents(year: 2026, month: 10, day: 5, hour: 15); c.timeZone = ny
+        let want = cal.date(from: c)!
+        let inv = ICS.events("BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nDTSTART;TZID=\"Eastern Standard Time\":20261005T150000\r\nDURATION:PT45M\r\nSUMMARY:Parent-teacher\r\n  conference\r\nLOCATION:Room 204\\, Main\r\nBEGIN:VALARM\r\nSUMMARY:Ignore me\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR")
+        check("reads an invitation (\(inv.map { "\($0.title) \($0.start.map(f.string) ?? "?") @ \($0.location)" }))",
+              inv.count == 1 && inv[0].title == "Parent-teacher conference" && inv[0].start == want && inv[0].end == want.addingTimeInterval(2700) && inv[0].location == "Room 204, Main")
+        let allDay = ICS.events("BEGIN:VEVENT\nDTSTART;VALUE=DATE:20261010\nSUMMARY:Field trip\nEND:VEVENT")
+        check("all-day invitation", allDay.first?.allDay == true && allDay.first?.end == allDay.first?.start.map { cal.date(byAdding: .day, value: 1, to: $0)! })
+        check("cancelled invitation", ICS.events("METHOD:CANCEL\nBEGIN:VEVENT\nDTSTART:20261010T100000Z\nSUMMARY:X\nEND:VEVENT").first?.cancelled == true)
+
+        // Never read / read carefully.
+        check("rules: address, domain, subdomain, name",
+              MailRules.matches(["sam@example.com"], address: "sam@example.com", name: "") && !MailRules.matches(["sam@example.com"], address: "sammy@example.com", name: "")
+              && MailRules.matches(["@school.org"], address: "coach@school.org", name: "") && MailRules.matches(["school.org"], address: "a@mail.school.org", name: "")
+              && MailRules.matches(["coach rivera"], address: "x@y.com", name: "Coach Rivera") && !MailRules.matches(["school.org"], address: "a@myschool.org", name: ""))
+
+        // Checking the model's answers against the email's own words.
+        check("finds times in words", MailEventFinder.mentionsTime(19, 30, in: "dinner at 7:30pm?") && MailEventFinder.mentionsTime(16, 0, in: "at 4:00 PM on the field")
+              && MailEventFinder.mentionsTime(9, 0, in: "tomorrow at 9 am") && MailEventFinder.mentionsTime(12, 0, in: "lunch at noon")
+              && MailEventFinder.mentionsTime(19, 0, in: "come by at seven o'clock") && !MailEventFinder.mentionsTime(15, 0, in: "call me at 5pm"))
+        let tue = cal.date(from: DateComponents(year: 2026, month: 9, day: 29, hour: 11))!
+        let days = ["Thursday at 4", "tomorrow at 9", "Saturday, October 3 at 7:30pm", "on 10/12"].map { MailEventFinder.resolvedDay($0, sent: tue, model: nil).map(f.string) ?? "nil" }
+        check("works out days from when it was sent (\(days))", days == ["Thu Oct 1 00:00", "Wed Sep 30 00:00", "Sat Oct 3 00:00", "Mon Oct 12 00:00"])
+        var sent = MailMessage(); sent.date = Date().addingTimeInterval(-3600); sent.subject = "Game"; sent.text = "Great game last Saturday! Next one is Friday at 6pm."
+        let past = MailEventFinder.Candidate(title: "Game", date: "", start: "", evidence: "Great game last Saturday")
+        let made = MailEventFinder.Candidate(title: "Party", date: "", start: "20:00", evidence: "Party on Sunday at 8pm")
+        let real = MailEventFinder.Candidate(title: "Game", date: "", start: "18:00", evidence: "Next one is Friday at 6pm")
+        let r = MailEventFinder.check(real, in: sent)
+        check("drops past and made-up events, keeps the real one (\(r.map { f.string(from: $0.start) } ?? "none"))",
+              MailEventFinder.check(past, in: sent) == nil && MailEventFinder.check(made, in: sent) == nil
+              && r.map { cal.component(.weekday, from: $0.start) == 6 && cal.component(.hour, from: $0.start) == 18 && !$0.allDay } == true)
+
+        // One calendar from many accounts: the same event on two accounts shows once.
+        let items = [("Standup", 1), ("standup ", 1), ("Lunch", 2), ("Standup", 3)]
+        let merged = CalendarAccounts.merge(items) { "\($0.0.lowercased().trimmingCharacters(in: .whitespaces))|\($0.1)" }
+        check("merges an event that's on two accounts", merged.count == 3 && merged[0].copies.count == 1)
+
+        // The stand-in mail server: sign in, read, find events (on-device model), never change anything.
+        let bad = await MailAccounts.signIn(address: "test@example.com", password: "wrong", host: "127.0.0.1", port: 8766)
+        guard case .success(var acct) = await MailAccounts.signIn(address: "test@example.com", password: "mock-pass", host: "127.0.0.1", port: 8766) else {
+            note("(no stand-in mail server on 127.0.0.1:8766, so sign-in and reading were skipped; ./test.sh starts one)")
+            note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED"); exit(0)
+        }
+        if case .failure = bad { check("a wrong password is refused", true) } else { check("a wrong password is refused", false) }
+        do {
+            let msgs = try await MailAccounts.fetchNew(&acct, password: "mock-pass")
+            let again = try await MailAccounts.fetchNew(&acct, password: "mock-pass")
+            check("reads the inbox (\(msgs.count) emails), then only new ones (\(again.count))", msgs.count == 8 && again.isEmpty)
+            let t0 = Date()
+            _ = await MailWatch.shared.process(msgs, never: ["blocked@spam.example"], careful: ["coach@school.org"], auto: true)
+            let got = MailWatch.shared.dryAdded
+            note(String(format: "found in %.0f s: ", Date().timeIntervalSince(t0)) + got.map { "\($0.title) · \(f.string(from: $0.start))\($0.allDay ? " (all day)" : "")" }.joined(separator: " | "))
+            note("the model read: " + MailWatch.shared.readLog.joined(separator: " | "))
+            let today = cal.startOfDay(for: Date())
+            func at(_ days: Int, _ h: Int, _ m: Int) -> Date { cal.date(bySettingHour: h, minute: m, second: 0, of: cal.date(byAdding: .day, value: days, to: today)!)! }
+            func has(_ word: String, _ start: Date) -> Bool { got.contains { $0.title.lowercased().contains(word) && $0.start == start && !$0.allDay } }
+            check("dinner on the day and time in the email", has("dinner", at(4, 19, 30)))
+            let d6 = cal.dateComponents([.year, .month, .day], from: cal.date(byAdding: .day, value: 6, to: today)!)
+            var nyc = DateComponents(year: d6.year, month: d6.month, day: d6.day, hour: 15); nyc.timeZone = ny
+            check("the invitation, at 3 PM New York time", got.contains { $0.title == "Parent-teacher conference" && $0.location == "Room 204" && $0.start == cal.date(from: nyc) })
+            let thursday = (1...7).map { cal.date(byAdding: .day, value: $0, to: today)! }.first { cal.component(.weekday, from: $0) == 5 }!
+            check("the coach's practice, read carefully", got.contains { $0.title.lowercased().contains("practice") && $0.careful && $0.start == cal.date(bySettingHour: 16, minute: 0, second: 0, of: thursday)! })
+            check("coffee tomorrow at 9", has("coffee", at(1, 9, 0)))
+            check("nothing from the newsletter, the past game or the thank-you note (\(got.count) events)", got.count == 4)
+            check("never opened the blocked sender's email, the newsletter or the dateless one",
+                  !MailWatch.shared.readLog.contains { ["Meeting Monday", "Fall sale ends Sunday!", "Thanks!"].contains($0) })
+            if let p = ProcessInfo.processInfo.environment["ONYX_MAIL_MOCKLOG"], let l = try? String(contentsOfFile: p, encoding: .utf8) {
+                check("only read-only commands reached the server", !l.contains("REFUSED") && l.contains("BODY.PEEK[]") && !l.contains("SELECT"))
+            }
+        } catch { check("reads the inbox (\(error.localizedDescription))", false) }
+        note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
+        exit(0)
     }
 }

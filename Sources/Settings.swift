@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case appearance, layout, behavior, widgets, live, optimize, fun, lock
+    case appearance, layout, behavior, widgets, live, accounts, optimize, fun, lock
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -11,6 +11,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .behavior: "Behavior"
         case .widgets: "Widgets & Tabs"
         case .live: "Live"
+        case .accounts: "Calendar & Mail"
         case .optimize: "Optimization"
         case .fun: "Fun Mode"
         case .lock: "Privacy"
@@ -23,6 +24,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .behavior: "Opening, motion and system"
         case .widgets: "Boxes, header widgets and tabs"
         case .live: "Sports, markets and weather"
+        case .accounts: "Google calendars and email"
         case .optimize: "Clean, maintain and tweak"
         case .fun: "Goose, sounds and silliness"
         case .lock: "Permissions and AI"
@@ -35,6 +37,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .behavior: "hand.tap.fill"
         case .widgets: "square.grid.2x2.fill"
         case .live: "chart.line.uptrend.xyaxis"
+        case .accounts: "calendar.badge.clock"
         case .optimize: "gauge.with.dots.needle.67percent"
         case .fun: "party.popper.fill"
         case .lock: "hand.raised.fill"
@@ -47,6 +50,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .behavior: [Color(hex: "FF9F0A"), Color(hex: "FF6A00")]
         case .widgets: [Color(hex: "30D0C6"), Color(hex: "0AA6B8")]
         case .live: [Color(hex: "34C759"), Color(hex: "16A34A")]
+        case .accounts: [Color(hex: "FF453A"), Color(hex: "FF9F0A")]
         case .optimize: [Color(hex: "0A84FF"), Color(hex: "5E5CE6")]
         case .fun: [Color(hex: "FFD60A"), Color(hex: "FF375F")]
         case .lock: [Color(hex: "8E8E93"), Color(hex: "5B5B60")]
@@ -56,6 +60,13 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @State private var selection: SettingsSection = .appearance
+    /// A page to open on (set by `open(_:)`).
+    static var jump: SettingsSection?
+    static func open(_ section: SettingsSection) {
+        jump = section
+        NotificationCenter.default.post(name: .init("onyx.settings.jump"), object: nil)
+        (NSApp.delegate as? AppDelegate)?.openSettings()
+    }
     @State private var query = ""
     @State private var found: SettingEntry?     // the setting a search jumped to (shown as a banner)
 
@@ -78,6 +89,8 @@ struct SettingsView: View {
             }
             .padding(8)
             .frame(width: 228)
+            .onAppear { if let j = Self.jump { selection = j; Self.jump = nil } }
+            .onReceive(NotificationCenter.default.publisher(for: .init("onyx.settings.jump"))) { _ in if let j = Self.jump { selection = j; Self.jump = nil } }
             .frame(maxHeight: .infinity, alignment: .top)
             .background(SidebarBackground())
 
@@ -173,6 +186,7 @@ struct SettingsView: View {
         case .behavior: BehaviorSettings()
         case .widgets: WidgetsSettings()
         case .live: LiveSettings()
+        case .accounts: CalendarMailSettings()
         case .optimize: OptimizeSettings()
         case .fun: FunSettings()
         case .lock: LockSettings()

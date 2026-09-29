@@ -59,6 +59,7 @@ enum Prefs {
             Briefing.key: true,
             AIMemory.key: true,
             MeetingWatch.key: true,
+            MailWatch.scanKey: true, MailWatch.autoKey: true, MailWatch.skipBulkKey: true,
         ].merging(AP.defaults) { a, _ in a }.merging(Fun.defaults) { a, _ in a }.merging(Opt.defaults) { a, _ in a }
          .merging(WallpaperEngine.defaults) { a, _ in a })
     }

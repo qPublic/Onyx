@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.8.0
+
+### New
+- **All your Google calendars in one.** Sign in to as many Google accounts as you like (plus iCloud, Outlook or Exchange) in System Settings › Internet Accounts, and Onyx shows every calendar together in the notch. Pick which ones to show in the new **Settings › Calendar & Mail**. An event that's on two accounts, like an invite sent to both your school and personal address, shows once, with a dot for each account. Anything you add syncs back to Google.
+- **Events from your email.** Sign in to your email in Onyx (Gmail, iCloud, Yahoo, or a school or work address, with an app password), or let it read the accounts in Apple Mail (for Outlook and school accounts). Every 15 minutes Onyx finds new plans, practices, appointments and invitations and puts them on your calendar, or asks first if you'd rather. Invitations are added exactly as sent. Everything else is read by Apple's on-device model, then checked against the email's own words (the day, the time and the quote) before anything reaches your calendar. Onyx never sends, deletes or marks anything as read, and every added event can be undone.
+- **Never read, and read carefully.** List the people, addresses or whole domains Onyx should never open. List the ones it should read carefully, like a teacher, coach or boss: their emails are always read (even newsletters), read in full, checked a second time, and the notch tells you when one of their events is added.
+- **AI's Choice art style.** In Create with AI, pick **AI's Choice** and Onyx chooses the painter that suits your idea and makes a style just for it. Ask for an Elden Ring castle and you get dark fantasy concept art in hazy golden light, even though none of the built-in styles is quite that. The style it picked shows above the pictures.
+- The tour has a new step for all of this.
+
+### Improved
+- **AI wallpapers are sharp at 4K.** They used to be painted at 512 pixels and stretched to your screen by an upscaler that only sharpens edges, so they looked soft even when labeled 4K. Now the painting is doubled by Real-ESRGAN, an AI upscaler that paints in real detail. The same painter then goes over it tile by tile to add fine detail that matches the scene, and Real-ESRGAN takes it the rest of the way to full resolution. Anime pictures get Real-ESRGAN's anime model. It all runs on your Mac; the upscaler downloads once (33 MB, or 9 MB for anime).
+- **Make a 4K Version.** New AI wallpapers keep their painting, so right-clicking one in Live Wallpapers can rebuild it at full 4K (3840 pixels wide) for a bigger display. Wallpapers made before 1.8 didn't keep theirs, so they get **Remake Sharper…**, which starts Create with AI from the same idea.
+
+### Fixed
+- **More like this with the Realistic style** works now. Realistic's painter reads pictures differently from the others, and Onyx fed it wrong, so it failed every time.
+
 ## 1.7.3
 
 ### Fixed

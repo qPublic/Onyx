@@ -313,6 +313,7 @@ final class CalendarService: ObservableObject {
     @Published var dayEvents: [EKEvent] = []
     @Published var upcoming: [EKEvent] = []
     @Published var busyDays = Set<Int>()
+    @Published var copies: [String: [NSColor]] = [:]   // other accounts an event is also on
 
     func start() {
         authorized = EKEventStore.authorizationStatus(for: .event) == .fullAccess
@@ -338,15 +339,16 @@ final class CalendarService: ObservableObject {
         guard authorized else { return }
         let cal = Calendar.current
         let dayEnd = cal.date(byAdding: .day, value: 1, to: selectedDay)!
-        dayEvents = store.events(matching: store.predicateForEvents(withStart: selectedDay, end: dayEnd, calendars: nil))
-            .sorted { $0.startDate < $1.startDate }
+        let day = CalendarAccounts.merged(store, from: selectedDay, to: dayEnd).sorted { $0.first.startDate < $1.first.startDate }
+        dayEvents = day.map(\.first)
+        copies = Dictionary(day.map { ($0.first.eventIdentifier ?? "", $0.copies.compactMap { $0.calendar?.color }) }, uniquingKeysWith: { a, _ in a })
         let now = Date()
-        upcoming = Array(store.events(matching: store.predicateForEvents(withStart: now, end: now.addingTimeInterval(7 * 86400), calendars: nil))
+        upcoming = Array(CalendarAccounts.events(store, from: now, to: now.addingTimeInterval(7 * 86400))
             .filter { !$0.isAllDay }
             .sorted { $0.startDate < $1.startDate }
             .prefix(4))
         if let month = cal.dateInterval(of: .month, for: selectedDay) {
-            let evs = store.events(matching: store.predicateForEvents(withStart: month.start, end: month.end, calendars: nil))
+            let evs = CalendarAccounts.events(store, from: month.start, to: month.end)
             busyDays = Set(evs.map { cal.component(.day, from: $0.startDate) })
         }
     }

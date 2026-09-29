@@ -5,7 +5,7 @@ import SwiftUI
 // live demo of one feature, then moves on by itself; hovering pauses it.
 
 enum TourStep: Int, CaseIterable {
-    case notch, meetings, media, shelf, clipboard, ai, askAbout, briefing, circle, widgets, notes, focus, snap, workspaces, markup,
+    case notch, meetings, media, shelf, clipboard, ai, askAbout, briefing, calendarMail, circle, widgets, notes, focus, snap, workspaces, markup,
          wallpapers, create, livingWalls, launcher, launcherPlus, optimize, system, more
 
     var title: String {
@@ -27,6 +27,7 @@ enum TourStep: Int, CaseIterable {
         case .clipboard: "Your clipboard, anywhere"
         case .askAbout: "Ask about anything"
         case .briefing: "Your daily briefing"
+        case .calendarMail: "One calendar, every inbox"
         case .focus: "Focus sessions"
         case .workspaces: "Workspaces"
         case .markup: "Mark up and copy text"
@@ -46,7 +47,7 @@ enum TourStep: Int, CaseIterable {
         case .notes: "Quick notes in the notch that can sync with Apple Notes, and reminders that ring right in the notch."
         case .snap: "Drag a window to the notch to snap it into a layout. Take screenshots and recordings in one click."
         case .wallpapers: "Animated scenes or your own videos behind your desktop icons. They pause when you can't see them."
-        case .create: "Describe any place or game world and Onyx paints it and brings it to life as a seamless loop, all on your Mac."
+        case .create: "Describe any place or game world. Onyx paints it in your style, or one AI's Choice makes for it, and brings it to life as a sharp, seamless loop, all on your Mac."
         case .launcher: "Every app in a full-screen grid with folders and instant search. It can even take over ⌘Space."
         case .optimize: "Clean out caches, run maintenance and change hidden settings, all without Terminal."
         case .more: "Pick a style, size, widgets and shortcuts in Settings. Onyx keeps itself up to date."
@@ -54,6 +55,7 @@ enum TourStep: Int, CaseIterable {
         case .clipboard: "Press ⌃⌥V in any app to search everything you've copied, and paste it right where you are. Pin the ones you use a lot."
         case .askAbout: "Select text and press ⌃⌥S to summarize, explain, rewrite or translate it. Drop a PDF or Word file on the AI tab to ask about that."
         case .briefing: "Your weather, calendar, reminders and what's due on Canvas, in a few sentences. One waits for you each morning."
+        case .calendarMail: "Sign in to all your Google accounts and see every calendar together. Onyx reads your email and puts plans, practices and invitations on your calendar by itself."
         case .focus: "Pick a time and the apps and sites that distract you. They're blocked until it's done, and finishing keeps your streak going."
         case .workspaces: "Save the apps and windows you use for school or work, then put them all back where they were in one click."
         case .markup: "Draw arrows and boxes on screenshots and blur private details. Press ⌃⌥T to copy the text out of anything on screen."
@@ -78,6 +80,7 @@ enum TourStep: Int, CaseIterable {
         case .clipboard: .cyan
         case .askAbout: .purple
         case .briefing: .yellow
+        case .calendarMail: .red
         case .focus: .indigo
         case .workspaces: .teal
         case .markup: .red
@@ -92,6 +95,7 @@ struct FeatureTour: View {
     @Binding var step: Int
     @State private var elapsed = 0.0   // how long this slide has been up, not counting while you hover
     @State private var hovering = false
+    static var ignoreHover = false   // the self-test: your pointer resting on its window mustn't hold the slides
     static let duration = 6.0
     private let tick = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
     private var last: Int { TourStep.allCases.count - 1 }
@@ -117,7 +121,7 @@ struct FeatureTour: View {
             .padding(.horizontal, 24).padding(.top, 14)
         .onHover { hovering = $0 }
         .onReceive(tick) { _ in
-            guard !hovering else { return }   // hovering holds the slide; its demo keeps playing
+            guard !hovering || Self.ignoreHover else { return }   // hovering holds the slide; its demo keeps playing
             elapsed += 0.1
             if elapsed >= Self.duration && step < last { withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) { step += 1 } }
         }
@@ -199,6 +203,7 @@ struct TourDemo: View {
         case .clipboard: clipboard
         case .askAbout: askAbout
         case .briefing: briefing
+        case .calendarMail: calendarMail
         case .focus: focusDemo
         case .workspaces: workspacesDemo
         case .markup: markupDemo
@@ -804,6 +809,51 @@ extension TourDemo {
                 .frame(width: 340, alignment: .leading).background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
             Label("Waiting in the AI tab each morning", systemImage: "sun.horizon.fill").font(.system(size: 10.5)).foregroundStyle(.yellow)
                 .opacity(seg(p, 3.4, 3.8))
+        }
+    }
+
+    // Three accounts' calendars become one, then an email from a careful sender turns into an event.
+    fileprivate var calendarMail: some View {
+        let accounts: [(String, Color)] = [("you@gmail.com", .blue), ("you@school.org", .green), ("iCloud", .gray)]
+        let rows: [(String, String, Color, Double)] = [("9:00 AM", "Bio class", .green, 1.0), ("12:30 PM", "Lunch with Maya", .blue, 1.25),
+                                                        ("4:00 PM", "Soccer practice", .red, -1), ("6:00 PM", "Family dinner", .gray, 1.5)]
+        let mail = seg(p, 2.4, 2.9), fly = seg(p, 3.5, 4.3)
+        return HStack(alignment: .top, spacing: 18) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(accounts.enumerated()), id: \.offset) { i, a in
+                    let pop = seg(p, 0.2 + Double(i) * 0.2, 0.5 + Double(i) * 0.2)
+                    Label(a.0, systemImage: "person.crop.circle.fill").font(.system(size: 10.5, weight: .medium)).foregroundStyle(a.1)
+                        .padding(.horizontal, 9).padding(.vertical, 6).tourGlass(Capsule())
+                        .opacity(pop).offset(x: -16 * (1 - pop))
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "star.fill").font(.system(size: 9)).foregroundStyle(.orange)
+                        Text("Coach Rivera").font(.system(size: 10.5, weight: .semibold))
+                    }
+                    Text("Practice moved to Thursday at 4:00 PM").font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                .padding(9).frame(width: 175, alignment: .leading).tourGlass(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .opacity(mail * (1 - 0.5 * fly)).offset(y: 10 * (1 - mail)).padding(.top, 6)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Thursday").font(.system(size: 12, weight: .semibold))
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
+                    let show = r.3 < 0 ? fly : seg(p, r.3, r.3 + 0.35)
+                    HStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 2).fill(r.2).frame(width: 3, height: 24)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(r.1).font(.system(size: 10.5, weight: .medium))
+                            Text(r.0).font(.system(size: 9)).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        if r.3 < 0 { Image(systemName: "envelope.fill").font(.system(size: 8)).foregroundStyle(.secondary) }
+                    }
+                    .opacity(show).offset(x: r.3 < 0 ? -50 * (1 - fly) : 0)
+                    .frame(height: r.3 < 0 ? 28 * fly : 28, alignment: .top).clipped()
+                }
+            }
+            .padding(12).frame(width: 190, alignment: .leading).tourGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 

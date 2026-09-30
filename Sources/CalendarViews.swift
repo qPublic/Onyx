@@ -143,15 +143,15 @@ struct FullCalendarView: View {
         .contentShape(Rectangle())
         .onTapGesture { withAnimation(spring) { shown = open ? nil : id; confirming = nil } }
         .contextMenu {
-            Button("Open in Calendar") { openInCalendar(e) }
-            if e.calendar.allowsContentModifications { Button("Delete Event…", role: .destructive) { withAnimation(spring) { shown = id; confirming = id } } }
+            if e.calendar.source != nil { Button("Open in Calendar") { openInCalendar(e) } }
+            if (e.calendar.source != nil && e.calendar.allowsContentModifications) { Button("Delete Event…", role: .destructive) { withAnimation(spring) { shown = id; confirming = id } } }
         }
     }
 
     private func details(_ e: EKEvent, id: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             if let loc = e.location, !loc.isEmpty { Label(loc, systemImage: "mappin.and.ellipse").lineLimit(2) }
-            Label("\(e.calendar.title)\(e.calendar.source.map { " · \($0.title)" } ?? "")", systemImage: "calendar").lineLimit(1)
+            Label("\(e.calendar.title) · \(e.calendar.source?.title ?? "Linked, read-only")", systemImage: "calendar").lineLimit(1)
             if e.hasRecurrenceRules { Label("Repeats", systemImage: "repeat") }
             if let n = e.notes?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty { Text(n).lineLimit(3) }
             if confirming == id {
@@ -163,8 +163,8 @@ struct FullCalendarView: View {
                 .controlSize(.small)
             } else {
                 HStack(spacing: 6) {
-                    Button("Open in Calendar") { openInCalendar(e) }
-                    if e.calendar.allowsContentModifications { Button("Delete…") { withAnimation(spring) { confirming = id } } }
+                    if e.calendar.source != nil { Button("Open in Calendar") { openInCalendar(e) } }
+                    if (e.calendar.source != nil && e.calendar.allowsContentModifications) { Button("Delete…") { withAnimation(spring) { confirming = id } } }
                 }
                 .controlSize(.small)
             }

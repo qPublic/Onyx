@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.6
+
+### New
+- **Paste a Google Calendar link.** In Settings › Calendar & Mail, paste the link to any Google Calendar and Onyx copies in all its events, alongside your other calendars, and updates them every 30 minutes. That can be a public calendar's link or embed code, or a private one's Secret address in iCal format (from its Settings › Integrate calendar). Repeating events, skipped days and moved classes come through right, and times stay put across daylight saving. Other iCal (.ics or webcal) links work too. Pasted calendars are read-only, and you can hide or remove them.
+
+### Fixed
+- Switching calendars on or off in Settings no longer closes the account's list after every switch.
+
 ## 1.8.5
 
 ### Fixed

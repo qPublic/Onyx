@@ -59,8 +59,9 @@ enum CalendarAccounts {
     /// address) comes back once, with its copies alongside.
     static func merged(_ store: EKEventStore, from start: Date, to end: Date) -> [(first: EKEvent, copies: [EKEvent])] {
         let cals = shown(store)
-        if cals?.isEmpty == true { return [] }   // an empty list would mean "every calendar" to EventKit
-        return merge(store.events(matching: store.predicateForEvents(withStart: start, end: end, calendars: cals)), key: key)
+        // (an empty list would mean "every calendar" to EventKit)
+        let own = cals?.isEmpty == true ? [] : store.events(matching: store.predicateForEvents(withStart: start, end: end, calendars: cals))
+        return merge(own + LinkedCalendars.shared.events(store, from: start, to: end), key: key)   // plus calendars pasted as links
     }
     static func events(_ store: EKEventStore, from start: Date, to end: Date) -> [EKEvent] { merged(store, from: start, to: end).map(\.first) }
 
@@ -101,6 +102,7 @@ struct CalendarAccountsSection: View {
     @State private var tick = 0
 
     var body: some View {
+        let _ = tick   // redraws after a switch; the accounts stay open (rebuilding the list used to close them)
         Section {
             if !cal.authorized {
                 HStack {
@@ -134,14 +136,14 @@ struct CalendarAccountsSection: View {
                     }
                 }
             }
+            LinkedCalendarRows()
             HStack {
                 Button("Add Google Account…") { CalendarAccounts.addAccount() }
-                Button("Refresh") { cal.store.refreshSourcesIfNecessary(); cal.reload(); tick += 1 }
+                Button("Refresh") { cal.store.refreshSourcesIfNecessary(); cal.reload(); tick += 1; Task { await LinkedCalendars.shared.refreshAll() } }
                 Spacer()
             }
-            Text("Sign in to as many Google accounts as you like (and iCloud, Outlook or Exchange) in System Settings › Internet Accounts, with Calendars turned on. Onyx puts every calendar you pick here together in one calendar in the notch, shows an event that's on two accounts only once, and anything you add syncs back to Google.")
+            Text("Sign in to as many Google accounts as you like (and iCloud, Outlook or Exchange) in System Settings › Internet Accounts, with Calendars turned on. Onyx puts every calendar you pick here together in one calendar in the notch, shows an event that's on two accounts only once, and anything you add syncs back to Google. Or paste a Google Calendar link above: Onyx copies in all its events and updates them every 30 minutes.")
                 .font(.caption).foregroundStyle(.secondary)
         } header: { Text("Calendars") }
-        .id(tick)
     }
 }

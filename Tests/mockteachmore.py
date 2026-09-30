@@ -83,6 +83,11 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, json.dumps({"ok": True}))
         if u.path == "/__mock/log":
             return self.send(200, json.dumps({"posts": state["posts"], "searches": state["searches"], "auth": state["auth"], "picked": state.get("picked", "")}))
+        if u.path == "/__mock/cal.ics":     # a calendar feed, as Google serves one
+            return self.send(200, "BEGIN:VCALENDAR\r\nX-WR-CALNAME:Stand-in Calendar\r\nBEGIN:VEVENT\r\nUID:a@x\r\nDTSTART:%sT170000Z\r\n"
+                "DTEND:%sT180000Z\r\nRRULE:FREQ=DAILY;COUNT=3\r\nSUMMARY:Stand-in practice\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n" % ((today.strftime("%Y%m%d"),) * 2), "text/calendar")
+        if u.path == "/__mock/private.ics":  # a private calendar without its secret address: Google's sign-in page
+            return self.send(200, "<html><body>Sign in</body></html>", "text/html")
         if u.path == "/__mock/google":      # Google's "Choose an account", with a personal and a school account
             return self.send(200, "<html><body><h1>Choose an account</h1>"
                 "<div data-identifier=\"sam.personal@gmail.com\" onclick=\"location='%sauth/google/callback?as=personal'\">Sam</div>"

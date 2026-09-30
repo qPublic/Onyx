@@ -460,6 +460,8 @@ enum ICS {
         var uid = "", title = "", location = ""
         var start: Date?, end: Date?
         var allDay = false, cancelled = false
+        // For calendars read from a link: how it repeats, skipped and moved dates, notes, and its time zone.
+        var rrule = "", exdates: [Date] = [], recurrenceID: Date?, notes = "", zone: TimeZone?
     }
 
     static func events(_ text: String) -> [Event] {
@@ -489,6 +491,11 @@ enum ICS {
                 case "STATUS": if value.uppercased() == "CANCELLED" { cur!.cancelled = true }
                 case "DTSTART":
                     let d = date(value, params); cur!.start = d.date; cur!.allDay = d.allDay
+                    cur!.zone = value.hasSuffix("Z") ? TimeZone(identifier: "UTC") : params["TZID"].flatMap(zone) ?? .current
+                case "RRULE": cur!.rrule = value
+                case "EXDATE": cur!.exdates += value.split(separator: ",").compactMap { date(String($0), params).date }
+                case "RECURRENCE-ID": cur!.recurrenceID = date(value, params).date
+                case "DESCRIPTION": cur!.notes = unescape(value)
                 case "DTEND": cur!.end = date(value, params).date
                 case "DURATION": duration = Self.duration(value)
                 default: break

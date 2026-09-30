@@ -54,6 +54,7 @@ enum SettingsIndex {
         e(.behavior, "Help", "Take the Tour", "tour tutorial how to use help guide learn features explain"),
         e(.behavior, "Help", "Getting Started Guide", "getting started first time setup install tutorial help guide readme how to"),
         e(.accounts, "Calendars", "Add Google Account", "google calendar gmail account accounts sync multiple several calendars internet accounts combine merge one calendar"),
+        e(.accounts, "Calendars", "Paste a Google Calendar link", "google calendar link url ical ics webcal subscribe import copy public secret address share school calendar"),
         e(.accounts, "Calendars", "Choose calendars", "calendar hide show pick which calendars accounts colors"),
         e(.accounts, "Email", "Add Email Account", "email mail imap gmail icloud yahoo sign in login app password inbox accounts"),
         e(.accounts, "Email", "Also read the accounts in Apple Mail", "apple mail outlook hotmail exchange school account"),

@@ -909,6 +909,7 @@ enum ExtrasTest {
             check("notes found the launch date", notes.contains("March 14") || notes.lowercased().contains("march"))
         }
 
+        for (name, ok) in LinkedCalendars.selfTest() { check("linked calendars: " + name, ok) }
         note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
         exit(0)
     }
@@ -1454,6 +1455,18 @@ enum SchoolTest {
               && school.history.first?.id == "5005")
 
         school.testSettings?.on = true
+        // Pasting a calendar link (nothing is saved in the test).
+        let linked = LinkedCalendars.shared
+        linked.dryRun = true
+        let bad = await linked.add("http://127.0.0.1:8767/__mock/private.ics")
+        let ok = await linked.add("http://127.0.0.1:8767/__mock/cal.ics")
+        let day = Calendar.current.startOfDay(for: Date())
+        let got = linked.events(EKEventStore(), from: day, to: day.addingTimeInterval(5 * 86400))
+        check("pastes a calendar link: its name and its repeating events (\(ok ?? "ok"), \(got.count) events)",
+              ok == nil && linked.calendars.last?.name == "Stand-in Calendar" && got.count == 3 && got.allSatisfy { $0.title == "Stand-in practice" && $0.calendar.source == nil })
+        check("a private calendar's normal link says how to get its secret address (\(bad ?? "nil"))", bad?.contains("Secret address in iCal format") == true)
+        if let c = linked.calendars.last { linked.remove(c) }
+
         // Signed out, the tab sitting on TeachMore's 404 page: signs back in and carries on in the same check.
         _ = await mock("set?name=signedout&reset=1")
         await page.load(URL(string: "http://127.0.0.1:8767/login")!)

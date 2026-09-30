@@ -236,9 +236,14 @@ struct DancingCow: View {
     }
 }
 
+/// Home: today only. Too many to fit? They take turns, a page at a time. Click to open the whole calendar.
 struct CalendarCard: View {
     @ObservedObject var cal = CalendarService.shared
     @ObservedObject var mail = MailWatch.shared
+    @State private var page = 0
+    @State private var hovering = false
+    private let tick = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
+    private let rowH: CGFloat = 30
 
     var body: some View {
         Card {
@@ -250,49 +255,100 @@ struct CalendarCard: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                HStack(alignment: .top, spacing: 12) {
-                    MonthGrid().frame(width: 150)
+                TimelineView(.everyMinute) { ctx in
+                    let left = cal.todayEvents.filter { $0.isAllDay || $0.endDate > ctx.date }
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(cal.selectedDay.formatted(.dateTime.weekday(.wide).month().day()))
-                            .font(.system(size: 12, weight: .semibold))
-                        if cal.dayEvents.isEmpty {
-                            Text("No events").font(.caption).foregroundStyle(.secondary)
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text("TODAY").font(.system(size: 9, weight: .bold)).foregroundStyle(.red)
+                                Text(ctx.date.formatted(.dateTime.weekday(.wide).month().day())).font(.system(size: 12.5, weight: .semibold))
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 10)).foregroundStyle(.secondary)
                         }
                         if !mail.suggestions.isEmpty {
                             Button { SettingsView.open(.accounts) } label: {
                                 Label("\(mail.suggestions.count) from email to review", systemImage: "envelope.badge").font(.system(size: 10.5, weight: .medium))
                             }.buttonStyle(.plain).foregroundStyle(.red)
                         }
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ForEach(cal.dayEvents, id: \.eventIdentifier) { e in
-                                    HStack(alignment: .top, spacing: 6) {
-                                        RoundedRectangle(cornerRadius: 2).fill(Color(nsColor: e.calendar.color)).frame(width: 3, height: 26)
-                                        VStack(alignment: .leading, spacing: 1) {
-                                            Text(e.title ?? "").font(.system(size: 11.5, weight: .medium)).lineLimit(1)
-                                            Text(e.isAllDay ? "All day" : "\(e.startDate.formatted(date: .omitted, time: .shortened)) – \(e.endDate.formatted(date: .omitted, time: .shortened))")
-                                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                                        }
-                                        if let more = cal.copies[e.eventIdentifier ?? ""], !more.isEmpty {   // also on these accounts
-                                            HStack(spacing: 2) { ForEach(more.indices, id: \.self) { Circle().fill(Color(nsColor: more[$0])).frame(width: 5, height: 5) } }.padding(.top, 4)
-                                        }
-                                        if mail.isFromEmail(e.eventIdentifier) {
-                                            Image(systemName: "envelope.fill").font(.system(size: 8)).foregroundStyle(.secondary).padding(.top, 3).help("Added from an email")
-                                        }
-                                    }
-                                }
-                            }
+                        if left.isEmpty {
+                            Text(cal.todayEvents.isEmpty ? "Nothing on your calendar today" : "All done for today")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                        } else {
+                            rows(left, now: ctx.date)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
+        .contentShape(Rectangle())
+        .onTapGesture { if cal.authorized { open() } }
+        .onHover { hovering = $0 }
+        .help("Open the calendar")
+        .accessibilityAction(named: "Open the calendar") { open() }
+    }
+
+    private func open() {
+        guard !HomeLayout.shared.editing else { return }   // clicks while arranging boxes are for arranging
+        cal.select(Date())
+        withAnimation(Motion.reduced ? .easeInOut(duration: 0.2) : .spring(response: 0.42, dampingFraction: 0.86)) { HomeLayout.shared.fullCalendar = true }
+    }
+
+    private func rows(_ events: [EKEvent], now: Date) -> some View {
+        GeometryReader { g in
+            let fit = max(1, Int((g.size.height + 6) / (rowH + 6)))
+            let pages = (events.count + fit - 1) / fit
+            let p = page % max(pages, 1)
+            ZStack(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(events.dropFirst(p * fit).prefix(fit)), id: \.self) { e in row(e, now: now) }
+                }
+                .id(p)
+                .transition(Motion.reduced ? .opacity : .asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity), removal: .move(edge: .top).combined(with: .opacity)))
+            }
+            .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
+            .clipped()
+            .overlay(alignment: .bottomTrailing) {
+                if pages > 1 {
+                    HStack(spacing: 3) {
+                        ForEach(0..<pages, id: \.self) { i in Circle().fill(i == p ? Color.primary : Color.primary.opacity(0.25)).frame(width: 4, height: 4) }
+                    }
+                    .padding(4).background(.black.opacity(0.35), in: Capsule())
+                }
+            }
+            .onReceive(tick) { _ in
+                guard pages > 1, !hovering else { return }   // resting the pointer on it holds the page
+                withAnimation(Motion.reduced ? .easeInOut(duration: 0.25) : .spring(response: 0.55, dampingFraction: 0.9)) { page += 1 }
+            }
+        }
+    }
+
+    private func row(_ e: EKEvent, now: Date) -> some View {
+        let live = !e.isAllDay && e.startDate <= now && e.endDate > now
+        return HStack(alignment: .top, spacing: 6) {
+            RoundedRectangle(cornerRadius: 2).fill(Color(nsColor: e.calendar.color)).frame(width: 3, height: 26)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(e.title ?? "").font(.system(size: 11.5, weight: .medium)).lineLimit(1)
+                Text(e.isAllDay ? "All day" : "\(e.startDate.formatted(date: .omitted, time: .shortened)) – \(e.endDate.formatted(date: .omitted, time: .shortened))")
+                    .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if live { Text("Now").font(.system(size: 8.5, weight: .bold)).padding(.horizontal, 5).padding(.vertical, 1.5).background(.red.opacity(0.8), in: Capsule()).padding(.top, 2) }
+            if let more = cal.copies[e.eventIdentifier ?? ""], !more.isEmpty {   // also on these accounts
+                HStack(spacing: 2) { ForEach(more.indices, id: \.self) { Circle().fill(Color(nsColor: more[$0])).frame(width: 5, height: 5) } }.padding(.top, 4)
+            }
+            if mail.isFromEmail(e.eventIdentifier) {
+                Image(systemName: "envelope.fill").font(.system(size: 8)).foregroundStyle(.secondary).padding(.top, 3).help("Added from an email")
+            }
+        }
+        .frame(height: rowH)
     }
 }
 
 struct MonthGrid: View {
     @ObservedObject var cal = CalendarService.shared
+    var cell: CGFloat = 18
 
     var body: some View {
         let c = Calendar.current
@@ -306,22 +362,23 @@ struct MonthGrid: View {
             HStack {
                 Button { cal.select(c.date(byAdding: .month, value: -1, to: cal.selectedDay)!) } label: { Image(systemName: "chevron.left") }
                 Spacer()
-                Text(cal.selectedDay.formatted(.dateTime.month(.wide).year())).font(.system(size: 11, weight: .semibold))
+                Text(cal.selectedDay.formatted(.dateTime.month(.wide).year())).font(.system(size: cell > 20 ? 12.5 : 11, weight: .semibold))
                 Spacer()
                 Button { cal.select(c.date(byAdding: .month, value: 1, to: cal.selectedDay)!) } label: { Image(systemName: "chevron.right") }
             }
-            .buttonStyle(.plain).font(.system(size: 10))
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(18), spacing: 3), count: 7), spacing: 3) {
-                ForEach(0..<7, id: \.self) { i in Text(ordered[i]).font(.system(size: 9)).foregroundStyle(.secondary) }
-                ForEach(0..<firstWeekday, id: \.self) { _ in Color.clear.frame(height: 18) }
+            .buttonStyle(.plain).font(.system(size: cell > 20 ? 11.5 : 10))
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(cell), spacing: 3), count: 7), spacing: 3) {
+                // Weekday letters and blanks get negative ids so they never collide with the day numbers (which hid days 1–6).
+                ForEach(-7..<0, id: \.self) { i in Text(ordered[i + 7]).font(.system(size: 9)).foregroundStyle(.secondary) }
+                ForEach((-20 - firstWeekday)..<(-20), id: \.self) { _ in Color.clear.frame(height: cell) }
                 ForEach(1...days, id: \.self) { d in
                     let date = c.date(byAdding: .day, value: d - 1, to: month.start)!
                     let sel = c.isDate(date, inSameDayAs: cal.selectedDay)
                     let isToday = date == today
                     Button { cal.select(date) } label: {
                         Text("\(d)")
-                            .font(.system(size: 9.5, weight: isToday ? .bold : .regular))
-                            .frame(width: 18, height: 18)
+                            .font(.system(size: cell * 0.53, weight: isToday ? .bold : .regular))
+                            .frame(width: cell, height: cell)
                             .background(sel ? Color.white : isToday ? Color.red.opacity(0.8) : .clear, in: Circle())
                             .foregroundStyle(sel ? .black : Color.primary)
                             .overlay(alignment: .bottom) {

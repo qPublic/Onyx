@@ -311,6 +311,7 @@ final class CalendarService: ObservableObject {
     @Published var authorized = false
     @Published var selectedDay = Calendar.current.startOfDay(for: Date())
     @Published var dayEvents: [EKEvent] = []
+    @Published var todayEvents: [EKEvent] = []   // the Home box always shows today, whatever day the calendar is on
     @Published var upcoming: [EKEvent] = []
     @Published var busyDays = Set<Int>()
     @Published var copies: [String: [NSColor]] = [:]   // other accounts an event is also on
@@ -340,8 +341,11 @@ final class CalendarService: ObservableObject {
         let cal = Calendar.current
         let dayEnd = cal.date(byAdding: .day, value: 1, to: selectedDay)!
         let day = CalendarAccounts.merged(store, from: selectedDay, to: dayEnd).sorted { $0.first.startDate < $1.first.startDate }
+        let today = cal.startOfDay(for: Date())
+        let todays = selectedDay == today ? day : CalendarAccounts.merged(store, from: today, to: cal.date(byAdding: .day, value: 1, to: today)!).sorted { $0.first.startDate < $1.first.startDate }
         dayEvents = day.map(\.first)
-        copies = Dictionary(day.map { ($0.first.eventIdentifier ?? "", $0.copies.compactMap { $0.calendar?.color }) }, uniquingKeysWith: { a, _ in a })
+        todayEvents = todays.map(\.first)
+        copies = Dictionary((day + todays).map { ($0.first.eventIdentifier ?? "", $0.copies.compactMap { $0.calendar?.color }) }, uniquingKeysWith: { a, _ in a })
         let now = Date()
         upcoming = Array(CalendarAccounts.events(store, from: now, to: now.addingTimeInterval(7 * 86400))
             .filter { !$0.isAllDay }

@@ -943,6 +943,22 @@ enum ViewShot {
                     save("tour-calmail-\(Int(t * 10))", TourDemo(step: .calendarMail, t: t).frame(height: 250).frame(maxWidth: .infinity)
                         .background(RadialGradient(colors: [TourStep.calendarMail.tint.opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 260)), CGSize(width: 472, height: 250))
                 }
+                // The calendar box and the full calendar, with made-up events (nothing is saved).
+                let cal = CalendarService.shared, store = cal.store, now = Date()
+                let blue = EKCalendar(for: .event, eventStore: store); blue.title = "School"; blue.color = .systemBlue
+                let green = EKCalendar(for: .event, eventStore: store); green.title = "Home"; green.color = .systemGreen
+                func ev(_ t: String, _ start: Double, _ mins: Double, _ c: EKCalendar) -> EKEvent {
+                    let e = EKEvent(eventStore: store); e.title = t; e.calendar = c
+                    e.startDate = now.addingTimeInterval(start * 60); e.endDate = e.startDate.addingTimeInterval(mins * 60); return e
+                }
+                let many = [ev("Bio class", -10, 40, blue), ev("Robotics Club", 35, 45, blue), ev("Lunch with Maya", 90, 30, green), ev("Soccer practice", 130, 60, green),
+                            ev("Study group", 200, 45, blue), ev("Dinner", 250, 60, green), ev("Call Grandma", 320, 20, green), ev("Read ch. 4", 345, 30, blue)]
+                cal.authorized = true; cal.todayEvents = Array(many.prefix(3))
+                shoot("cal-card-few", CalendarCard(), CGSize(width: 205, height: 200))
+                cal.todayEvents = many
+                shoot("cal-card-many", CalendarCard(), CGSize(width: 205, height: 200))
+                cal.dayEvents = many; cal.busyDays = [3, 9, 14, Calendar.current.component(.day, from: now)]
+                shoot("cal-full", FullCalendarView(), CGSize(width: 628, height: 212))
                 for t in [1.0, 2.2, 4.0] {
                     save("tour-academy-\(Int(t * 10))", TourDemo(step: .academy, t: t).frame(height: 250).frame(maxWidth: .infinity)
                         .background(RadialGradient(colors: [TourStep.academy.tint.opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 260)), CGSize(width: 472, height: 250))

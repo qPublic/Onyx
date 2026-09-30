@@ -61,6 +61,7 @@ final class HomeLayout: ObservableObject {
     static let shared = HomeLayout()
     @Published var panels: [HomePanel] = []
     @Published var editing = false
+    @Published var fullCalendar = false   // the calendar box opened into the whole Home tab
     private let key = "ap.homePanels"
 
     init() { reload() }
@@ -97,17 +98,30 @@ final class HomeLayout: ObservableObject {
 struct HomeTab: View {
     @ObservedObject var layout = HomeLayout.shared
     var body: some View {
-        HStack(spacing: 10) {
-            ForEach(layout.panels) { panel in
-                PanelHost(panel: panel, editing: layout.editing)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.scale.combined(with: .opacity))
+        if layout.fullCalendar && !layout.editing {
+            FullCalendarView()
+                .transition(.scale(scale: 0.9, anchor: calendarAnchor).combined(with: .opacity))
+                .onDisappear { if NotchController.current?.model.expanded != true || NotchController.current?.model.tab != .home { layout.fullCalendar = false } }
+        } else {
+            HStack(spacing: 10) {
+                ForEach(layout.panels) { panel in
+                    PanelHost(panel: panel, editing: layout.editing)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.scale.combined(with: .opacity))
+                }
             }
+            .animation(.snappy(duration: 0.22), value: layout.panels)
+            .overlay(alignment: .top) {
+                if layout.editing { editBar }
+            }
+            .transition(.opacity)
         }
-        .animation(.snappy(duration: 0.22), value: layout.panels)
-        .overlay(alignment: .top) {
-            if layout.editing { editBar }
-        }
+    }
+
+    /// Where the calendar box sits, so the full calendar grows out of it.
+    private var calendarAnchor: UnitPoint {
+        guard let i = layout.panels.firstIndex(of: .calendar) else { return .center }
+        return UnitPoint(x: (Double(i) + 0.5) / Double(layout.panels.count), y: 0.5)
     }
 
     private var editBar: some View {

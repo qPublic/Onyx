@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.8.2
 
 ### Improved
 - **The calendar box shows today.** On Home it lists just what's left of today, with a Now tag on what's happening. If there's more than fits, it shows a page at a time and turns the page every few seconds (rest your pointer on it to hold a page). Click it and it opens into a full calendar across the Home tab. Pick any day of any month, add an event with a time and length (or all day), open one to see where it is and which calendar it's on, open it in Calendar, or delete it. The ✕ takes you back.

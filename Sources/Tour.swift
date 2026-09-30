@@ -5,7 +5,7 @@ import SwiftUI
 // live demo of one feature, then moves on by itself; hovering pauses it.
 
 enum TourStep: Int, CaseIterable {
-    case notch, meetings, media, shelf, clipboard, ai, askAbout, briefing, calendarMail, circle, widgets, notes, focus, snap, workspaces, markup,
+    case notch, meetings, media, shelf, clipboard, ai, askAbout, briefing, calendarMail, academy, circle, widgets, notes, focus, snap, workspaces, markup,
          wallpapers, create, livingWalls, launcher, launcherPlus, optimize, system, more
 
     var title: String {
@@ -28,6 +28,7 @@ enum TourStep: Int, CaseIterable {
         case .askAbout: "Ask about anything"
         case .briefing: "Your daily briefing"
         case .calendarMail: "One calendar, every inbox"
+        case .academy: "Get the academy you want"
         case .focus: "Focus sessions"
         case .workspaces: "Workspaces"
         case .markup: "Mark up and copy text"
@@ -56,6 +57,7 @@ enum TourStep: Int, CaseIterable {
         case .askAbout: "Select text and press ⌃⌥S to summarize, explain, rewrite or translate it. Drop a PDF or Word file on the AI tab to ask about that."
         case .briefing: "Your weather, calendar, reminders and what's due on Canvas, in a few sentences. One waits for you each morning."
         case .calendarMail: "Sign in to all your Google accounts and see every calendar together. Onyx reads your email and puts plans, practices and invitations on your calendar by itself."
+        case .academy: "Does your school use TeachMore? Pick a teacher in Settings › Academy Sign-Up. The moment they post the academy with a free seat, Onyx signs you up in your own browser and tells you."
         case .focus: "Pick a time and the apps and sites that distract you. They're blocked until it's done, and finishing keeps your streak going."
         case .workspaces: "Save the apps and windows you use for school or work, then put them all back where they were in one click."
         case .markup: "Draw arrows and boxes on screenshots and blur private details. Press ⌃⌥T to copy the text out of anything on screen."
@@ -81,6 +83,7 @@ enum TourStep: Int, CaseIterable {
         case .askAbout: .purple
         case .briefing: .yellow
         case .calendarMail: .red
+        case .academy: .orange
         case .focus: .indigo
         case .workspaces: .teal
         case .markup: .red
@@ -204,6 +207,7 @@ struct TourDemo: View {
         case .askAbout: askAbout
         case .briefing: briefing
         case .calendarMail: calendarMail
+        case .academy: academy
         case .focus: focusDemo
         case .workspaces: workspacesDemo
         case .markup: markupDemo
@@ -854,6 +858,51 @@ extension TourDemo {
                 }
             }
             .padding(12).frame(width: 190, alignment: .leading).tourGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+
+    // The offerings list: a teacher posts the academy you're watching for, and Onyx signs you up.
+    fileprivate var academy: some View {
+        let rows: [(String, String, Color)] = [("AP Physics Academy", "Okafor · 19 seats", .gray), ("Mandarin Academy", "Lindqvist · Full", .red), ("Government", "Brooks · Unlimited", .gray)]
+        let post = seg(p, 1.2, 1.7), signed = seg(p, 2.6, 3.0), note = seg(p, 3.3, 3.8)
+        return VStack(spacing: 10) {
+            ZStack(alignment: .top) {
+                pill(mix(110, 290, note), mix(24, 34, note), radius: 14)
+                Label("Signed up: Robotics Club · Wed, Oct 7", systemImage: "checkmark.seal.fill").font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.green).padding(.top, 9).opacity(note)
+            }
+            .frame(height: 36)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("Offerings").font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Label("Watching Park", systemImage: "eye").font(.system(size: 9.5)).foregroundStyle(.orange)
+                }
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 2).fill(signed > 0.5 ? Color.blue : .orange).frame(width: 3, height: 24)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Robotics Club").font(.system(size: 10.5, weight: .semibold))
+                        Text("Park · 3 seats").font(.system(size: 9)).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Text(signed > 0.5 ? "Enrolled" : "New").font(.system(size: 8.5, weight: .bold)).foregroundStyle(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 2).background(signed > 0.5 ? Color.blue : .orange, in: Capsule())
+                }
+                .opacity(post).offset(x: -40 * (1 - post))
+                .frame(height: 28 * post, alignment: .top).clipped()
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
+                    HStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 2).fill(r.2).frame(width: 3, height: 24)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(r.0).font(.system(size: 10.5, weight: .medium))
+                            Text(r.1).font(.system(size: 9)).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .frame(height: 28)
+                }
+            }
+            .padding(12).frame(width: 300, alignment: .leading).tourGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 

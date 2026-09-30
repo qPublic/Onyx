@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case appearance, layout, behavior, widgets, live, accounts, optimize, fun, lock
+    case appearance, layout, behavior, widgets, live, accounts, school, optimize, fun, lock
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -12,6 +12,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .widgets: "Widgets & Tabs"
         case .live: "Live"
         case .accounts: "Calendar & Mail"
+        case .school: "Academy Sign-Up"
         case .optimize: "Optimization"
         case .fun: "Fun Mode"
         case .lock: "Privacy"
@@ -25,6 +26,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .widgets: "Boxes, header widgets and tabs"
         case .live: "Sports, markets and weather"
         case .accounts: "Google calendars and email"
+        case .school: "TeachMore, automatically"
         case .optimize: "Clean, maintain and tweak"
         case .fun: "Goose, sounds and silliness"
         case .lock: "Permissions and AI"
@@ -38,6 +40,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .widgets: "square.grid.2x2.fill"
         case .live: "chart.line.uptrend.xyaxis"
         case .accounts: "calendar.badge.clock"
+        case .school: "graduationcap.fill"
         case .optimize: "gauge.with.dots.needle.67percent"
         case .fun: "party.popper.fill"
         case .lock: "hand.raised.fill"
@@ -51,6 +54,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .widgets: [Color(hex: "30D0C6"), Color(hex: "0AA6B8")]
         case .live: [Color(hex: "34C759"), Color(hex: "16A34A")]
         case .accounts: [Color(hex: "FF453A"), Color(hex: "FF9F0A")]
+        case .school: [Color(hex: "FFB340"), Color(hex: "FF7A00")]
         case .optimize: [Color(hex: "0A84FF"), Color(hex: "5E5CE6")]
         case .fun: [Color(hex: "FFD60A"), Color(hex: "FF375F")]
         case .lock: [Color(hex: "8E8E93"), Color(hex: "5B5B60")]
@@ -187,6 +191,7 @@ struct SettingsView: View {
         case .widgets: WidgetsSettings()
         case .live: LiveSettings()
         case .accounts: CalendarMailSettings()
+        case .school: Form { SchoolSetupSteps(); SchoolSignupSection() }.formStyle(.grouped)
         case .optimize: OptimizeSettings()
         case .fun: FunSettings()
         case .lock: LockSettings()
@@ -550,6 +555,8 @@ struct BehaviorSettings: View {
             Section("Shortcuts & Siri") { ShortcutsSettings() }
             Section("Help") {
                 HStack {
+                    Button("Take the Tour") { (NSApp.delegate as? AppDelegate)?.showTour() }
+                    Button("Getting Started Guide") { NSWorkspace.shared.open(URL(string: "https://github.com/qPublic/Onyx#getting-started")!) }
                     Button("What's New") { WhatsNew.show(force: true) }
                     Button("Report a Problem…") { Feedback.report(includeCrash: false) }
                     if Feedback.latestCrash() != nil { Button("Report the Last Crash…") { Feedback.report(includeCrash: true) } }

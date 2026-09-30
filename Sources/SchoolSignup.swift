@@ -1,0 +1,643 @@
+import AppKit
+import SwiftUI
+import WebKit
+
+// MARK: - Academy sign-up (TeachMore): watches your school's offerings list and signs you up the moment the one you want is posted.
+// Everything happens inside your own signed-in browser tab, with the same requests TeachMore's page makes,
+// so Onyx never sees or stores your password.
+
+/// One offering, read from TeachMore's `offerings/search` list with the same rules its page uses.
+struct SchoolOffering: Equatable {
+    var id = "", title = "", teacherID = "", teacherLast = "", teacherFirst = "", date = "", event = "1"
+    var enrolled = false, unavailable = false, full = false
+    var hasAppt = false, apptType = 0, existingTeacher = "", sameDayLocked = false
+    var teacher: String { [teacherFirst, teacherLast].map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ") }
+    var day: String { SchoolSignup.dayText(date) }
+
+    init() {}
+    init?(_ o: [String: Any]) {
+        func s(_ k: String) -> String {
+            switch o[k] { case let v as String: v; case let v as NSNumber: v.stringValue; default: "" }
+        }
+        func b(_ k: String) -> Bool {
+            switch o[k] {
+            case let v as NSNumber: v.boolValue
+            case let v as String: ["1", "true", "yes"].contains(v.lowercased())
+            default: false
+            }
+        }
+        id = s("uniqueID"); date = s("offeringDate")
+        guard !id.isEmpty, !date.isEmpty else { return nil }
+        title = SchoolSignup.plain(s("offering")); teacherID = s("teacherID")
+        teacherLast = SchoolSignup.plain(s("teacherLast")); teacherFirst = SchoolSignup.plain(s("teacherFirst"))
+        event = s("offeringEvent").isEmpty ? "1" : s("offeringEvent")
+        enrolled = b("isEnrolled")
+        let cap = s("offeringCap"), capZero = cap == "0"
+        unavailable = capZero || b("isRestricted")
+        full = b("isFull") || capZero || (cap != "N/A" && Int(s("numberLeft")).map { $0 <= 0 } == true)
+        hasAppt = b("hasAppt"); apptType = Int(s("existingApptType")) ?? 0
+        existingTeacher = SchoolSignup.plain(s("existingTeacher"))
+        sameDayLocked = s("existingDayOfEdits").lowercased().trimmingCharacters(in: .whitespaces) == "no"
+    }
+}
+
+/// What to sign up for.
+struct SchoolRule: Equatable {
+    var teacherID = "", teacherName = "", words = "", date = ""   // date: "yyyy-MM-dd", or "" for the first day it's offered
+    var keepWatching = false, replace = true
+    var isSet: Bool { !teacherID.isEmpty || !wordList.isEmpty }
+    var wordList: [String] { words.split(whereSeparator: { $0 == " " || $0 == "," }).map { SchoolSignup.fold(String($0)) } }
+    var label: String {
+        let w = words.trimmingCharacters(in: .whitespaces)
+        let l = [teacherName.isEmpty ? nil : teacherName, w.isEmpty ? nil : "“\(w)”"].compactMap { $0 }.joined(separator: " · ")
+        return l.isEmpty ? "your academy" : l
+    }
+    func matches(_ o: SchoolOffering) -> Bool {
+        guard isSet else { return false }
+        if !teacherID.isEmpty, o.teacherID != teacherID { return false }
+        if !date.isEmpty, o.date != date { return false }
+        let t = SchoolSignup.fold(o.title)
+        return wordList.allSatisfy { t.contains($0) }
+    }
+}
+
+struct SchoolChoice { var pick: SchoolOffering?; var note: String; var satisfied = false }
+
+struct SchoolTeacher: Codable, Identifiable, Hashable { var id: String; var name: String; var mine: Bool }
+
+struct SchoolSignupRecord: Codable, Identifiable, Equatable {
+    var id: String, title: String, teacher: String, date: String, at: Date, confirmed: Bool
+}
+
+enum SchoolBrowser: String, CaseIterable, Identifiable {
+    case chrome = "com.google.Chrome", brave = "com.brave.Browser", edge = "com.microsoft.edgemac", safari = "com.apple.Safari"
+    var id: String { rawValue }
+    var name: String {
+        switch self { case .chrome: "Google Chrome"; case .brave: "Brave"; case .edge: "Microsoft Edge"; case .safari: "Safari" }
+    }
+    var installed: Bool { NSWorkspace.shared.urlForApplication(withBundleIdentifier: rawValue) != nil }
+    var running: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: rawValue).isEmpty }
+    /// Where the one setting Onyx needs lives.
+    var javaScriptSetting: String {
+        self == .safari ? "Safari's Develop › Developer Settings › Allow JavaScript from Apple Events (show the Develop menu in Settings › Advanced first)"
+                        : "\(name)'s View › Developer › Allow JavaScript from Apple Events"
+    }
+}
+
+struct SchoolSettings {
+    var on = false, link = "", browser = SchoolBrowser.chrome, rule = SchoolRule()
+    static func load() -> SchoolSettings {
+        SchoolSettings(on: Prefs.bool(SchoolSignup.onKey), link: Prefs.string(SchoolSignup.linkKey),
+                       browser: SchoolBrowser(rawValue: Prefs.string(SchoolSignup.browserKey)) ?? .chrome,
+                       rule: SchoolRule(teacherID: Prefs.string(SchoolSignup.teacherKey), teacherName: Prefs.string(SchoolSignup.teacherNameKey),
+                                        words: Prefs.string(SchoolSignup.wordsKey), date: Prefs.string(SchoolSignup.dateKey),
+                                        keepWatching: Prefs.bool(SchoolSignup.repeatKey), replace: Prefs.bool(SchoolSignup.replaceKey)))
+    }
+}
+
+// MARK: Where the page's JavaScript runs: your browser tab, or (for the self-test) a web view
+
+enum SchoolPageResult: Equatable { case value(String), noTab, opened, reloaded, jsOff, notAllowed, notRunning, failed(String) }
+
+@MainActor protocol SchoolPage {
+    /// Runs `start` in the TeachMore page, then `poll` until it returns something (about 20 seconds at most).
+    /// `openURL` (if not empty) is opened in a background tab when no TeachMore tab is open.
+    func run(_ start: String, poll: String, openURL: String) async -> SchoolPageResult
+}
+
+/// Your signed-in tab in Chrome, Brave, Edge or Safari, through AppleScript. Never launches or brings the browser forward.
+struct BrowserTab: SchoolPage {
+    let browser: SchoolBrowser, key: String   // key: "teachmore.org/school/students/"
+
+    func run(_ start: String, poll: String, openURL: String) async -> SchoolPageResult {
+        guard browser.running else { return .notRunning }
+        let chromium = browser != .safari
+        func js(_ v: String) -> String { chromium ? "execute t javascript \(v)" : "do JavaScript \(v) in t" }
+        // A new tab opens behind the one you're looking at.
+        let open = chromium ? "set w to window 1\nset prev to active tab index of w\nmake new tab at end of tabs of w with properties {URL:openURL}\nset active tab index of w to prev"
+                            : "make new tab at end of tabs of window 1 with properties {URL:openURL}"
+        let reload = chromium ? "tell t to reload" : "set URL of t to u"   // a tab the browser put to sleep
+        let script = """
+        on run argv
+            set tabKey to item 1 of argv
+            set startJS to item 2 of argv
+            set pollJS to item 3 of argv
+            set openURL to item 4 of argv
+            with timeout of 40 seconds
+                tell application id "\(browser.rawValue)"
+                    repeat with w in windows
+                        repeat with t in tabs of w
+                            set u to ""
+                            try
+                                set u to (URL of t) as text
+                            end try
+                            if u contains ("//" & tabKey) or u contains ("." & tabKey) then
+                                set s to \(js("startJS"))
+                                if s is missing value then
+                                    \(reload)
+                                    return "ONYX_RELOADED"
+                                end if
+                                repeat 80 times
+                                    set r to \(js("pollJS"))
+                                    if r is not missing value and r is not "" then return r
+                                    delay 0.25
+                                end repeat
+                                return "ONYX_TIMEOUT"
+                            end if
+                        end repeat
+                    end repeat
+                    if openURL is not "" and (count of windows) > 0 then
+                        \(open)
+                        return "ONYX_OPENED"
+                    end if
+                end tell
+            end timeout
+            return "ONYX_NO_TAB"
+        end run
+        """
+        let r = await Shell.read("/usr/bin/osascript", ["-e", script, key, start, poll, openURL])
+        let out = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard r.status == 0 else {
+            if out.contains("Allow JavaScript") || out.contains("JavaScript through AppleScript is turned off") { return .jsOff }
+            if out.contains("-1743") || out.contains("-1744") || out.localizedCaseInsensitiveContains("not authorized") { return .notAllowed }
+            if out.contains("-600") { return .notRunning }
+            return .failed(out)
+        }
+        switch out {
+        case "ONYX_NO_TAB": return .noTab
+        case "ONYX_OPENED": return .opened
+        case "ONYX_RELOADED": return .reloaded
+        case "ONYX_TIMEOUT": return .failed("TeachMore didn't answer in time.")
+        default: return .value(out)
+        }
+    }
+}
+
+/// The self-test's stand-in for your browser: the same JavaScript, run in a web view.
+@MainActor final class WebSchoolPage: NSObject, SchoolPage, WKNavigationDelegate {
+    let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    private var loaded: CheckedContinuation<Void, Never>?
+
+    func load(_ url: URL) async {
+        web.navigationDelegate = self
+        await withCheckedContinuation { c in loaded = c; web.load(URLRequest(url: url)) }
+    }
+    func webView(_ w: WKWebView, didFinish navigation: WKNavigation!) { loaded?.resume(); loaded = nil }
+    func webView(_ w: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { loaded?.resume(); loaded = nil }
+    func webView(_ w: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { loaded?.resume(); loaded = nil }
+
+    func run(_ start: String, poll: String, openURL: String) async -> SchoolPageResult {
+        guard (try? await web.evaluateJavaScript(start)) is String else { return .failed("The page didn't run the script.") }
+        for _ in 0..<80 {
+            if let r = try? await web.evaluateJavaScript(poll) as? String, !r.isEmpty { return .value(r) }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        return .failed("TeachMore didn't answer in time.")
+    }
+}
+
+// MARK: The JavaScript: the same requests TeachMore's own page makes
+
+enum SchoolJS {
+    static let poll = "(function(){var x=window.__onyxTM;return (x&&x.state!=='pending')?JSON.stringify(x):''})()"
+
+    /// A JavaScript string literal.
+    static func lit(_ s: String) -> String {
+        (try? JSONSerialization.data(withJSONObject: [s])).flatMap { String(data: $0, encoding: .utf8) }.map { String($0.dropFirst().dropLast()) } ?? "\"\""
+    }
+
+    private static func wrap(_ path: String, _ body: String) -> String {
+        """
+        (function(){var B=\(lit(path));window.__onyxTM={state:'pending'};
+        function done(x){x.state='done';window.__onyxTM=x;}
+        function fail(e){done({status:0,error:String(e)});}
+        function get(u){return fetch(B+u,{credentials:'same-origin',headers:{'X-Requested-With':'XMLHttpRequest','Accept':'application/json, text/javascript, */*; q=0.01'}});}
+        function keep(r){return r.text().then(function(t){done({status:r.status,url:r.url,body:t});});}
+        \(body)
+        return 'started';})()
+        """
+    }
+
+    /// The offerings list, exactly as the page loads it when you refresh (only one teacher's, when a teacher is chosen).
+    static func search(_ path: String, teacher: String) -> String {
+        wrap(path, "get('offerings/search?'+new URLSearchParams([['term',''],['date',''],['teacherID',\(lit(teacher))],['eventType',''],['rosteredOnly','0'],['openOnly','0']]).toString()).then(keep).catch(fail);")
+    }
+
+    /// Your name and the teacher list, from the Offerings page.
+    static func info(_ path: String) -> String {
+        wrap(path, """
+        get('offerings').then(function(r){return r.text().then(function(t){
+          var d=new DOMParser().parseFromString(t,'text/html'),sel=d.querySelector('#filterTeacher'),list=[];
+          if(sel){sel.querySelectorAll('optgroup').forEach(function(g){var mine=/my/i.test(g.label||'');
+            g.querySelectorAll('option').forEach(function(o){if(o.value)list.push({id:o.value,name:o.textContent.trim(),mine:mine});});});}
+          var w=((d.querySelector('.navbar-text')||{}).textContent||'').replace(/^\\s*Welcome,\\s*/i,'').trim();
+          done({status:r.status,url:r.url,teachers:list,name:w,signedIn:!!sel});});}).catch(fail);
+        """)
+    }
+
+    /// What "Yes, Sign Me Up!" sends, with the page's security token (fetched fresh once if it has gone stale).
+    static func signUp(_ path: String, _ o: SchoolOffering) -> String {
+        let fields = [("date", o.date), ("teacherID", o.teacherID), ("eventType", o.event), ("offeringID", o.id), ("comment", "Offering Signup")]
+            .map { "[\(lit($0.0)),\(lit($0.1))]" }.joined(separator: ",")
+        return wrap(path, """
+        var F=new URLSearchParams([\(fields)]).toString();
+        function token(){var m=document.querySelector('meta[name="csrf-token"]');return m?m.content:'';}
+        function fresh(){return get('offerings').then(function(r){return r.text();}).then(function(t){var m=t.match(/name="csrf-token"\\s+content="([^"]+)"/);return m?m[1]:'';});}
+        function post(tok){return fetch(B+'appointment/create',{method:'POST',credentials:'same-origin',body:F,headers:{'X-CSRF-TOKEN':tok,
+          'X-Requested-With':'XMLHttpRequest','Accept':'application/json, text/javascript, */*; q=0.01','Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'}});}
+        var t0=token();(t0?Promise.resolve(t0):fresh()).then(post).then(function(r){return r.status===419?fresh().then(post):r;}).then(keep).catch(fail);
+        """)
+    }
+}
+
+// MARK: - The watcher
+
+@MainActor final class SchoolSignup: ObservableObject {
+    static let shared = SchoolSignup()
+    nonisolated static let onKey = "school.on", linkKey = "school.link", browserKey = "school.browser", teacherKey = "school.teacherID",
+                           teacherNameKey = "school.teacherName", wordsKey = "school.words", dateKey = "school.date",
+                           repeatKey = "school.repeat", replaceKey = "school.replace"
+
+    @Published private(set) var status: String?
+    @Published private(set) var problem = false
+    @Published private(set) var checking = false
+    @Published private(set) var connecting = false
+    @Published private(set) var lastCheck: Date?
+    @Published private(set) var history: [SchoolSignupRecord] = []
+    @Published private(set) var teachers: [SchoolTeacher] = []
+    @Published private(set) var student: String?
+
+    /// Self-test: a web view instead of your browser, settings that aren't saved, and no notch messages.
+    var testPage: SchoolPage?
+    var testSettings: SchoolSettings?
+    private(set) var posts = 0   // sign-up requests sent (the self-test checks there's never a second one)
+
+    private var done = Set<String>()      // offerings Onyx signed you up for: never again, even if you leave one
+    private var failedAt: [String: Date] = [:]
+    private var warned = Set<String>()    // notch warnings already shown; cleared once a check works
+    private var lastOpened: Date?
+    private var timer: Timer?
+    private var file: URL { Prefs.supportDir.appendingPathComponent("school-signups.json") }
+
+    private struct Saved: Codable { var history: [SchoolSignupRecord]; var done: [String]; var teachers: [SchoolTeacher]; var student: String? }
+
+    init() {
+        if let d = try? Data(contentsOf: file), let s = try? JSONDecoder().decode(Saved.self, from: d) {
+            history = s.history; done = Set(s.done); teachers = s.teachers; student = s.student
+        }
+    }
+
+    private func save() {
+        guard testSettings == nil else { return }
+        if let d = try? JSONEncoder().encode(Saved(history: history, done: Array(done), teachers: teachers, student: student)) {
+            try? d.write(to: file, options: .atomic)
+        }
+    }
+
+    var settings: SchoolSettings { testSettings ?? .load() }
+
+    func start() {
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in if SchoolSignup.shared.settings.on { SchoolSignup.shared.schedule(after: 20) } }
+        }
+        update()
+    }
+
+    /// Call after a setting changes.
+    func update() {
+        timer?.invalidate(); timer = nil
+        let s = settings
+        guard s.on else { if !checking { status = nil; problem = false }; return }
+        schedule(after: 2)
+    }
+
+    private func schedule(after seconds: Double) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { _ in Task { @MainActor in await SchoolSignup.shared.check() } }.tolerant(0.1)
+    }
+
+    /// Every 30 seconds from 6 AM to 10 PM, every 3 minutes overnight.
+    private var interval: Double { (6..<22).contains(Calendar.current.component(.hour, from: Date())) ? 30 : 180 }
+
+    private func page(_ s: SchoolSettings, _ b: Base) -> SchoolPage { testPage ?? BrowserTab(browser: s.browser, key: b.key) }
+
+    private func report(_ text: String, problem p: Bool) { status = text; problem = p }
+
+    private func warn(_ key: String, _ text: String) {
+        guard testSettings == nil, warned.insert(key).inserted else { return }
+        NotchModel.shared.flash(.message(icon: "exclamationmark.triangle.fill", text: text, tint: .orange), for: 5)
+    }
+
+    /// Checks the list once and signs you up if the academy you want is there with a free seat.
+    func check(force: Bool = false) async {
+        let s = settings
+        guard !checking, force || s.on else { return }
+        guard let b = Self.base(s.link) else { report("Paste your school's TeachMore link first.", problem: true); return }
+        guard s.rule.isSet else { report("Choose a teacher or words to watch for.", problem: true); return }
+        checking = true
+        var next = interval
+        defer {
+            checking = false; lastCheck = Date()
+            if settings.on && testPage == nil { schedule(after: next) }
+        }
+        let p = page(s, b)
+        let openURL = (lastOpened.map { Date().timeIntervalSince($0) > 1800 } ?? true) ? b.url + "offerings" : ""   // at most one new tab every half hour
+        let r = await p.run(SchoolJS.search(b.path, teacher: s.rule.teacherID), poll: SchoolJS.poll, openURL: openURL)
+        guard case .value(let raw) = r else { next = trouble(r, s); return }
+        guard let res = Self.object(raw), !Self.signedOut(res), let list = Self.offerings(res["body"] as? String ?? "") else {
+            if let res = Self.object(raw), Self.signedOut(res) {
+                report("TeachMore signed you out. Sign in again in \(s.browser.name) and Onyx carries on.", problem: true)
+                warn("signedOut", "Sign in to TeachMore again so Onyx can sign you up")
+                next = 300
+            } else { report("TeachMore sent something Onyx didn't understand. It tries again soon.", problem: true); next = 120 }
+            return
+        }
+        warned.removeAll()
+        let c = Self.choose(list, rule: s.rule, done: done, today: Self.dayKey(Date()))
+        if c.satisfied, !s.rule.keepWatching {
+            report("\(c.note), so Onyx stopped watching.", problem: false); turnOff(); return
+        }
+        guard let pick = c.pick else { report("Watching for \(s.rule.label): \(c.note.prefix(1).lowercased() + c.note.dropFirst()).", problem: false); return }
+        if let f = failedAt[pick.id], Date().timeIntervalSince(f) < 300 { return }   // it said no a moment ago
+        if await signUp(pick, p, b, s) { next = s.rule.keepWatching ? 3 : next }
+    }
+
+    /// What to do when the browser couldn't be reached. Returns when to try again.
+    private func trouble(_ r: SchoolPageResult, _ s: SchoolSettings) -> Double {
+        switch r {
+        case .notRunning:
+            report("Open \(s.browser.name) and sign in to TeachMore. Onyx checks again in 2 minutes.", problem: true)
+            warn("notRunning", "Open \(s.browser.name) so Onyx can watch TeachMore"); return 120
+        case .noTab:
+            report("Open a \(s.browser.name) window with TeachMore in it.", problem: true); return 120
+        case .opened:
+            lastOpened = Date(); report("Opened TeachMore in a background tab in \(s.browser.name).", problem: false); return 10
+        case .reloaded:
+            report("Woke up the TeachMore tab.", problem: false); return 10
+        case .jsOff:
+            report("Turn on \(s.browser.javaScriptSetting) so Onyx can use your TeachMore tab.", problem: true)
+            warn("jsOff", "Turn on Allow JavaScript from Apple Events in \(s.browser.name)"); return 300
+        case .notAllowed:
+            report("Allow Onyx to control \(s.browser.name) in System Settings › Privacy & Security › Automation.", problem: true)
+            warn("notAllowed", "Let Onyx control \(s.browser.name) for TeachMore sign-ups"); return 300
+        case .failed(let e):
+            report("Couldn't check TeachMore: \(e.prefix(160))", problem: true); return 60
+        case .value: return interval
+        }
+    }
+
+    private func signUp(_ o: SchoolOffering, _ p: SchoolPage, _ b: Base, _ s: SchoolSettings) async -> Bool {
+        report("Signing you up for “\(o.title)” on \(o.day)…", problem: false)
+        posts += 1
+        guard case .value(let raw) = await p.run(SchoolJS.signUp(b.path, o), poll: SchoolJS.poll, openURL: ""), let res = Self.object(raw) else {
+            failedAt[o.id] = Date(); report("Couldn't reach TeachMore to sign up for “\(o.title)”. Onyx tries again in 5 minutes.", problem: true)
+            return false
+        }
+        let answer = Self.object(res["body"] as? String ?? "")
+        let ok = (answer?["success"] as? NSNumber)?.boolValue ?? false
+        guard ok else {
+            failedAt[o.id] = Date()
+            let why = (answer?["message"] as? String).map(Self.plain) ?? (Self.signedOut(res) ? "you were signed out" : "it answered \((res["status"] as? NSNumber)?.intValue ?? 0)")
+            report("TeachMore didn't sign you up for “\(o.title)” on \(o.day): \(why). Onyx tries again in 5 minutes.", problem: true)
+            warn("no-\(o.id)", "Couldn't sign up for \(Self.short(o.title)): \(why)")
+            return false
+        }
+        // Check TeachMore now lists you.
+        var listed = false
+        if case .value(let again) = await p.run(SchoolJS.search(b.path, teacher: o.teacherID), poll: SchoolJS.poll, openURL: ""),
+           let list = Self.object(again).flatMap({ Self.offerings($0["body"] as? String ?? "") }) {
+            listed = list.contains { $0.id == o.id && $0.enrolled }
+        }
+        done.insert(o.id)
+        history.insert(SchoolSignupRecord(id: o.id, title: o.title, teacher: o.teacher, date: o.date, at: Date(), confirmed: listed), at: 0)
+        if history.count > 20 { history.removeLast(history.count - 20) }
+        save()
+        let with = o.teacher.isEmpty ? "" : " with \(o.teacher)"
+        report(listed ? "Signed you up for “\(o.title)”\(with) on \(o.day)." : "TeachMore accepted “\(o.title)” on \(o.day) but doesn't list it yet. Check TeachMore to be sure.", problem: !listed)
+        if testSettings == nil {
+            NotchModel.shared.flash(.message(icon: "checkmark.seal.fill", text: "Signed up: \(Self.short(o.title)) · \(o.day)", tint: .green), for: 6)
+        }
+        if !s.rule.keepWatching { turnOff() }
+        return true
+    }
+
+    private func turnOff() {
+        if testSettings != nil { testSettings?.on = false } else { UserDefaults.standard.set(false, forKey: Self.onKey) }
+        timer?.invalidate(); timer = nil
+    }
+
+    /// Loads your name and the teacher list (and checks Onyx can reach your TeachMore tab).
+    func connect() async {
+        let s = settings
+        guard let b = Self.base(s.link) else { report("Paste your school's TeachMore link first.", problem: true); return }
+        connecting = true; defer { connecting = false }
+        let r = await page(s, b).run(SchoolJS.info(b.path), poll: SchoolJS.poll, openURL: b.url + "offerings")
+        guard case .value(let raw) = r else { _ = trouble(r, s); return }
+        guard let res = Self.object(raw), !Self.signedOut(res), (res["signedIn"] as? NSNumber)?.boolValue == true else {
+            report("Sign in to TeachMore in \(s.browser.name), then press Connect again.", problem: true); return
+        }
+        let list = (res["teachers"] as? [[String: Any]] ?? []).compactMap { t -> SchoolTeacher? in
+            guard let id = t["id"] as? String, let name = t["name"] as? String else { return nil }
+            return SchoolTeacher(id: id, name: Self.plain(name), mine: (t["mine"] as? NSNumber)?.boolValue ?? false)
+        }
+        var seen = Set<String>()   // "My Teachers" first; the full list repeats them
+        teachers = list.sorted { $0.mine && !$1.mine }.filter { seen.insert($0.id).inserted }
+        let name = (res["name"] as? String).map(Self.plain) ?? ""
+        student = name.isEmpty ? nil : name
+        warned.removeAll()
+        report("Connected\(student.map { " as \($0)" } ?? ""). \(teachers.count) teachers.", problem: false)
+        save()
+    }
+
+    // MARK: Helpers (pure, so the self-test can check them)
+
+    struct Base: Equatable { var url: String, path: String, key: String }
+
+    /// Any TeachMore link → the school's student pages. "https://teachmore.org/lincoln/students/dashboard" →
+    /// url "https://teachmore.org/lincoln/students/", path "/lincoln/students/", key "teachmore.org/lincoln/students/".
+    nonisolated static func base(_ link: String) -> Base? {
+        var s = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return nil }
+        if !s.contains("://") { s = "https://" + s }
+        guard let c = URLComponents(string: s), let scheme = c.scheme?.lowercased(), var host = c.host?.lowercased(), !host.isEmpty else { return nil }
+        let local = host == "127.0.0.1" || host == "localhost"
+        guard scheme == "https" || (scheme == "http" && local) else { return nil }
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        guard local || host == "teachmore.org" || host.hasSuffix(".teachmore.org") else { return nil }
+        let parts = c.path.split(separator: "/").map(String.init)
+        let school: [String]
+        if let i = parts.firstIndex(where: { $0.lowercased() == "students" }), i > 0 { school = Array(parts[..<i]) }
+        else if let f = parts.first { school = [f] } else { return nil }
+        let path = "/" + (school + ["students"]).joined(separator: "/") + "/"
+        let hostPort = host + (c.port.map { ":\($0)" } ?? "")
+        return Base(url: "\(scheme)://\(hostPort)\(path)", path: path, key: hostPort + path)
+    }
+
+    /// Picks the earliest offering you can be signed up for, or says why there isn't one.
+    nonisolated static func choose(_ list: [SchoolOffering], rule: SchoolRule, done: Set<String>, today: String) -> SchoolChoice {
+        let matches = list.filter { rule.matches($0) && $0.date >= today }.sorted { $0.date < $1.date }
+        guard !matches.isEmpty else { return SchoolChoice(pick: nil, note: "Not posted yet") }
+        if !rule.keepWatching, let e = matches.first(where: \.enrolled) {
+            return SchoolChoice(pick: nil, note: "You're signed up for “\(e.title)” on \(e.day)", satisfied: true)
+        }
+        let signedDays = Set(matches.filter(\.enrolled).map(\.date))
+        var why: [String] = []
+        for o in matches where !o.enrolled && !signedDays.contains(o.date) {
+            if done.contains(o.id) { continue }   // Onyx signed you up once; if you left it, it stays left
+            if o.unavailable { why.append("\(o.day) is only for students on the teacher's list"); continue }
+            if o.full { why.append("\(o.day) is full, waiting for a seat"); continue }
+            if o.hasAppt && o.apptType == 1 { why.append("a teacher assigned you somewhere else on \(o.day)"); continue }
+            if o.hasAppt && o.sameDayLocked && o.date == today { why.append("your sign-up for \(o.day) can't change on the day"); continue }
+            if o.hasAppt && !rule.replace {
+                why.append("you're already signed up on \(o.day)\(o.existingTeacher.isEmpty ? "" : " with \(o.existingTeacher)")"); continue
+            }
+            return SchoolChoice(pick: o, note: "")
+        }
+        if why.isEmpty { return SchoolChoice(pick: nil, note: signedDays.isEmpty ? "Not posted yet" : "You're signed up for every date posted so far") }
+        return SchoolChoice(pick: nil, note: "Posted, but " + why.prefix(2).joined(separator: "; "))
+    }
+
+    nonisolated static func object(_ s: String) -> [String: Any]? {
+        (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any]
+    }
+
+    nonisolated static func offerings(_ body: String) -> [SchoolOffering]? {
+        ((try? JSONSerialization.jsonObject(with: Data(body.utf8))) as? [[String: Any]])?.compactMap(SchoolOffering.init)
+    }
+
+    /// TeachMore answers a signed-out request with 401/403/419 or by sending it to the sign-in page.
+    nonisolated static func signedOut(_ r: [String: Any]) -> Bool {
+        let st = (r["status"] as? NSNumber)?.intValue ?? 0, url = (r["url"] as? String ?? "").lowercased()
+        return [401, 403, 419].contains(st) || url.contains("/login")
+    }
+
+    nonisolated static func plain(_ s: String) -> String {
+        var t = s
+        for (a, b) in [("&quot;", "\""), ("&#39;", "'"), ("&#039;", "'"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " "), ("&amp;", "&")] {
+            t = t.replacingOccurrences(of: a, with: b)
+        }
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated static func fold(_ s: String) -> String { plain(s).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+    nonisolated static func short(_ s: String) -> String { s.count > 36 ? String(s.prefix(35)) + "…" : s }
+
+    nonisolated static func dayKey(_ d: Date) -> String { dayFormatter.string(from: d) }
+    nonisolated static func date(_ key: String) -> Date? { dayFormatter.date(from: key) }
+    nonisolated static func dayText(_ key: String) -> String {
+        date(key).map { $0.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()) } ?? key
+    }
+    nonisolated private static var dayFormatter: DateFormatter {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = .current
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }
+}
+
+// MARK: - Settings › Academy Sign-Up
+
+struct SchoolSetupSteps: View {
+    @AppStorage(SchoolSignup.browserKey) private var browser = SchoolBrowser.chrome.rawValue
+
+    var body: some View {
+        let b = SchoolBrowser(rawValue: browser) ?? .chrome
+        Section("How to set it up") {
+            step(1, "Sign in to TeachMore in \(b.name), the way you always do.")
+            step(2, "Turn on \(b.javaScriptSetting).")
+            step(3, "Paste your TeachMore link below and press Connect. macOS asks once to let Onyx control \(b.name): click Allow.")
+            step(4, "Pick the teacher (★ marks yours) or words in the academy's title, then turn on Watch TeachMore and sign me up.")
+        }
+    }
+
+    private func step(_ n: Int, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("\(n)").font(.caption.weight(.bold)).frame(width: 18, height: 18).background(Circle().fill(.orange.opacity(0.3)))
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+struct SchoolSignupSection: View {
+    @ObservedObject var school = SchoolSignup.shared
+    @AppStorage(SchoolSignup.onKey) private var on = false
+    @AppStorage(SchoolSignup.linkKey) private var link = ""
+    @AppStorage(SchoolSignup.browserKey) private var browser = SchoolBrowser.chrome.rawValue
+    @AppStorage(SchoolSignup.teacherKey) private var teacher = ""
+    @AppStorage(SchoolSignup.teacherNameKey) private var teacherName = ""
+    @AppStorage(SchoolSignup.wordsKey) private var words = ""
+    @AppStorage(SchoolSignup.dateKey) private var date = ""
+    @AppStorage(SchoolSignup.repeatKey) private var keep = false
+    @AppStorage(SchoolSignup.replaceKey) private var replace = true
+
+    private var browserName: String { (SchoolBrowser(rawValue: browser) ?? .chrome).name }
+    private var ready: Bool { SchoolSignup.base(link) != nil && (!teacher.isEmpty || !words.trimmingCharacters(in: .whitespaces).isEmpty) }
+
+    var body: some View {
+        Section {
+            TextField("TeachMore link", text: $link, prompt: Text("teachmore.org/yourschool/students/dashboard"))
+            if !link.isEmpty && SchoolSignup.base(link) == nil {
+                Text("That doesn't look like a TeachMore link. Copy it from your browser's address bar.").font(.caption).foregroundStyle(.orange)
+            }
+            Picker("Browser", selection: $browser) {
+                ForEach(SchoolBrowser.allCases.filter { $0.installed || $0.rawValue == browser }) { Text($0.name).tag($0.rawValue) }
+            }
+            HStack {
+                Button(school.teachers.isEmpty ? "Connect" : "Refresh Teachers") { Task { await school.connect() } }
+                    .disabled(school.connecting || SchoolSignup.base(link) == nil)
+                if school.connecting { ProgressView().controlSize(.small) }
+                if let s = school.student { Text("Signed in as \(s)").font(.caption).foregroundStyle(.secondary) }
+            }
+            Picker("Teacher", selection: $teacher) {
+                Text("Any teacher").tag("")
+                if !teacher.isEmpty && !school.teachers.contains(where: { $0.id == teacher }) { Text(teacherName.isEmpty ? teacher : teacherName).tag(teacher) }
+                ForEach(school.teachers) { t in Text(t.mine ? "★ \(t.name)" : t.name).tag(t.id) }
+            }
+            .disabled(school.teachers.isEmpty && teacher.isEmpty)
+            .onChange(of: teacher) { _, id in
+                teacherName = school.teachers.first { $0.id == id }.map { $0.name.replacingOccurrences(of: #"\s*\(Period.*\)$"#, with: "", options: .regularExpression) } ?? ""
+            }
+            TextField("Title has the words", text: $words, prompt: Text("Optional, like “robotics”"))
+            Toggle("Only on a certain day", isOn: Binding(get: { !date.isEmpty }, set: { date = $0 ? SchoolSignup.dayKey(Date().addingTimeInterval(86400)) : "" }))
+            if !date.isEmpty {
+                DatePicker("Day", selection: Binding(get: { SchoolSignup.date(date) ?? Date() }, set: { date = SchoolSignup.dayKey($0) }), displayedComponents: .date)
+            }
+            Picker("If I already have a sign-up that day", selection: $replace) {
+                Text("Switch to this academy").tag(true)
+                Text("Keep what I have").tag(false)
+            }
+            Picker("After signing me up", selection: $keep) {
+                Text("Stop watching").tag(false)
+                Text("Keep watching for new dates").tag(true)
+            }
+            Toggle("Watch TeachMore and sign me up", isOn: $on).disabled(!ready && !on)
+            if on || school.status != nil {
+                HStack(alignment: .firstTextBaseline) {
+                    Button("Check Now") { Task { await school.check(force: true) } }.disabled(school.checking || !ready)
+                    if school.checking { ProgressView().controlSize(.small) }
+                    VStack(alignment: .leading, spacing: 1) {
+                        if let s = school.status { Text(s).font(.caption).foregroundStyle(school.problem ? .orange : .secondary).fixedSize(horizontal: false, vertical: true) }
+                        if let d = school.lastCheck, on { Text("Checked \(d.formatted(date: .omitted, time: .standard))").font(.caption2).foregroundStyle(.tertiary) }
+                    }
+                }
+            }
+            ForEach(school.history.prefix(5)) { h in
+                HStack(spacing: 8) {
+                    Image(systemName: h.confirmed ? "checkmark.seal.fill" : "questionmark.circle").foregroundStyle(h.confirmed ? .green : .orange)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(h.title).lineLimit(1)
+                        Text("\(SchoolSignup.dayText(h.date))\(h.teacher.isEmpty ? "" : " · \(h.teacher)") · signed up \(h.at.formatted(.relative(presentation: .named)))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: { Text("Academy sign-up (TeachMore)") } footer: {
+            Text("Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in your own signed-in \(browserName) tab, so it never sees your password. When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left. First turn on View › Developer › Allow JavaScript from Apple Events in \(browserName); macOS asks once to let Onyx control it. Your Mac needs to be awake with \(browserName) open. Make sure your school is fine with automatic sign-ups.")
+        }
+        .onChange(of: on) { _, _ in school.update() }
+        .onChange(of: link) { _, _ in school.update() }
+        .onChange(of: browser) { _, _ in school.update() }
+        .onChange(of: teacher) { _, _ in school.update() }
+        .onChange(of: date) { _, _ in school.update() }
+    }
+}

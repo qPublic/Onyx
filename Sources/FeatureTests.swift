@@ -937,10 +937,15 @@ enum ViewShot {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {   // let the pages load their lists first
                 shoot("calmail", CalendarMailSettings(), CGSize(width: 532, height: 1100))
                 shoot("signin", MailSignInSheet(), CGSize(width: 440, height: 330))
+                shoot("school", Form { SchoolSetupSteps(); SchoolSignupSection() }.formStyle(.grouped), CGSize(width: 532, height: 900))
                 shoot("create", CreateLoopSheet(close: {}), CGSize(width: 640, height: 640))
                 for t in [2.0, 4.8] {
                     save("tour-calmail-\(Int(t * 10))", TourDemo(step: .calendarMail, t: t).frame(height: 250).frame(maxWidth: .infinity)
                         .background(RadialGradient(colors: [TourStep.calendarMail.tint.opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 260)), CGSize(width: 472, height: 250))
+                }
+                for t in [1.0, 2.2, 4.0] {
+                    save("tour-academy-\(Int(t * 10))", TourDemo(step: .academy, t: t).frame(height: 250).frame(maxWidth: .infinity)
+                        .background(RadialGradient(colors: [TourStep.academy.tint.opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 260)), CGSize(width: 472, height: 250))
                 }
                 exit(0)
             }
@@ -1287,5 +1292,156 @@ enum MailTest {
         } catch { check("reads the inbox (\(error.localizedDescription))", false) }
         note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
         exit(0)
+    }
+}
+
+// MARK: - Academy sign-up (TeachMore): the rules, then the real JavaScript in a web view against a stand-in TeachMore
+
+enum SchoolTest {
+    @MainActor static func run(_ file: String) async {
+        var log: [String] = [], fails = 0
+        func note(_ s: String) { log.append(s); try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8) }
+        func check(_ name: String, _ ok: Bool) { note((ok ? "PASS " : "FAIL ") + name); if !ok { fails += 1 } }
+        func finish() -> Never { note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED"); exit(0) }
+
+        // Links
+        let b = SchoolSignup.base("https://teachmore.org/lincoln/students/dashboard")
+        check("reads the school link (\(b.map { "\($0.url) \($0.path) \($0.key)" } ?? "nil"))",
+              b == .init(url: "https://teachmore.org/lincoln/students/", path: "/lincoln/students/", key: "teachmore.org/lincoln/students/"))
+        check("other ways of writing it, and only TeachMore",
+              SchoolSignup.base("teachmore.org/lincoln")?.path == "/lincoln/students/"
+              && SchoolSignup.base("https://www.teachmore.org/lincoln/students/offerings")?.key == "teachmore.org/lincoln/students/"
+              && SchoolSignup.base("https://evil.example/lincoln/students/") == nil && SchoolSignup.base("http://teachmore.org/x/students/") == nil
+              && SchoolSignup.base("") == nil)
+
+        // Reading the list, with the page's own rules for Full and Unavailable (and TeachMore's mix of strings and numbers)
+        let json = """
+        [{"uniqueID":"2750","offering":"AP Physics Academy","teacherID":"200101","teacherLast":"Okafor","teacherFirst":"Dana","offeringDate":"2026-10-07","offeringEvent":"1","offeringCap":"25","numberLeft":"19","isEnrolled":false,"hasAppt":true,"existingApptType":"3","existingTeacher":"Castillo-Reyes, Ana","existingDayOfEdits":"yes"},
+         {"uniqueID":2128,"offering":"Mandarin Academy (B2)","teacherID":200102,"offeringDate":"2026-10-07","offeringCap":"12","numberLeft":0},
+         {"uniqueID":"3942","offering":"Government &amp; Law","teacherID":"tbrooks","offeringDate":"2026-10-07","offeringCap":"N/A","numberLeft":null,"isEnrolled":1},
+         {"uniqueID":"4","offering":"Closed","teacherID":"1","offeringDate":"2026-10-07","offeringCap":0},
+         {"uniqueID":"5","offering":"Roster only","teacherID":"1","offeringDate":"2026-10-07","offeringCap":"9","numberLeft":"9","isRestricted":true}]
+        """
+        let l = SchoolSignup.offerings(json) ?? []
+        check("reads the offerings list (\(l.count))", l.count == 5 && l[0].hasAppt && l[0].apptType == 3 && !l[0].full && !l[0].unavailable
+              && l[1].full && l[1].id == "2128" && l[1].teacherID == "200102" && l[2].enrolled && !l[2].full && l[2].title == "Government & Law"
+              && l[3].unavailable && l[3].full && l[4].unavailable && !l[4].full && l[0].teacher == "Dana Okafor")
+
+        // Choosing
+        func o(_ id: String, _ t: String, _ day: String, tid: String = "305", full: Bool = false, unavailable: Bool = false,
+               appt: Int? = nil, locked: Bool = false, enrolled: Bool = false) -> SchoolOffering {
+            var x = SchoolOffering(); x.id = id; x.title = t; x.teacherID = tid; x.date = day; x.full = full; x.unavailable = unavailable
+            if let a = appt { x.hasAppt = true; x.apptType = a; x.existingTeacher = "Moreau, Elena" }
+            x.sameDayLocked = locked; x.enrolled = enrolled
+            return x
+        }
+        let today = "2026-10-01"
+        let rule = SchoolRule(teacherID: "305", teacherName: "Park, Julia")
+        func pick(_ l: [SchoolOffering], _ r: SchoolRule, done: Set<String> = []) -> String { SchoolSignup.choose(l, rule: r, done: done, today: today).pick?.id ?? "none" }
+        check("waits until it's posted", pick([o("1", "Physics", "2026-10-02", tid: "200101")], rule) == "none")
+        check("the earliest open date, skipping past, full and roster-only ones",
+              pick([o("9", "R", "2026-09-30"), o("2", "R", "2026-10-07"), o("3", "R", "2026-10-02", full: true), o("4", "R", "2026-10-05", unavailable: true), o("5", "R", "2026-10-09")], rule) == "2")
+        check("never replaces a teacher-assigned appointment", pick([o("2", "R", "2026-10-07", appt: 1)], rule) == "none")
+        var keep = rule; keep.replace = false
+        check("switches from your own sign-up, or keeps it if you'd rather", pick([o("2", "R", "2026-10-07", appt: 3)], rule) == "2" && pick([o("2", "R", "2026-10-07", appt: 3)], keep) == "none")
+        check("a sign-up that can't change on the day stays; an automatic one can switch",
+              pick([o("2", "R", today, appt: 3, locked: true)], rule) == "none" && pick([o("2", "R", today, appt: 5)], rule) == "2")
+        check("never signs you up again for one you left", pick([o("2", "R", "2026-10-07")], rule, done: ["2"]) == "none")
+        check("title words, any teacher, accents don't matter",
+              pick([o("2", "Robotics", "2026-10-07", tid: "1"), o("3", "Robotics Club & Build Night", "2026-10-08", tid: "2")], SchoolRule(words: "robotics build")) == "3"
+              && pick([o("2", "Ayuda de Español", "2026-10-07", tid: "1")], SchoolRule(words: "espanol")) == "2" && !SchoolRule().isSet)
+        check("only a certain day", pick([o("2", "R", "2026-10-07"), o("3", "R", "2026-10-09")], SchoolRule(teacherID: "305", date: "2026-10-09")) == "3")
+        let sat = SchoolSignup.choose([o("2", "R", "2026-10-07", enrolled: true)], rule: rule, done: [], today: today)
+        check("once you're in, it's done", sat.satisfied && sat.pick == nil)
+        var again = rule; again.keepWatching = true
+        check("keep watching: the next new date, never a second one on a day you're in",
+              pick([o("2", "R", "2026-10-07", enrolled: true), o("6", "R2", "2026-10-07"), o("3", "R", "2026-10-09")], again) == "3")
+        let why = SchoolSignup.choose([o("3", "Robotics", "2026-10-02", full: true)], rule: rule, done: [], today: today).note
+        check("says why it's waiting (\(why))", why.contains("full"))
+        check("safe JavaScript strings", SchoolJS.lit("a\"b'</script>\n") == #""a\"b'<\/script>\n""#)
+
+        // The stand-in TeachMore: the real JavaScript, in a web view instead of your browser.
+        let mockBase = "http://127.0.0.1:8767/__mock/"
+        func mock(_ q: String) async -> [String: Any] {
+            guard let (d, _) = try? await URLSession.shared.data(from: URL(string: mockBase + q)!) else { return [:] }
+            return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] ?? [:]
+        }
+        func posts() async -> [[String: Any]] { await mock("log")["posts"] as? [[String: Any]] ?? [] }
+        guard await mock("set?name=start&reset=1")["ok"] != nil else {
+            note("(no stand-in TeachMore on 127.0.0.1:8767, so the browser part was skipped; ./test.sh starts one)"); finish()
+        }
+        let page = WebSchoolPage()
+        await page.load(URL(string: "http://127.0.0.1:8767/lincoln/students/offerings")!)
+        let school = SchoolSignup.shared
+        school.testPage = page
+        school.testSettings = SchoolSettings(on: true, link: "http://127.0.0.1:8767/lincoln/students/dashboard", browser: .chrome, rule: rule)
+
+        await school.connect()
+        check("connects: your name and the teacher list, yours first (\(school.student ?? "nil"), \(school.teachers.map(\.id)))",
+              school.student == "Sam" && school.teachers.count == 5 && school.teachers.first?.id == "200103" && school.teachers.first?.mine == true)
+
+        await school.check(force: true)
+        let none = await posts()
+        check("not posted yet: waits and sends nothing (\(school.status ?? ""))", none.isEmpty && school.status?.contains("not posted yet") == true)
+
+        _ = await mock("set?name=post")
+        let t0 = Date()
+        await school.check(force: true)
+        var p = await posts()
+        note(String(format: "signed up and checked in %.1f s", Date().timeIntervalSince(t0)))
+        check("posted: signs up with exactly what the button sends (\(p))", p.count == 1 && p[0]["offeringID"] as? String == "5001"
+              && p[0]["valid"] as? Bool == true && p[0]["token"] as? String == "tok-1" && p[0]["ok"] as? Bool == true)
+        check("checks TeachMore lists you, then stops watching (\(school.status ?? ""))",
+              school.history.first?.id == "5001" && school.history.first?.confirmed == true && school.history.first?.title == "Robotics Club & Build Night"
+              && school.testSettings?.on == false)
+        await school.check(force: true)
+        p = await posts()
+        check("never signs up twice (\(school.status ?? ""))", p.count == 1)
+
+        school.testSettings?.on = true
+        _ = await mock("set?name=locked&reset=1")
+        await school.check(force: true)
+        p = await posts()
+        check("leaves a teacher-assigned appointment alone (\(school.status ?? ""))", p.isEmpty && school.status?.contains("assigned") == true)
+
+        _ = await mock("set?name=restricted&reset=1")
+        await school.check(force: true)
+        p = await posts()
+        check("skips one only for the teacher's own students (\(school.status ?? ""))", p.isEmpty && school.status?.contains("list") == true)
+
+        _ = await mock("set?name=full&reset=1")
+        await school.check(force: true)
+        p = await posts()
+        check("full: waits for a seat (\(school.status ?? ""))", p.isEmpty && school.status?.contains("full") == true)
+        _ = await mock("set?name=seat")
+        await school.check(force: true)
+        p = await posts()
+        check("a seat frees up: signs up", p.count == 1 && p[0]["offeringID"] as? String == "5003" && p[0]["ok"] as? Bool == true)
+
+        school.testSettings?.on = true; school.testSettings?.rule.replace = false
+        _ = await mock("set?name=conflict&reset=1")
+        await school.check(force: true)
+        p = await posts()
+        check("keeps your own sign-up when asked to (\(school.status ?? ""))", p.isEmpty && school.status?.contains("Castillo-Reyes") == true)
+        school.testSettings?.rule.replace = true
+        await school.check(force: true)
+        p = await posts()
+        check("or switches you (\(school.status ?? ""))", p.count == 1 && p[0]["offeringID"] as? String == "5006" && p[0]["ok"] as? Bool == true)
+
+        school.testSettings?.on = true
+        _ = await mock("set?name=stale&reset=1")
+        _ = await mock("set?name=stale")
+        await school.check(force: true)
+        p = await posts()
+        check("a stale security token: fetches a fresh one and tries once more (\(p.map { "\($0["token"] ?? "")→\($0["ok"] ?? "")" }))",
+              p.count == 2 && p[0]["status"] as? Int == 419 && p[1]["token"] as? String == "tok-2" && p[1]["ok"] as? Bool == true
+              && school.history.first?.id == "5005")
+
+        school.testSettings?.on = true
+        _ = await mock("set?name=signedout&reset=1")
+        await school.check(force: true)
+        p = await posts()
+        check("signed out: says so and sends nothing (\(school.status ?? ""))", p.isEmpty && school.status?.contains("signed you out") == true)
+        finish()
     }
 }

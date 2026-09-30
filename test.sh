@@ -33,6 +33,9 @@ kill $MOCK 2>/dev/null
 python3 Tests/mockimap.py "$T/imap.log" >/dev/null 2>&1 & IMAP=$!; sleep 1
 run mail       "$T/mail.log"     --env ONYX_MAILTEST="$T/mail.log" --env ONYX_MAIL_MOCKLOG="$T/imap.log" --args -mail.skipBulk 1 -mail.cloud 0
 kill $IMAP 2>/dev/null
+python3 Tests/mockteachmore.py "$T/teachmore.log" >/dev/null 2>&1 & TM=$!; sleep 1
+run school     "$T/school.log"   --env ONYX_SCHOOLTEST="$T/school.log"
+kill $TM 2>/dev/null
 run energy     "$T/energy.log"   --env ONYX_ENERGYTEST="$T/energy.log"
 if [[ "$*" == *--full-ai* ]]; then run ai-suite "$T/eval.log" --env ONYX_AIEVAL="$T/eval.log" --args -ai.effort medium -ai.provider apple
 else run ai-suite "$T/eval.log" --env ONYX_AIEVAL="$T/eval.log" --env ONYX_AIEVAL_QUICK=1 --args -ai.effort medium -ai.provider apple; fi

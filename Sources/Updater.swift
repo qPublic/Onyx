@@ -48,11 +48,22 @@ final class Updater: ObservableObject {
 
     func start() {
         announceIfUpdated()
-        timer = Timer.scheduledTimer(withTimeInterval: 12 * 3600, repeats: true) { [weak self] _ in self?.autoCheck() }.tolerant()
+        timer = Timer.scheduledTimer(withTimeInterval: Self.every, repeats: true) { [weak self] _ in self?.autoCheck() }.tolerant()
         DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in self?.autoCheck() }
+        // Time asleep doesn't count, but a Mac that slept through a check catches up a minute after waking (once the network is back).
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60) { self?.autoCheck(onlyIfDue: true) }
+        }
     }
 
-    private func autoCheck() { if Prefs.bool(Self.autoKey) { check() } }
+    /// Every 4 hours while the Mac is on.
+    static let every: TimeInterval = 4 * 3600
+    private var lastAuto = Date.distantPast
+
+    private func autoCheck(onlyIfDue: Bool = false) {
+        guard Prefs.bool(Self.autoKey), !onlyIfDue || Date().timeIntervalSince(lastAuto) >= Self.every else { return }
+        lastAuto = Date(); check()
+    }
 
     /// Looks for a newer release and, if there is one, downloads and verifies it in the background.
     func check(user: Bool = false) {

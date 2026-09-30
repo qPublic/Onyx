@@ -36,8 +36,9 @@ SCENARIOS = {
              off("6003", "Robotics Club", "305", "Park", "Julia", d(4), "20", 5), off("6004", "Chess Club", "200103", "Moreau", "Elena", d(4), "20", 5)],
     "signedout": [],
     "chooser": [],
+    "password": [],
 }
-state = {"name": "start", "enrolled": set(), "taken": {}, "posts": [], "searches": 0, "token": "tok-1", "out": False, "chooser": False, "auth": 0}
+state = {"name": "start", "enrolled": set(), "taken": {}, "posts": [], "searches": 0, "token": "tok-1", "out": False, "chooser": False, "auth": 0, "pwflow": False, "typed": "", "pwtries": 0}
 
 def offerings():
     out = []
@@ -79,12 +80,12 @@ class H(BaseHTTPRequestHandler):
         log("GET " + self.path)
         if u.path == "/__mock/set":
             state["name"] = q["name"]
-            if q.get("reset"): state.update(enrolled=set(), taken={}, posts=[], token="tok-1", out=False, chooser=False, auth=0, picked="")
+            if q.get("reset"): state.update(enrolled=set(), taken={}, posts=[], token="tok-1", out=False, chooser=False, auth=0, picked="", pwflow=False, typed="", pwtries=0)
             if q["name"] == "stale": state["token"] = "tok-2"      # the page still holds tok-1
-            if q["name"] in ("signedout", "chooser"): state.update(out=True, chooser=q["name"] == "chooser")
+            if q["name"] in ("signedout", "chooser", "password"): state.update(out=True, chooser=q["name"] == "chooser", pwflow=q["name"] == "password")
             return self.send(200, json.dumps({"ok": True}))
         if u.path == "/__mock/log":
-            return self.send(200, json.dumps({"posts": state["posts"], "searches": state["searches"], "auth": state["auth"], "picked": state.get("picked", "")}))
+            return self.send(200, json.dumps({"posts": state["posts"], "searches": state["searches"], "auth": state["auth"], "picked": state.get("picked", ""), "typed": state["typed"], "pwtries": state["pwtries"]}))
         if u.path == "/__mock/cal.ics":     # a calendar feed, as Google serves one
             return self.send(200, "BEGIN:VCALENDAR\r\nX-WR-CALNAME:Stand-in Calendar\r\nBEGIN:VEVENT\r\nUID:a@x\r\nDTSTART:%sT170000Z\r\n"
                 "DTEND:%sT180000Z\r\nRRULE:FREQ=DAILY;COUNT=3\r\nSUMMARY:Stand-in practice\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n" % ((today.strftime("%Y%m%d"),) * 2), "text/calendar")
@@ -94,16 +95,32 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, "<html><body><h1>Choose an account</h1>"
                 "<div data-identifier=\"sam.personal@gmail.com\" onclick=\"location='%sauth/google/callback?as=personal'\">Sam</div>"
                 "<div data-identifier=\"sam@school.org\" onclick=\"location='%sauth/google/callback?as=school'\">Sam</div></body></html>" % (B, B), "text/html")
+        if u.path == "/__mock/google/signin":   # Google's sign-in, for a browser that isn't signed in to Google: email first
+            return self.send(200, "<html><body><h1>Sign in</h1><input type=\"email\" id=\"identifierId\" name=\"identifier\">"
+                "<div id=\"identifierNext\"><button type=\"button\" onclick=\"location='/__mock/google/pwd?email='+encodeURIComponent("
+                "document.getElementById('identifierId').value)\">Next</button></div></body></html>", "text/html")
+        if u.path == "/__mock/google/pwd":      # then the password
+            e = urllib.parse.quote(q.get("email", ""))
+            return self.send(200, "<html><body><h1>Welcome</h1>%s<input type=\"password\" name=\"Passwd\" id=\"pw\">"
+                "<div id=\"passwordNext\"><button type=\"button\" onclick=\"location='/__mock/google/check?email=%s&p='+encodeURIComponent("
+                "document.getElementById('pw').value)\">Next</button></div></body></html>" % ("<p>Wrong password.</p>" if q.get("wrong") else "", e), "text/html")
+        if u.path == "/__mock/google/check":
+            state["pwtries"] += 1
+            if q.get("p") != "correct-horse":
+                return self.send(302, "", "text/html", [("Location", "/__mock/google/pwd?wrong=1&email=" + urllib.parse.quote(q.get("email", "")))])
+            state.update(out=False, pwflow=False, typed=q.get("email", ""))
+            return self.send(302, "", "text/html", [("Location", B + "dashboard")])
         if u.path == B + "auth/google/callback":
             state.update(out=False, chooser=False, picked=q.get("as", ""))
             return self.send(302, "", "text/html", [("Location", B + "dashboard")])   # like TeachMore: its home page (the calendar)
         if u.path == B + "auth/google":      # Sign in with Google: straight back in, unless Google wants you to pick an account
             state["auth"] += 1
             if state["chooser"]: return self.send(302, "", "text/html", [("Location", "/__mock/google")])
+            if state["pwflow"]: return self.send(302, "", "text/html", [("Location", "/__mock/google/signin")])
             state["out"] = False
             return self.send(302, "", "text/html", [("Location", B + "dashboard")])
         if u.path == B + "login":
-            return self.send(200, "<html><body><h1>Log in</h1><form>…</form></body></html>", "text/html")
+            return self.send(200, "<html><body><h1>Log in</h1><form><input type=\"email\"><input type=\"password\" name=\"password\"></form></body></html>", "text/html")
         if u.path == "/login":              # where TeachMore sends you when you're signed out: a 404 page
             return self.send(404, "<html><body><h1>404 Not Found</h1></body></html>", "text/html")
         if state["out"] and u.path.startswith(B):

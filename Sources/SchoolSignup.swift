@@ -84,13 +84,13 @@ struct SchoolSignupRecord: Codable, Identifiable, Equatable {
 }
 
 enum SchoolBrowser: String, CaseIterable, Identifiable {
-    case chrome = "com.google.Chrome", brave = "com.brave.Browser", edge = "com.microsoft.edgemac", safari = "com.apple.Safari"
+    case onyx = "onyx", chrome = "com.google.Chrome", brave = "com.brave.Browser", edge = "com.microsoft.edgemac", safari = "com.apple.Safari"
     var id: String { rawValue }
     var name: String {
-        switch self { case .chrome: "Google Chrome"; case .brave: "Brave"; case .edge: "Microsoft Edge"; case .safari: "Safari" }
+        switch self { case .onyx: "Onyx's own browser"; case .chrome: "Google Chrome"; case .brave: "Brave"; case .edge: "Microsoft Edge"; case .safari: "Safari" }
     }
-    var installed: Bool { NSWorkspace.shared.urlForApplication(withBundleIdentifier: rawValue) != nil }
-    var running: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: rawValue).isEmpty }
+    var installed: Bool { self == .onyx || NSWorkspace.shared.urlForApplication(withBundleIdentifier: rawValue) != nil }
+    var running: Bool { self == .onyx || !NSRunningApplication.runningApplications(withBundleIdentifier: rawValue).isEmpty }
     /// Where the one setting Onyx needs lives.
     var javaScriptSetting: String {
         self == .safari ? "Safari's Develop › Developer Settings › Allow JavaScript from Apple Events (show the Develop menu in Settings › Advanced first)"
@@ -100,6 +100,7 @@ enum SchoolBrowser: String, CaseIterable, Identifiable {
 
 struct SchoolSettings {
     var on = false, link = "", browser = SchoolBrowser.chrome, rule = SchoolRule(), google = ""
+    var password: String?   // the self-test's; otherwise it's read from your Keychain only when Onyx's browser signs in
     static func load() -> SchoolSettings {
         SchoolSettings(on: Prefs.bool(SchoolSignup.onKey), link: Prefs.string(SchoolSignup.linkKey),
                        browser: SchoolBrowser(rawValue: Prefs.string(SchoolSignup.browserKey)) ?? .chrome,
@@ -351,6 +352,36 @@ enum SchoolJS {
         """
     }
 
+    /// Google's sign-in, in Onyx's own browser: picks your account, or types your email, then your saved password, and
+    /// presses Next. It does nothing unless the page really is Google's sign-in (origin and path), and types the password
+    /// once per page at most.
+    static func signIn(_ email: String, password: String, origin: String, path: String) -> String {
+        """
+        (function(E,P,O,H){
+        if(location.origin!==O||location.pathname.indexOf(H)!==0)return 'none';
+        E=(E||'').trim().toLowerCase();
+        function vis(e){if(!e)return false;var r=e.getBoundingClientRect();return r.width>0&&r.height>0&&getComputedStyle(e).visibility!=='hidden';}
+        function first(q){return [].slice.call(document.querySelectorAll(q)).filter(vis)[0];}
+        function put(e,v){var s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;e.focus();s.call(e,v);
+          e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));}
+        function next(id){var b=first('#'+id+' button')||first('#'+id);
+          if(!b)b=[].slice.call(document.querySelectorAll('button')).filter(function(x){return vis(x)&&/^next$/i.test(x.textContent.trim());})[0];
+          if(b){b.click();return true;}return false;}
+        var pw=first('input[type=password]');
+        if(pw){if(!P)return 'password';if(window.__onyxPw)return 'wait';put(pw,P);window.__onyxPw=1;return next('passwordNext')?'typed':'none';}
+        var em=first('input[type=email],input[name=identifier]');
+        if(em&&E){if(window.__onyxEm)return 'wait';put(em,E);window.__onyxEm=1;return next('identifierNext')?'email':'none';}
+        var els=[].slice.call(document.querySelectorAll('[data-identifier],[data-email]'));
+        var ids=els.map(function(e){return (e.getAttribute('data-identifier')||e.getAttribute('data-email')||'').toLowerCase();});
+        var uniq=ids.filter(function(x,i){return x&&ids.indexOf(x)===i;});
+        var i=E?ids.indexOf(E):(uniq.length===1?ids.indexOf(uniq[0]):-1);
+        if(i>=0){els[i].click();return 'clicked';}
+        if(E){var other=[].slice.call(document.querySelectorAll('li,div,a,button')).filter(function(x){return vis(x)&&x.children.length<4&&/^use another account$/i.test((x.textContent||'').trim());}).pop();
+          if(other){other.click();return 'clicked';}}
+        return ids.length?'nomatch':'none';})(\(lit(email)),\(lit(password)),\(lit(origin)),\(lit(path)))
+        """
+    }
+
     /// A JavaScript string literal.
     static func lit(_ s: String) -> String {
         (try? JSONSerialization.data(withJSONObject: [s])).flatMap { String(data: $0, encoding: .utf8) }.map { String($0.dropFirst().dropLast()) } ?? "\"\""
@@ -407,6 +438,7 @@ enum SchoolJS {
     nonisolated static let onKey = "school.on", linkKey = "school.link", browserKey = "school.browser", teacherKey = "school.teacherID",
                            teacherNameKey = "school.teacherName", wordsKey = "school.words", dateKey = "school.date",
                            repeatKey = "school.repeat", replaceKey = "school.replace", googleKey = "school.google"
+    nonisolated static let passwordAccount = "school.googlePassword"   // Keychain
 
     @Published private(set) var status: String?
     @Published private(set) var problem = false
@@ -419,6 +451,7 @@ enum SchoolJS {
     @Published private(set) var plans: [SchoolPlan] = []           // days you planned in the calendar
     @Published private(set) var offerings: [SchoolOffering] = []   // what's posted, for the calendar
     @Published private(set) var loadingOfferings = false
+    @Published private(set) var hasPassword = false
 
     /// Self-test: a web view instead of your browser, settings that aren't saved, and no notch messages.
     var testPage: SchoolPage?
@@ -430,6 +463,7 @@ enum SchoolJS {
     private var warned = Set<String>()    // notch warnings already shown; cleared once a check works
     private var lastOpened: Date?
     private var reauthTries = 0           // times Onyx sent the tab to "Sign in with Google" since the last check that worked
+    private var badPassword = false       // Google turned the saved password down: never typed again until you save it again
     private var timer: Timer?
     private var file: URL { Prefs.supportDir.appendingPathComponent("school-signups.json") }
 
@@ -493,7 +527,15 @@ enum SchoolJS {
     /// Every 30 seconds from 6 AM to 10 PM, every 3 minutes overnight.
     private var interval: Double { (6..<22).contains(Calendar.current.component(.hour, from: Date())) ? 30 : 180 }
 
-    private func page(_ s: SchoolSettings, _ b: Base) -> SchoolPage { testPage ?? BrowserTab(browser: s.browser, key: b.host) }
+    private func page(_ s: SchoolSettings, _ b: Base) -> SchoolPage { testPage ?? (s.browser == .onyx ? OnyxBrowser.shared : BrowserTab(browser: s.browser, key: b.host)) }
+
+    /// Saves (or with nil, removes) the Google password Onyx's browser signs in with. Kept in your Keychain.
+    func savePassword(_ p: String?) {
+        if let p, !p.isEmpty { Keychain.set(p, account: Self.passwordAccount) } else { Keychain.delete(Self.passwordAccount) }
+        badPassword = false; reauthTries = 0; checkPassword()
+        if testPage == nil { update() }
+    }
+    func checkPassword() { hasPassword = Keychain.get(Self.passwordAccount)?.isEmpty == false }
 
     private func report(_ text: String, problem p: Bool) { status = text; problem = p }
 
@@ -517,12 +559,12 @@ enum SchoolJS {
             checking = false; lastCheck = Date()
             if settings.on && testPage == nil { schedule(after: next) }
         }
-        if PrivateGuard.active { report("Waiting while a private window is open.", problem: false); next = 60; return }
+        if PrivateGuard.active && s.browser != .onyx { report("Waiting while a private window is open.", problem: false); next = 60; return }
         let p = page(s, b)
         var signedBackIn = false
         for _ in 0..<2 {
             // At most one new tab every half hour, and none while a Google sign-in is under way.
-            let openURL = reauthTries == 0 && (lastOpened.map { Date().timeIntervalSince($0) > 1800 } ?? true) ? b.url + "offerings" : ""
+            let openURL = s.browser == .onyx || reauthTries == 0 && (lastOpened.map { Date().timeIntervalSince($0) > 1800 } ?? true) ? b.url + "offerings" : ""
             let r = await p.run(SchoolJS.search(b.path, teacher: teacher), poll: SchoolJS.poll, openURL: openURL)
             guard case .value(let raw) = r else { next = trouble(r, s); return }
             guard let res = Self.object(raw), !Self.signedOut(res, path: b.path), let list = Self.offerings(res["body"] as? String ?? "") else {
@@ -531,14 +573,14 @@ enum SchoolJS {
                     // "Sign in with Google" now and carry on in this same check. Twice at most until a check works.
                     if !signedBackIn, reauthTries < 2 {
                         if let why = await reSignIn(p, b, s) {
-                            report("TeachMore signed you out and Onyx couldn't sign you back in: \(why) Sign in to TeachMore once in \(s.browser.name) and Onyx carries on."
+                            report("TeachMore signed you out and Onyx couldn't sign you back in: \(why) \(s.browser == .onyx ? "Press Sign In… in Settings › Academy Sign-Up, sign in once yourself," : "Sign in to TeachMore once in \(s.browser.name)") and Onyx carries on."
                                    + (s.google.isEmpty ? " Adding your school Google account above helps next time." : ""), problem: true)
                             warn("signedOut", "Sign in to TeachMore again so Onyx can sign you up"); next = 300; return
                         }
                         signedBackIn = true
                         continue
                     }
-                    report("TeachMore signed you out. Sign in to TeachMore once in \(s.browser.name) and Onyx carries on.", problem: true)
+                    report("TeachMore signed you out. \(s.browser == .onyx ? "Press Sign In… in Settings › Academy Sign-Up, sign in once yourself," : "Sign in to TeachMore once in \(s.browser.name)") and Onyx carries on.", problem: true)
                     warn("signedOut", "Sign in to TeachMore again so Onyx can sign you up"); next = 300
                 } else { report("TeachMore sent something Onyx didn't understand. It tries again soon.", problem: true); next = 120 }
                 return
@@ -596,9 +638,9 @@ enum SchoolJS {
     /// Everything posted, for the calendar in Settings. Never opens a tab.
     func loadOfferings() async {
         let s = settings
-        guard let b = Self.base(s.link), !loadingOfferings, !checking, !PrivateGuard.active else { return }
+        guard let b = Self.base(s.link), !loadingOfferings, !checking, !PrivateGuard.active || s.browser == .onyx else { return }
         loadingOfferings = true; defer { loadingOfferings = false }
-        if case .value(let raw) = await page(s, b).run(SchoolJS.search(b.path, teacher: ""), poll: SchoolJS.poll, openURL: ""),
+        if case .value(let raw) = await page(s, b).run(SchoolJS.search(b.path, teacher: ""), poll: SchoolJS.poll, openURL: s.browser == .onyx ? b.url + "offerings" : ""),
            let res = Self.object(raw), !Self.signedOut(res, path: b.path), let list = Self.offerings(res["body"] as? String ?? "") {
             remember(list, teacher: "")
         }
@@ -630,14 +672,38 @@ enum SchoolJS {
         guard case .value = await p.navigate(b.url + "auth/google") else { return "Onyx couldn't reach your TeachMore tab." }
         reauthTries += 1
         report("TeachMore signed you out, so Onyx is signing you back in with Google…", problem: false)
-        var moved = false, clicks = 0, stuck = 0, lost = 0, out = 0
+        // Onyx's own browser types your saved password on Google's sign-in page; your own browser is never typed into.
+        let own = p as? OnyxBrowser
+        if let own { own.password = badPassword ? "" : s.password ?? Keychain.get(Self.passwordAccount) ?? "" }
+        defer { own?.password = "" }
+        let yourself = " Or press Sign In… in Settings › Academy Sign-Up and sign in once yourself."
+        var moved = false, clicks = 0, stuck = 0, lost = 0, out = 0, emails = 0, typed = 0, turnedDown = 0
         for poll in 1...60 {   // half a second apart: about 30 seconds in all
             try? await Task.sleep(for: .milliseconds(500))
             switch await p.signInStep(s.google) {
             case .google(let r):
                 moved = true; lost = 0; out = 0
                 switch r {
-                case "loading": continue
+                case "loading", "wait": continue
+                case "email":
+                    emails += 1; stuck = 0
+                    if emails > 2 { return "Google keeps asking for your email." }
+                    report("Signing in to Google as \(s.google)…", problem: false)
+                case "typed":
+                    typed += 1; stuck = 0; turnedDown = 0
+                    own?.password = ""   // never twice: a wrong password typed again and again can lock the account
+                    report("Signing in to Google as \(s.google)…", problem: false)
+                case "password" where own != nil:
+                    if typed > 0 {   // Google is still asking after Onyx typed it: give it a moment, then call it turned down
+                        turnedDown += 1
+                        if turnedDown >= 8 {
+                            badPassword = true
+                            return "Google didn't accept the saved password, so Onyx won't type it again until you save it again in Settings › Academy Sign-Up."
+                        }
+                        continue
+                    }
+                    return badPassword ? "Google didn't accept the saved password, so Onyx won't type it again until you save it again in Settings › Academy Sign-Up."
+                                       : "Google wants your password. Save it in Settings › Academy Sign-Up." + yourself
                 case "clicked":
                     clicks += 1; stuck = 0
                     if clicks > 2 { return "Google keeps asking which account to use." }
@@ -645,7 +711,10 @@ enum SchoolJS {
                 case "password": return "Google wants your password."
                 default:   // an account Onyx can't pick, or a question for you
                     stuck += 1
-                    if stuck >= 12 { return s.google.isEmpty ? "Google asks which account to use." : "Google didn't offer \(s.google), or it's asking you something." }
+                    if stuck >= 12 {
+                        if own != nil { return "Google wants to check it's you (like a code from your phone)." + yourself }
+                        return s.google.isEmpty ? "Google asks which account to use." : "Google didn't offer \(s.google), or it's asking you something."
+                    }
                 }
             case .teachmore(let url, let loading):
                 lost = 0
@@ -673,6 +742,8 @@ enum SchoolJS {
         case .notRunning:
             report("Open \(s.browser.name) and sign in to TeachMore. Onyx checks again in 2 minutes.", problem: true)
             warn("notRunning", "Open \(s.browser.name) so Onyx can watch TeachMore"); return 120
+        case .noTab where s.browser == .onyx:
+            report("Onyx's browser hasn't opened TeachMore yet. Press Connect in Settings › Academy Sign-Up.", problem: true); return 120
         case .noTab where reauthTries > 0:   // the tab is on Google's sign-in page
             report("Finish signing in with Google in \(s.browser.name). Onyx sent your TeachMore tab there because TeachMore signed you out." + (s.google.isEmpty ? " Add your school Google account in Settings › Academy Sign-Up so Onyx can pick it next time." : ""), problem: true)
             warn("google", "Finish signing in to TeachMore in \(s.browser.name)"); return 60
@@ -743,7 +814,13 @@ enum SchoolJS {
         let s = settings
         guard let b = Self.base(s.link) else { report("Paste your school's TeachMore link first.", problem: true); return }
         connecting = true; defer { connecting = false }
-        let r = await page(s, b).run(SchoolJS.info(b.path), poll: SchoolJS.poll, openURL: b.url + "offerings")
+        let p = page(s, b)
+        var r = await p.run(SchoolJS.info(b.path), poll: SchoolJS.poll, openURL: b.url + "offerings")
+        // Onyx's own browser signs itself in the first time.
+        if s.browser == .onyx, case .value(let raw) = r, let res = Self.object(raw), Self.signedOut(res) || (res["signedIn"] as? NSNumber)?.boolValue != true {
+            if let why = await reSignIn(p, b, s) { report("Onyx couldn't sign in to TeachMore: \(why)", problem: true); return }
+            r = await p.run(SchoolJS.info(b.path), poll: SchoolJS.poll, openURL: b.url + "offerings")
+        }
         guard case .value(let raw) = r else { _ = trouble(r, s); return }
         guard let res = Self.object(raw), !Self.signedOut(res), (res["signedIn"] as? NSNumber)?.boolValue == true else {
             report("Sign in to TeachMore in \(s.browser.name), then press Connect again.", problem: true); return
@@ -756,7 +833,7 @@ enum SchoolJS {
         teachers = list.sorted { $0.mine && !$1.mine }.filter { seen.insert($0.id).inserted }
         let name = (res["name"] as? String).map(Self.plain) ?? ""
         student = name.isEmpty ? nil : name
-        warned.removeAll()
+        warned.removeAll(); reauthTries = 0
         report("Connected\(student.map { " as \($0)" } ?? ""). \(teachers.count) teachers.", problem: false)
         save()
         await loadOfferings()
@@ -861,10 +938,16 @@ struct SchoolSetupSteps: View {
     var body: some View {
         let b = SchoolBrowser(rawValue: browser) ?? .chrome
         Section("How to set it up") {
-            step(1, "Sign in to TeachMore in \(b.name), the way you always do.")
-            step(2, "Turn on \(b.javaScriptSetting).")
-            step(3, "Paste your TeachMore link below (the sign-in page is fine) and press Connect. macOS asks once to let Onyx control \(b.name): click Allow.")
-            step(4, "Pick the teacher (★ marks yours) or words in the academy's title, or plan days in the calendar below, then turn on Watch TeachMore and sign me up.")
+            if b == .onyx {
+                step(1, "Paste your TeachMore link below (the sign-in page is fine).")
+                step(2, "Add your school Google account and its password, then press Connect. Onyx signs in to TeachMore in its own browser, in the background, so no other browser needs to be open.")
+                step(3, "Pick the teacher (★ marks yours) or words in the academy's title, or plan days in the calendar below, then turn on Watch TeachMore and sign me up.")
+            } else {
+                step(1, "Sign in to TeachMore in \(b.name), the way you always do.")
+                step(2, "Turn on \(b.javaScriptSetting).")
+                step(3, "Paste your TeachMore link below (the sign-in page is fine) and press Connect. macOS asks once to let Onyx control \(b.name): click Allow.")
+                step(4, "Pick the teacher (★ marks yours) or words in the academy's title, or plan days in the calendar below, then turn on Watch TeachMore and sign me up.")
+            }
         }
     }
 
@@ -888,7 +971,9 @@ struct SchoolSignupSection: View {
     @AppStorage(SchoolSignup.dateKey) private var date = ""
     @AppStorage(SchoolSignup.repeatKey) private var keep = false
     @AppStorage(SchoolSignup.replaceKey) private var replace = true
+    @State private var password = ""
 
+    private var own: Bool { browser == SchoolBrowser.onyx.rawValue }
     private var browserName: String { (SchoolBrowser(rawValue: browser) ?? .chrome).name }
     private var ready: Bool { SchoolSignup.base(link) != nil && (!teacher.isEmpty || !words.trimmingCharacters(in: .whitespaces).isEmpty || !school.openPlans.isEmpty) }
 
@@ -903,16 +988,30 @@ struct SchoolSignupSection: View {
                 Text("That doesn't look like a TeachMore link. Copy it from your browser's address bar.").font(.caption).foregroundStyle(.orange)
             }
             Picker("Browser", selection: $browser) {
-                ForEach(SchoolBrowser.allCases.filter { $0.installed || $0.rawValue == browser }) { Text($0.name).tag($0.rawValue) }
+                ForEach(SchoolBrowser.allCases.filter { $0.installed || $0.rawValue == browser }) { Text($0 == .onyx ? "Onyx's own browser (in the background)" : $0.name).tag($0.rawValue) }
             }
             VStack(alignment: .leading, spacing: 2) {
                 TextField("School Google account", text: $google, prompt: Text("you@yourschool.org"))
-                Text("When TeachMore signs you out, Onyx signs you back in with Google. If Google asks which account to use, it picks this one (or the only one there). It never types a password.")
+                Text(own ? "Onyx signs in to TeachMore with Google as this account, in its own browser."
+                         : "When TeachMore signs you out, Onyx signs you back in with Google. If Google asks which account to use, it picks this one (or the only one there). It never types a password into \(browserName).")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            if own {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        SecureField("Google password", text: $password, prompt: Text(school.hasPassword ? "Saved in your Keychain" : "Your school Google password"))
+                        Button("Save") { school.savePassword(password); password = "" }.disabled(password.isEmpty)
+                        if school.hasPassword { Button("Remove", role: .destructive) { school.savePassword(nil) } }
+                    }
+                    Text("Kept in your Keychain. Onyx types it only on Google's own sign-in page (accounts.google.com), only in its own browser, and only when TeachMore has signed you out. If Google turns it down, Onyx doesn't try it again until you save it again. If Google wants a code from your phone, press Sign In… and finish once yourself.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .onAppear { school.checkPassword() }
             }
             HStack {
                 Button(school.teachers.isEmpty ? "Connect" : "Refresh Teachers") { Task { await school.connect() } }
                     .disabled(school.connecting || SchoolSignup.base(link) == nil)
+                if own, let b = SchoolSignup.base(link) { Button("Sign In…") { OnyxBrowser.shared.show(b.url + "auth/google") }.help("Open Onyx's browser to sign in yourself, or to look at TeachMore") }
                 if school.connecting { ProgressView().controlSize(.small) }
                 if let s = school.student { Text("Signed in as \(s)").font(.caption).foregroundStyle(.secondary) }
             }
@@ -961,7 +1060,8 @@ struct SchoolSignupSection: View {
                 }
             }
         } header: { Text("Academy sign-up (TeachMore)") } footer: {
-            Text("Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in your own signed-in \(browserName) tab, so it never sees your password. When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left. First turn on View › Developer › Allow JavaScript from Apple Events in \(browserName); macOS asks once to let Onyx control it. Your Mac needs to be awake with \(browserName) open. Make sure your school is fine with automatic sign-ups.")
+            Text(own ? "Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in its own browser, in the background, with its own sign-in (apart from your browsers). When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left. Your Mac needs to be awake. Make sure your school is fine with automatic sign-ups."
+                     : "Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in your own signed-in \(browserName) tab, so it never sees your password. When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left. First turn on View › Developer › Allow JavaScript from Apple Events in \(browserName); macOS asks once to let Onyx control it. Your Mac needs to be awake with \(browserName) open. Make sure your school is fine with automatic sign-ups.")
         }
         .onChange(of: on) { _, _ in school.update() }
         .onChange(of: link) { _, _ in school.update() }

@@ -206,7 +206,7 @@ struct PrivateWindowsSection: View {
                 Spacer()
                 Text("Always on").font(.caption).foregroundStyle(.secondary)
             }
-            Text("While a private or incognito window is open in Safari, Chrome, Brave, Edge, Arc, Vivaldi, Opera or Firefox, Onyx records nothing and reads nothing from your screen, your browser or your clipboard. A screen recording stops. Screenshots, Circle to Search and Copy Text wait. Onyx AI can't look at your screen or what you've selected. Clipboard history skips what you copy. Focus sessions don't read websites, and academy sign-up waits. This can't be turned off.")
+            Text("While a private or incognito window is open in Safari, Chrome, Brave, Edge, Arc, Vivaldi, Opera or Firefox, Onyx records nothing and reads nothing from your screen, your browser or your clipboard. A screen recording stops. Screenshots, Circle to Search and Copy Text wait. Onyx AI can't look at your screen or what you've selected. Clipboard history skips what you copy. Focus sessions don't read websites, and academy sign-up waits (unless it uses Onyx's own browser, which reads nothing of yours). This can't be turned off.")
                 .font(.caption).foregroundStyle(.secondary)
         } header: { Text("Private windows") }
         .onReceive(NotificationCenter.default.publisher(for: .init("onyx.private"))) { _ in active = PrivateGuard.active }

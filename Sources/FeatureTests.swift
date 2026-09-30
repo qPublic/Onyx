@@ -1550,6 +1550,34 @@ enum SchoolTest {
         p = await posts()
         check("only planned days: stops watching once every one is signed up (\(school.status ?? ""))",
               p.count == 2 && p[1]["offeringID"] as? String == "6003" && school.testSettings?.on == false)
+
+        // Onyx's own browser (cookies thrown away after the test): signs in to Google by itself, with the saved password.
+        let own = OnyxBrowser(test: true)
+        own.googleOrigin = "http://127.0.0.1:8767"; own.googlePath = "/__mock/google"
+        school.testPage = own
+        school.testSettings = SchoolSettings(on: true, link: "http://127.0.0.1:8767/lincoln/students/login", browser: .onyx, rule: rule,
+                                             google: "sam@school.org", password: "correct-horse")
+        for x in school.plans { school.unplan(x.date) }
+        _ = await mock("set?name=password&reset=1")
+        await school.connect()
+        mlog = await mock("log")
+        check("its own browser: signs in to Google by itself (email, then password) and connects (\(school.status ?? ""), \(mlog["typed"] ?? ""), \(mlog["pwtries"] ?? ""))",
+              mlog["typed"] as? String == "sam@school.org" && mlog["pwtries"] as? Int == 1 && school.student == "Sam" && school.status?.hasPrefix("Connected") == true)
+        await school.check(force: true)
+        check("then watches from its own browser (\(school.status ?? ""))", school.status?.contains("Watching") == true)
+        _ = await mock("set?name=password&reset=1")
+        school.testSettings?.password = "wrong-pass"
+        await school.check(force: true)
+        mlog = await mock("log")
+        let once = mlog["pwtries"] as? Int, said = school.status ?? ""
+        await school.check(force: true)
+        mlog = await mock("log")
+        check("a wrong saved password: typed once, never again until you save it again (\(said), tries \(once ?? -1) then \(mlog["pwtries"] ?? ""))",
+              once == 1 && mlog["pwtries"] as? Int == 1 && said.contains("didn't accept") && school.status?.contains("didn't accept") == true)
+        await own.load(URL(string: "http://127.0.0.1:8767/lincoln/students/login")!)
+        let there = try? await own.web.evaluateJavaScript(SchoolJS.signIn("sam@school.org", password: "correct-horse", origin: own.googleOrigin, path: own.googlePath)) as? String
+        let field = try? await own.web.evaluateJavaScript("document.querySelector('input[type=password]').value") as? String
+        check("never types the password anywhere but Google's sign-in page (\(there ?? "nil"))", there == "none" && field == "")
         finish()
     }
 }

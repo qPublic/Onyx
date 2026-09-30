@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.9.0
 
 ### New
 - **Private windows stay private.** While a private or incognito window is open in Safari, Chrome, Brave, Edge, Arc, Vivaldi, Opera or Firefox, Onyx records nothing and reads nothing from your screen, your browser or your clipboard. A screen recording stops. Screenshots, Circle to Search and Copy Text wait. Onyx AI can't look at your screen or what you've selected. Clipboard history skips what you copy. Focus sessions don't read websites, and academy sign-up waits. The notch tells you when this starts. It's always on and can't be turned off. See Settings › Privacy › Private windows.
 - **Proton VPN in the notch.** Add the VPN shield in Edit Tabs & Widgets: green when you're connected, with the country you're coming from, and a click connects or disconnects. It's in the quick toggles and the launcher (type “vpn”) too. The notch warns you if the VPN drops. In Settings › Privacy › Proton VPN you can have it connect whenever you join Wi-Fi you haven't trusted. Onyx uses macOS's own VPN controls, so Proton VPN still picks the server.
 - **Plan academy days in a calendar.** Settings › Academy Sign-Up has a calendar now. Press a day and choose its academy: one that's already posted, or a teacher's (or words in the title) whenever it's posted for that day. So this Friday can be one academy and next Friday another. Planned days show a star, and a green seal once Onyx has signed you up. The teacher and words above still cover every day you haven't planned.
+- **Academy sign-up without Chrome.** Pick “Onyx's own browser” in Settings › Academy Sign-Up and Onyx watches TeachMore in a browser of its own, in the background, with its own sign-in apart from your browsers. Add your school Google account and its password and press Connect: Onyx signs in with Google by itself, and again whenever TeachMore signs you out. The password stays in your Keychain, and Onyx only ever types it on Google's own sign-in page. If Google turns it down, Onyx doesn't try it again until you save it again. If Google wants a code from your phone, press Sign In… and finish once yourself. A private window doesn't pause it, since it reads nothing of yours.
 
 ### Improved
 - Academy sign-up always signs you up from TeachMore's Offerings page. If your tab is somewhere else, like TeachMore's calendar, Onyx moves it to Offerings first, because a sign-up made from the calendar can say it worked when it didn't.

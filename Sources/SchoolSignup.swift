@@ -45,7 +45,8 @@ struct SchoolOffering: Equatable {
 struct SchoolRule: Equatable {
     var teacherID = "", teacherName = "", words = "", date = ""   // date: "yyyy-MM-dd", or "" for the first day it's offered
     var keepWatching = false, replace = true
-    var isSet: Bool { !teacherID.isEmpty || !wordList.isEmpty }
+    var offeringID = ""   // one academy you picked from the list
+    var isSet: Bool { !offeringID.isEmpty || !teacherID.isEmpty || !wordList.isEmpty }
     var wordList: [String] { words.split(whereSeparator: { $0 == " " || $0 == "," }).map { SchoolSignup.fold(String($0)) } }
     var label: String {
         let w = words.trimmingCharacters(in: .whitespaces)
@@ -54,10 +55,23 @@ struct SchoolRule: Equatable {
     }
     func matches(_ o: SchoolOffering) -> Bool {
         guard isSet else { return false }
+        if !offeringID.isEmpty { return o.id == offeringID }
         if !teacherID.isEmpty, o.teacherID != teacherID { return false }
         if !date.isEmpty, o.date != date { return false }
         let t = SchoolSignup.fold(o.title)
         return wordList.allSatisfy { t.contains($0) }
+    }
+}
+
+/// A day you planned in the calendar: one academy from the list, or a teacher's (or words in the title) whenever it's posted for that day.
+struct SchoolPlan: Codable, Identifiable, Equatable {
+    var date: String, teacherID = "", teacherName = "", words = "", offeringID = "", title = "", done = false
+    var id: String { date }
+    var label: String {
+        offeringID.isEmpty ? rule(replace: true).label : "“\(title)”" + (teacherName.isEmpty ? "" : " with \(teacherName)")
+    }
+    func rule(replace: Bool) -> SchoolRule {
+        SchoolRule(teacherID: teacherID, teacherName: teacherName, words: words, date: date, replace: replace, offeringID: offeringID)
     }
 }
 
@@ -320,6 +334,8 @@ struct BrowserTab: SchoolPage {
 
 enum SchoolJS {
     static let poll = "(function(){var x=window.__onyxTM;return (x&&x.state!=='pending')?JSON.stringify(x):''})()"
+    /// Which page the tab is on, and whether it has finished loading.
+    static let here = "(function(){window.__onyxTM={state:'done',url:location.href,ready:document.readyState};return 'started';})()"
 
     /// Google's "Choose an account": clicks the matching account (or the only one listed). Stops if Google wants a password.
     static func pickAccount(_ email: String) -> String {
@@ -400,6 +416,9 @@ enum SchoolJS {
     @Published private(set) var history: [SchoolSignupRecord] = []
     @Published private(set) var teachers: [SchoolTeacher] = []
     @Published private(set) var student: String?
+    @Published private(set) var plans: [SchoolPlan] = []           // days you planned in the calendar
+    @Published private(set) var offerings: [SchoolOffering] = []   // what's posted, for the calendar
+    @Published private(set) var loadingOfferings = false
 
     /// Self-test: a web view instead of your browser, settings that aren't saved, and no notch messages.
     var testPage: SchoolPage?
@@ -414,22 +433,42 @@ enum SchoolJS {
     private var timer: Timer?
     private var file: URL { Prefs.supportDir.appendingPathComponent("school-signups.json") }
 
-    private struct Saved: Codable { var history: [SchoolSignupRecord]; var done: [String]; var teachers: [SchoolTeacher]; var student: String? }
+    private struct Saved: Codable { var history: [SchoolSignupRecord]; var done: [String]; var teachers: [SchoolTeacher]; var student: String?; var plans: [SchoolPlan]? }
 
     init() {
         if let d = try? Data(contentsOf: file), let s = try? JSONDecoder().decode(Saved.self, from: d) {
             history = s.history; done = Set(s.done); teachers = s.teachers; student = s.student
+            let today = Self.dayKey(Date())
+            plans = (s.plans ?? []).filter { $0.date >= today }   // days gone by drop off
         }
     }
 
     private func save() {
         guard testSettings == nil else { return }
-        if let d = try? JSONEncoder().encode(Saved(history: history, done: Array(done), teachers: teachers, student: student)) {
+        if let d = try? JSONEncoder().encode(Saved(history: history, done: Array(done), teachers: teachers, student: student, plans: plans)) {
             try? d.write(to: file, options: .atomic)
         }
     }
 
     var settings: SchoolSettings { testSettings ?? .load() }
+
+    /// Planned days still to come that Onyx hasn't signed you up for yet.
+    var openPlans: [SchoolPlan] { let t = Self.dayKey(Date()); return plans.filter { !$0.done && $0.date >= t }.sorted { $0.date < $1.date } }
+
+    /// Sets a day's academy (replacing what that day had).
+    func plan(_ p: SchoolPlan) {
+        plans.removeAll { $0.date == p.date }
+        plans.append(p); plans.sort { $0.date < $1.date }
+        save(); if testPage == nil { update() }
+    }
+    func unplan(_ date: String) {
+        plans.removeAll { $0.date == date }
+        save(); if testPage == nil { update() }
+    }
+    private func finish(_ date: String) {
+        guard let i = plans.firstIndex(where: { $0.date == date }) else { return }
+        plans[i].done = true; save()
+    }
 
     func start() {
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
@@ -465,10 +504,13 @@ enum SchoolJS {
 
     /// Checks the list once and signs you up if the academy you want is there with a free seat.
     func check(force: Bool = false) async {
+        while loadingOfferings { try? await Task.sleep(for: .milliseconds(200)) }   // one script in the tab at a time
         let s = settings
         guard !checking, force || s.on else { return }
         guard let b = Self.base(s.link) else { report("Paste your school's TeachMore link first.", problem: true); return }
-        guard s.rule.isSet else { report("Choose a teacher or words to watch for.", problem: true); return }
+        guard s.rule.isSet || !openPlans.isEmpty else { report("Choose a teacher or words to watch for, or plan a day in the calendar.", problem: true); return }
+        // With days planned, look at every teacher's offerings; otherwise just the one teacher's, as the page shows them.
+        let teacher = openPlans.isEmpty ? s.rule.teacherID : ""
         checking = true
         var next = interval
         defer {
@@ -481,7 +523,7 @@ enum SchoolJS {
         for _ in 0..<2 {
             // At most one new tab every half hour, and none while a Google sign-in is under way.
             let openURL = reauthTries == 0 && (lastOpened.map { Date().timeIntervalSince($0) > 1800 } ?? true) ? b.url + "offerings" : ""
-            let r = await p.run(SchoolJS.search(b.path, teacher: s.rule.teacherID), poll: SchoolJS.poll, openURL: openURL)
+            let r = await p.run(SchoolJS.search(b.path, teacher: teacher), poll: SchoolJS.poll, openURL: openURL)
             guard case .value(let raw) = r else { next = trouble(r, s); return }
             guard let res = Self.object(raw), !Self.signedOut(res, path: b.path), let list = Self.offerings(res["body"] as? String ?? "") else {
                 if let res = Self.object(raw), Self.signedOut(res, path: b.path) {
@@ -502,6 +544,7 @@ enum SchoolJS {
                 return
             }
             warned.removeAll(); reauthTries = 0
+            remember(list, teacher: teacher)
             if let n = await act(list, p, b, s) { next = n }
             // Signing in lands on TeachMore's home page (the calendar); put the tab back on Offerings.
             if signedBackIn { _ = await p.navigate(b.url + "offerings") }
@@ -509,15 +552,76 @@ enum SchoolJS {
         }
     }
 
-    /// Picks what to sign up for and does it. Returns when to check next, if sooner than usual.
+    /// Picks what to sign up for and does it: each day you planned in the calendar, then your academy on every other day.
+    /// Returns when to check next, if sooner than usual.
     private func act(_ list: [SchoolOffering], _ p: SchoolPage, _ b: Base, _ s: SchoolSettings) async -> Double? {
-        let c = Self.choose(list, rule: s.rule, done: done, today: Self.dayKey(Date()))
-        if c.satisfied, !s.rule.keepWatching {
-            report("\(c.note), so Onyx stopped watching.", problem: false); turnOff(); return nil
+        let today = Self.dayKey(Date())
+        func lower(_ n: String) -> String { n.prefix(1).lowercased() + n.dropFirst() }
+        func recent(_ o: SchoolOffering) -> Bool { failedAt[o.id].map { Date().timeIntervalSince($0) < 300 } ?? false }   // it said no a moment ago
+        var waiting: [String] = [], spoke = false, next: Double?
+        for plan in openPlans {
+            let c = Self.choose(list, rule: plan.rule(replace: s.rule.replace), done: done, today: today)
+            if c.satisfied { finish(plan.date); continue }
+            guard let pick = c.pick else { waiting.append("\(plan.label) on \(Self.dayText(plan.date)): \(lower(c.note))"); continue }
+            if recent(pick) { spoke = true; continue }
+            spoke = true
+            if await signUp(pick, p, b, s) { finish(plan.date) }
         }
-        guard let pick = c.pick else { report("Watching for \(s.rule.label): \(c.note.prefix(1).lowercased() + c.note.dropFirst()).", problem: false); return nil }
-        if let f = failedAt[pick.id], Date().timeIntervalSince(f) < 300 { return nil }   // it said no a moment ago
-        return await signUp(pick, p, b, s) && s.rule.keepWatching ? 3 : nil
+        var over = !s.rule.isSet, note: String?   // over: nothing more to do for the teacher and words above
+        if s.rule.isSet {
+            let planned = Set(plans.map(\.date))   // a day you planned has its own academy
+            let c = Self.choose(list.filter { !planned.contains($0.date) }, rule: s.rule, done: done, today: today)
+            if c.satisfied, !s.rule.keepWatching { over = true; note = c.note }
+            else if let pick = c.pick {
+                spoke = true
+                if !recent(pick), await signUp(pick, p, b, s) { if s.rule.keepWatching { next = 3 } else { over = true } }
+            } else { waiting.insert("\(s.rule.label): \(lower(c.note))", at: 0) }
+        }
+        if over && openPlans.isEmpty {
+            if !spoke { report("\(note ?? "You're signed up for every day you planned"), so Onyx stopped watching.", problem: false) }
+            turnOff(); return nil
+        }
+        if !spoke, !waiting.isEmpty {
+            report("Watching for " + waiting.prefix(2).joined(separator: "; ") + (waiting.count > 2 ? "; and \(waiting.count - 2) more" : "") + ".", problem: false)
+        }
+        return next
+    }
+
+    /// What's posted, for the calendar in Settings (one teacher's list only replaces that teacher's offerings).
+    private func remember(_ list: [SchoolOffering], teacher: String) {
+        let new = (teacher.isEmpty ? [] : offerings.filter { $0.teacherID != teacher }) + list
+        if new != offerings { offerings = new }
+    }
+
+    /// Everything posted, for the calendar in Settings. Never opens a tab.
+    func loadOfferings() async {
+        let s = settings
+        guard let b = Self.base(s.link), !loadingOfferings, !checking, !PrivateGuard.active else { return }
+        loadingOfferings = true; defer { loadingOfferings = false }
+        if case .value(let raw) = await page(s, b).run(SchoolJS.search(b.path, teacher: ""), poll: SchoolJS.poll, openURL: ""),
+           let res = Self.object(raw), !Self.signedOut(res, path: b.path), let list = Self.offerings(res["body"] as? String ?? "") {
+            remember(list, teacher: "")
+        }
+    }
+
+    /// Puts the tab on Offerings (if it's somewhere else, like TeachMore's calendar) and waits until the page has loaded.
+    private func onOfferings(_ p: SchoolPage, _ b: Base) async -> Bool {
+        let want = (b.path + "offerings").lowercased()
+        var sent = false
+        for _ in 0..<30 {   // about 15 seconds
+            if case .value(let raw) = await p.run(SchoolJS.here, poll: SchoolJS.poll, openURL: ""), let h = Self.object(raw) {
+                let path = (URLComponents(string: h["url"] as? String ?? "")?.path ?? "").lowercased()
+                if path == want || path == want + "/" {
+                    if h["ready"] as? String == "complete" { return true }
+                } else if !sent {
+                    sent = true
+                    guard case .value = await p.navigate(b.url + "offerings") else { return false }
+                    continue
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        return false
     }
 
     /// Takes the tab through "Sign in with Google" in one go: picks your school account if Google asks, and comes back
@@ -592,6 +696,11 @@ enum SchoolJS {
 
     private func signUp(_ o: SchoolOffering, _ p: SchoolPage, _ b: Base, _ s: SchoolSettings) async -> Bool {
         report("Signing you up for “\(o.title)” on \(o.day)…", problem: false)
+        // Always from the Offerings page, never TeachMore's calendar: a sign-up made there can say it worked when it didn't.
+        guard await onOfferings(p, b) else {
+            failedAt[o.id] = Date(); report("Couldn't get your TeachMore tab onto Offerings to sign up for “\(o.title)”. Onyx tries again in 5 minutes.", problem: true)
+            return false
+        }
         posts += 1
         guard case .value(let raw) = await p.run(SchoolJS.signUp(b.path, o), poll: SchoolJS.poll, openURL: ""), let res = Self.object(raw) else {
             failedAt[o.id] = Date(); report("Couldn't reach TeachMore to sign up for “\(o.title)”. Onyx tries again in 5 minutes.", problem: true)
@@ -621,7 +730,6 @@ enum SchoolJS {
         if testSettings == nil {
             NotchModel.shared.flash(.message(icon: "checkmark.seal.fill", text: "Signed up: \(Self.short(o.title)) · \(o.day)", tint: .green), for: 6)
         }
-        if !s.rule.keepWatching { turnOff() }
         return true
     }
 
@@ -651,6 +759,7 @@ enum SchoolJS {
         warned.removeAll()
         report("Connected\(student.map { " as \($0)" } ?? ""). \(teachers.count) teachers.", problem: false)
         save()
+        await loadOfferings()
     }
 
     // MARK: Helpers (pure, so the self-test can check them)
@@ -755,7 +864,7 @@ struct SchoolSetupSteps: View {
             step(1, "Sign in to TeachMore in \(b.name), the way you always do.")
             step(2, "Turn on \(b.javaScriptSetting).")
             step(3, "Paste your TeachMore link below (the sign-in page is fine) and press Connect. macOS asks once to let Onyx control \(b.name): click Allow.")
-            step(4, "Pick the teacher (★ marks yours) or words in the academy's title, then turn on Watch TeachMore and sign me up.")
+            step(4, "Pick the teacher (★ marks yours) or words in the academy's title, or plan days in the calendar below, then turn on Watch TeachMore and sign me up.")
         }
     }
 
@@ -781,7 +890,7 @@ struct SchoolSignupSection: View {
     @AppStorage(SchoolSignup.replaceKey) private var replace = true
 
     private var browserName: String { (SchoolBrowser(rawValue: browser) ?? .chrome).name }
-    private var ready: Bool { SchoolSignup.base(link) != nil && (!teacher.isEmpty || !words.trimmingCharacters(in: .whitespaces).isEmpty) }
+    private var ready: Bool { SchoolSignup.base(link) != nil && (!teacher.isEmpty || !words.trimmingCharacters(in: .whitespaces).isEmpty || !school.openPlans.isEmpty) }
 
     var body: some View {
         Section {
@@ -817,6 +926,7 @@ struct SchoolSignupSection: View {
                 teacherName = school.teachers.first { $0.id == id }.map { $0.name.replacingOccurrences(of: #"\s*\(Period.*\)$"#, with: "", options: .regularExpression) } ?? ""
             }
             TextField("Title has the words", text: $words, prompt: Text("Optional, like “robotics”"))
+            if !school.plans.isEmpty { Text("The teacher and words cover every day you haven't planned in the calendar below.").font(.caption).foregroundStyle(.secondary) }
             Toggle("Only on a certain day", isOn: Binding(get: { !date.isEmpty }, set: { date = $0 ? SchoolSignup.dayKey(Date().addingTimeInterval(86400)) : "" }))
             if !date.isEmpty {
                 DatePicker("Day", selection: Binding(get: { SchoolSignup.date(date) ?? Date() }, set: { date = SchoolSignup.dayKey($0) }), displayedComponents: .date)
@@ -858,5 +968,165 @@ struct SchoolSignupSection: View {
         .onChange(of: browser) { _, _ in school.update() }
         .onChange(of: teacher) { _, _ in school.update() }
         .onChange(of: date) { _, _ in school.update() }
+    }
+}
+
+// MARK: - Settings › Academy Sign-Up › the calendar: a different academy for each day
+
+struct SchoolCalendarSection: View {
+    @ObservedObject var school = SchoolSignup.shared
+    @AppStorage(SchoolSignup.onKey) private var on = false
+    @AppStorage(SchoolSignup.linkKey) private var link = ""
+    @State private var from = SchoolCalendarSection.week(Date())   // five weeks from here, starting this week
+    @State private var picked: String?   // the day you pressed, "yyyy-MM-dd"
+    @State private var teacher = ""
+    @State private var words = ""
+
+    init(day: String? = nil) { _picked = State(initialValue: day) }
+
+    static func week(_ d: Date) -> Date { Calendar.current.dateInterval(of: .weekOfYear, for: d)?.start ?? Calendar.current.startOfDay(for: d) }
+
+    var body: some View {
+        Section {
+            grid
+            if let d = picked { day(d) }
+            if !on && !school.openPlans.isEmpty {
+                Text("Turn on Watch TeachMore and sign me up above so Onyx signs you up for these days.").font(.caption).foregroundStyle(.orange)
+            }
+        } header: { Text("Plan days in the calendar") } footer: {
+            Text("Press a day to choose its academy: one that's posted, or a teacher's (or words in the title) whenever it's posted for that day. Each day keeps its own choice. Onyx always signs you up from TeachMore's Offerings page, never from TeachMore's calendar, because a sign-up made there can say it worked when it didn't.")
+        }
+        .task { if school.offerings.isEmpty, SchoolSignup.base(link) != nil { await school.loadOfferings() } }
+    }
+
+    private var grid: some View {
+        let c = Calendar.current
+        let days = (0..<35).map { c.date(byAdding: .day, value: $0, to: from)! }
+        let today = SchoolSignup.dayKey(Date())
+        let symbols = c.shortWeekdaySymbols
+        let ordered = Array(symbols[(c.firstWeekday - 1)...] + symbols[..<(c.firstWeekday - 1)])
+        return VStack(spacing: 6) {
+            HStack {
+                Button { from = max(Self.week(Date()), c.date(byAdding: .day, value: -35, to: from)!) } label: { Image(systemName: "chevron.left") }
+                    .disabled(from <= Self.week(Date())).accessibilityLabel("Earlier weeks")
+                Text("\(days[0].formatted(.dateTime.month(.abbreviated).day())) – \(days[34].formatted(.dateTime.month(.abbreviated).day().year()))")
+                    .font(.headline).frame(maxWidth: .infinity)
+                Button { from = c.date(byAdding: .day, value: 35, to: from)! } label: { Image(systemName: "chevron.right") }.accessibilityLabel("Later weeks")
+                Button { Task { await school.loadOfferings() } } label: {
+                    if school.loadingOfferings { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise") }
+                }
+                .disabled(school.loadingOfferings || SchoolSignup.base(link) == nil).help("Load what's posted on TeachMore").accessibilityLabel("Load what's posted")
+            }
+            .buttonStyle(.borderless)
+            // Weekday names get negative ids so they never collide with the days.
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 4) {
+                ForEach(-7..<0, id: \.self) { i in Text(ordered[i + 7]).font(.caption2).foregroundStyle(.secondary) }
+                ForEach(0..<35, id: \.self) { i in
+                    let n = c.component(.day, from: days[i])
+                    cell(SchoolSignup.dayKey(days[i]), n == 1 || i == 0 ? days[i].formatted(.dateTime.month(.abbreviated).day()) : "\(n)", today)
+                }
+            }
+            HStack(spacing: 12) {
+                legend("star.fill", .orange, "Planned"); legend("checkmark.seal.fill", .green, "Signed up"); legend("circle.fill", .blue, "Posted")
+            }
+            .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func legend(_ icon: String, _ tint: Color, _ text: String) -> some View {
+        HStack(spacing: 3) { Image(systemName: icon).font(.system(size: 7)).foregroundStyle(tint); Text(text) }
+    }
+
+    private func cell(_ key: String, _ n: String, _ today: String) -> some View {
+        let plan = school.plans.first { $0.date == key }
+        let posted = school.offerings.filter { $0.date == key }
+        let enrolled = posted.contains(where: \.enrolled)
+        let past = key < today, sel = picked == key
+        return Button { choose(sel ? nil : key) } label: {
+            VStack(spacing: 2) {
+                Text(n).font(.system(size: 12, weight: key == today ? .bold : .regular))
+                    .foregroundStyle(key == today ? Color.red : past ? Color.secondary.opacity(0.5) : Color.primary)
+                Group {
+                    if let plan { Image(systemName: plan.done ? "checkmark.seal.fill" : "star.fill").foregroundStyle(plan.done ? .green : .orange) }
+                    else if enrolled { Image(systemName: "checkmark.seal.fill").foregroundStyle(.green) }
+                    else if !posted.isEmpty && !past { Image(systemName: "circle.fill").font(.system(size: 5)).foregroundStyle(.blue) }
+                    else { Color.clear }
+                }
+                .font(.system(size: 8)).frame(height: 9)
+            }
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .background(sel ? Color.accentColor.opacity(0.28) : plan != nil && !past ? (plan!.done ? Color.green : Color.orange).opacity(0.14) : Color.primary.opacity(past ? 0 : 0.04),
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).disabled(past)
+        .accessibilityLabel(SchoolSignup.dayText(key) + (plan.map { ", \($0.done ? "signed up" : "planned"): \($0.label)" } ?? (posted.isEmpty ? "" : ", \(posted.count) posted")))
+    }
+
+    private func choose(_ key: String?) {
+        picked = key
+        let plan = key.flatMap { k in school.plans.first { $0.date == k } }
+        teacher = plan?.offeringID.isEmpty == true ? plan?.teacherID ?? "" : ""
+        words = plan?.offeringID.isEmpty == true ? plan?.words ?? "" : ""
+    }
+
+    private func day(_ key: String) -> some View {
+        let plan = school.plans.first { $0.date == key }
+        let posted = school.offerings.filter { $0.date == key }.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        let w = words.trimmingCharacters(in: .whitespaces)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(SchoolSignup.date(key)?.formatted(.dateTime.weekday(.wide).month(.wide).day()) ?? key).font(.headline)
+                Spacer()
+                if plan != nil { Button("Clear This Day") { school.unplan(key); choose(key) } }
+            }
+            if let plan {
+                Label(plan.done ? "Signed up: \(plan.label)" : "Planned: \(plan.label)", systemImage: plan.done ? "checkmark.seal.fill" : "star.fill")
+                    .foregroundStyle(plan.done ? .green : .orange)
+            }
+            if posted.isEmpty {
+                Text(school.offerings.isEmpty ? "Press ↻ above to load what's posted." : "Nothing's posted for this day yet.").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(posted, id: \.id) { o in row(o, key, plan) }
+            }
+            Text("Or whenever it's posted for this day:").font(.caption).foregroundStyle(.secondary).padding(.top, 2)
+            HStack {
+                Picker("Teacher", selection: $teacher) {
+                    Text("Any teacher").tag("")
+                    if !teacher.isEmpty && !school.teachers.contains(where: { $0.id == teacher }) { Text(plan?.teacherName ?? teacher).tag(teacher) }
+                    ForEach(school.teachers) { t in Text(t.mine ? "★ \(t.name)" : t.name).tag(t.id) }
+                }
+                .labelsHidden().fixedSize()
+                TextField("Title words", text: $words, prompt: Text("Title words (optional)")).labelsHidden()
+                Button("Plan") {
+                    school.plan(SchoolPlan(date: key, teacherID: teacher, teacherName: name(teacher, fallback: plan?.teacherName ?? ""), words: w))
+                }
+                .disabled(teacher.isEmpty && w.isEmpty)
+            }
+            if school.teachers.isEmpty { Text("Press Connect above to load the teacher list.").font(.caption).foregroundStyle(.secondary) }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func row(_ o: SchoolOffering, _ key: String, _ plan: SchoolPlan?) -> some View {
+        let chosen = plan?.offeringID == o.id
+        let note = o.enrolled ? "you're signed up" : o.unavailable ? "only for the teacher's students" : o.full ? "full: Onyx waits for a seat"
+                 : o.hasAppt && o.apptType == 1 ? "a teacher assigned you somewhere else" : ""
+        return HStack(spacing: 8) {
+            Image(systemName: chosen ? "star.fill" : o.enrolled ? "checkmark.seal.fill" : "circle").foregroundStyle(chosen ? .orange : o.enrolled ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(o.title).lineLimit(1)
+                Text([o.teacher, note].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            if !o.enrolled && !chosen {
+                Button("Choose") { school.plan(SchoolPlan(date: key, teacherID: o.teacherID, teacherName: o.teacher, offeringID: o.id, title: o.title)) }
+                    .disabled(o.unavailable || (o.hasAppt && o.apptType == 1))
+            }
+        }
+    }
+
+    private func name(_ id: String, fallback: String) -> String {
+        school.teachers.first { $0.id == id }.map { $0.name.replacingOccurrences(of: #"\s*\(Period.*\)$"#, with: "", options: .regularExpression) } ?? fallback
     }
 }

@@ -946,10 +946,24 @@ enum ViewShot {
                 host.cacheDisplay(in: host.bounds, to: rep)
                 try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
             }
+            // The academy calendar reads a stand-in TeachMore (Tests/mockteachmore.py on 8767), never your browser, and saves nothing.
+            let school = SchoolSignup.shared, page = WebSchoolPage()
+            school.testPage = page
+            school.testSettings = SchoolSettings(on: true, link: "http://127.0.0.1:8767/lincoln/students/", rule: SchoolRule(teacherID: "305", teacherName: "Park, Julia"))
+            for x in school.plans { school.unplan(x.date) }
+            func ahead(_ n: Int) -> String { SchoolSignup.dayKey(Calendar.current.date(byAdding: .day, value: n, to: Date())!) }
+            Task {
+                await page.load(URL(string: "http://127.0.0.1:8767/lincoln/students/offerings")!)
+                await school.loadOfferings()
+                school.plan(SchoolPlan(date: ahead(1), teacherID: "200101", teacherName: "Dana Okafor", offeringID: "2750", title: "AP Physics Academy", done: true))
+                school.plan(SchoolPlan(date: ahead(3), teacherID: "tbrooks", teacherName: "Theo Brooks", offeringID: "3942", title: "Government - Room B4"))
+                school.plan(SchoolPlan(date: ahead(8), teacherID: "305", teacherName: "Park, Julia"))
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {   // let the pages load their lists first
                 shoot("calmail", CalendarMailSettings(), CGSize(width: 532, height: 1100))
                 shoot("signin", MailSignInSheet(), CGSize(width: 440, height: 330))
                 shoot("school", Form { SchoolSetupSteps(); SchoolSignupSection() }.formStyle(.grouped), CGSize(width: 532, height: 900))
+                shoot("school-cal", Form { SchoolCalendarSection(day: ahead(3)) }.formStyle(.grouped), CGSize(width: 532, height: 720))
                 shoot("create", CreateLoopSheet(close: {}), CGSize(width: 640, height: 640))
                 for t in [2.0, 4.8] {
                     save("tour-calmail-\(Int(t * 10))", TourDemo(step: .calendarMail, t: t).frame(height: 250).frame(maxWidth: .infinity)
@@ -1379,6 +1393,9 @@ enum SchoolTest {
               pick([o("2", "Robotics", "2026-10-07", tid: "1"), o("3", "Robotics Club & Build Night", "2026-10-08", tid: "2")], SchoolRule(words: "robotics build")) == "3"
               && pick([o("2", "Ayuda de Español", "2026-10-07", tid: "1")], SchoolRule(words: "espanol")) == "2" && !SchoolRule().isSet)
         check("only a certain day", pick([o("2", "R", "2026-10-07"), o("3", "R", "2026-10-09")], SchoolRule(teacherID: "305", date: "2026-10-09")) == "3")
+        check("a planned day: just the academy you chose there, or that teacher's on that day",
+              pick([o("4", "R2", "2026-10-09"), o("3", "R", "2026-10-09"), o("2", "R", "2026-10-07")], SchoolPlan(date: "2026-10-09", teacherID: "305", offeringID: "3", title: "R").rule(replace: true)) == "3"
+              && pick([o("2", "R", "2026-10-07", tid: "7"), o("5", "R", "2026-10-09", tid: "7"), o("6", "R", "2026-10-09")], SchoolPlan(date: "2026-10-09", teacherID: "7").rule(replace: true)) == "5")
         let sat = SchoolSignup.choose([o("2", "R", "2026-10-07", enrolled: true)], rule: rule, done: [], today: today)
         check("once you're in, it's done", sat.satisfied && sat.pick == nil)
         var again = rule; again.keepWatching = true
@@ -1403,10 +1420,12 @@ enum SchoolTest {
         let school = SchoolSignup.shared
         school.testPage = page
         school.testSettings = SchoolSettings(on: true, link: "http://127.0.0.1:8767/lincoln/students/dashboard", browser: .chrome, rule: rule)
+        for x in school.plans { school.unplan(x.date) }   // only in memory: nothing is saved in the test
 
         await school.connect()
         check("connects: your name and the teacher list, yours first (\(school.student ?? "nil"), \(school.teachers.map(\.id)))",
               school.student == "Sam" && school.teachers.count == 5 && school.teachers.first?.id == "200103" && school.teachers.first?.mine == true)
+        check("loads what's posted, for the calendar (\(school.offerings.count))", school.offerings.count == 3)
 
         await school.check(force: true)
         let none = await posts()
@@ -1499,6 +1518,38 @@ enum SchoolTest {
         mlog = await mock("log")
         check("two accounts and none set: doesn't guess, asks you (\(school.status ?? ""))",
               (mlog["picked"] as? String ?? "").isEmpty && school.status?.contains("Google asks which account") == true)
+
+        // Days planned in the calendar, each with its own academy, with the tab on TeachMore's calendar page.
+        func ahead(_ n: Int) -> String { SchoolSignup.dayKey(Calendar.current.date(byAdding: .day, value: n, to: Date())!) }
+        _ = await mock("set?name=days&reset=1")
+        await page.load(URL(string: "http://127.0.0.1:8767/lincoln/students/dashboard")!)
+        school.testSettings?.on = true; school.testSettings?.rule = rule
+        school.plan(SchoolPlan(date: ahead(2), teacherID: "200103", teacherName: "Elena Moreau", offeringID: "6002", title: "Chess Club"))
+        school.plan(SchoolPlan(date: ahead(4), teacherID: "200103", teacherName: "Moreau, Elena"))
+        await school.check(force: true)
+        p = await posts()
+        check("planned days: each day's own academy in one check, and the teacher above left alone on those days (\(p.map { $0["offeringID"] as? String ?? "" }), \(school.status ?? ""))",
+              p.count == 2 && Set(p.compactMap { $0["offeringID"] as? String }) == ["6002", "6004"] && p.allSatisfy { $0["ok"] as? Bool == true }
+              && school.plans.allSatisfy(\.done) && school.testSettings?.on == true)
+        check("signs up from the Offerings page, never TeachMore's calendar (\(p.map { $0["page"] as? String ?? "" }))",
+              p.allSatisfy { $0["page"] as? String == "/lincoln/students/offerings" } && page.web.url?.path == "/lincoln/students/offerings")
+        _ = await mock("set?name=days&reset=1")
+        for x in school.plans { school.unplan(x.date) }
+        school.testSettings?.rule = SchoolRule()
+        school.plan(SchoolPlan(date: ahead(2), teacherID: "305", teacherName: "Park, Julia"))
+        school.plan(SchoolPlan(date: ahead(6), teacherID: "305", teacherName: "Park, Julia"))
+        await school.check(force: true)
+        p = await posts()
+        let signed = p.count == 1 && p[0]["offeringID"] as? String == "6001" && school.testSettings?.on == true
+        await school.check(force: true)
+        check("a planned day that isn't posted yet: keeps watching for it (\(school.status ?? ""))",
+              signed && school.status?.contains("Park, Julia on \(SchoolSignup.dayText(ahead(6))): not posted yet") == true && school.testSettings?.on == true)
+        school.unplan(ahead(6))
+        school.plan(SchoolPlan(date: ahead(4), teacherID: "305", teacherName: "Park, Julia"))
+        await school.check(force: true)
+        p = await posts()
+        check("only planned days: stops watching once every one is signed up (\(school.status ?? ""))",
+              p.count == 2 && p[1]["offeringID"] as? String == "6003" && school.testSettings?.on == false)
         finish()
     }
 }

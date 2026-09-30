@@ -32,6 +32,8 @@ SCENARIOS = {
     "restricted": [off("5004", "Robotics Club", "305", "Park", "Julia", d(10), "10", 9, restricted=True)],
     "stale": [off("5005", "Robotics Club", "305", "Park", "Julia", d(9), "10", 4)],
     "conflict": [off("5006", "Robotics Club", "305", "Park", "Julia", d(11), "10", 4, appt=3, existing="Castillo-Reyes, Ana")],
+    "days": [off("6001", "Robotics Club", "305", "Park", "Julia", d(2), "20", 5), off("6002", "Chess Club", "200103", "Moreau", "Elena", d(2), "20", 5),
+             off("6003", "Robotics Club", "305", "Park", "Julia", d(4), "20", 5), off("6004", "Chess Club", "200103", "Moreau", "Elena", d(4), "20", 5)],
     "signedout": [],
     "chooser": [],
 }
@@ -120,7 +122,7 @@ class H(BaseHTTPRequestHandler):
         log("POST %s %s token=%s" % (self.path, body, self.headers.get("X-CSRF-TOKEN")))
         if u.path != B + "appointment/create": return self.send(404, "not found", "text/plain")
         f = dict(urllib.parse.parse_qsl(body, keep_blank_values=True))
-        p = dict(f, token=self.headers.get("X-CSRF-TOKEN"), ajax=self.headers.get("X-Requested-With") == "XMLHttpRequest",
+        p = dict(f, token=self.headers.get("X-CSRF-TOKEN"), page=urllib.parse.urlparse(self.headers.get("Referer", "")).path, ajax=self.headers.get("X-Requested-With") == "XMLHttpRequest",
                  form=self.headers.get("Content-Type", "").startswith("application/x-www-form-urlencoded"), ok=False)
         state["posts"].append(p)
         if p["token"] != state["token"]:

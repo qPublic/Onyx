@@ -15,7 +15,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .apple: "Apple on-device (free, private)"
         case .anthropic: "Claude (Anthropic)"
         case .openai: "ChatGPT (OpenAI)"
-        case .gemini: "Gemini (Google)"
+        case .gemini: "Gemini (Google, free with your Google account)"
         case .xai: "Grok (xAI)"
         case .mistral: "Mistral"
         case .deepseek: "DeepSeek"
@@ -284,7 +284,15 @@ struct AIModelSettings: View {
                     if hasKey { Button("Remove", role: .destructive) { Keychain.delete(CloudAI.keyAccount(p)); hasKey = false; models = [] } }
                 }
             }
-            if let page = p.keyPage { Link(p == .ollama ? "Get Ollama" : "Get a \(p.short) API key", destination: page).font(.caption) }
+            if let page = p.keyPage { Link(p == .ollama ? "Get Ollama" : p == .gemini ? "Get a free Gemini key with your Google account" : "Get a \(p.short) API key", destination: page).font(.caption) }
+            if p == .anthropic {
+                Text("Claude needs an API key, and Anthropic charges for it. Signing in with your Claude or Google account only works in Anthropic's own apps, not in other apps like Onyx. For a big model that's free, pick Gemini and get a free key with your Google account.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if p == .gemini {
+                Text("Free: sign in to Google AI Studio with your Google account, press Create API key and paste it here. The free tier has daily limits, and Google may use what you send it to improve its models.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             HStack {
                 TextField("Model", text: $model).onSubmit(saveModel)
                 if !models.isEmpty {

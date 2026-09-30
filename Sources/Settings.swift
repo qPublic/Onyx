@@ -191,7 +191,7 @@ struct SettingsView: View {
         case .widgets: WidgetsSettings()
         case .live: LiveSettings()
         case .accounts: CalendarMailSettings()
-        case .school: Form { SchoolSetupSteps(); SchoolSignupSection() }.formStyle(.grouped)
+        case .school: Form { SchoolSetupSteps(); SchoolSignupSection(); SchoolCalendarSection() }.formStyle(.grouped)
         case .optimize: OptimizeSettings()
         case .fun: FunSettings()
         case .lock: LockSettings()

@@ -18,12 +18,20 @@ You need a Mac with Apple silicon (M1 or later) running macOS 26 or later. Onyx 
 
 ### 3. Open Onyx the first time
 
-Onyx isn't notarized by Apple yet, so the first time you open it macOS says it can't check the app. You only have to allow it once:
+Onyx isn't notarized by Apple yet, so macOS blocks it the first time. On macOS 26 and later it usually says **"Onyx is damaged and can't be opened"**. Onyx isn't damaged; that's just how macOS now treats apps it can't check. You only have to allow it once:
 
-1. Open **Onyx** from your Applications folder. When macOS says it was blocked, click **Done**.
-2. Open **System Settings › Privacy & Security** and scroll down to **Security**.
-3. Next to "Onyx was blocked to protect your Mac", click **Open Anyway**, then enter your Mac password.
-4. If macOS asks one last time, click **Open Anyway** again.
+1. Don't click **Move to Trash**. Click **Cancel** or **Done** instead.
+2. Open **Terminal** (in Applications › Utilities, or search for it with ⌘Space).
+3. Paste this line and press Return:
+
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/Onyx.app
+   ```
+
+   It prints nothing when it works. It only removes the "downloaded from the internet" tag from Onyx; it doesn't change any Mac security setting.
+4. Open **Onyx** from your Applications folder again. It opens normally from now on, and updates install without this step.
+
+Some Macs show "Onyx Not Opened" instead, with an **Open Anyway** button in **System Settings › Privacy & Security**. That works too, but the Terminal line above works on every Mac.
 
 Onyx has no Dock icon. It lives in your notch and in the menu bar, at the capsule icon.
 
@@ -67,6 +75,7 @@ Some features need a little setup in Settings first:
 
 ### Something not working?
 
+- **"Onyx is damaged" or "can't be opened":** run the Terminal line in [step 3](#3-open-onyx-the-first-time), then open Onyx again.
 - **The notch doesn't open:** make sure Onyx is running (look for the capsule in the menu bar). If it isn't, open it from Applications.
 - **A feature does nothing:** it probably needs a permission. Open **System Settings › Privacy & Security**, find the matching section (for example Accessibility or Screen Recording), and turn Onyx on.
 - **Still stuck:** menu bar icon › **Report a Problem…** opens a GitHub issue you can read before sending.

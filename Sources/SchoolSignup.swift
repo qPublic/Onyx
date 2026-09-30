@@ -85,13 +85,14 @@ enum SchoolBrowser: String, CaseIterable, Identifiable {
 }
 
 struct SchoolSettings {
-    var on = false, link = "", browser = SchoolBrowser.chrome, rule = SchoolRule()
+    var on = false, link = "", browser = SchoolBrowser.chrome, rule = SchoolRule(), google = ""
     static func load() -> SchoolSettings {
         SchoolSettings(on: Prefs.bool(SchoolSignup.onKey), link: Prefs.string(SchoolSignup.linkKey),
                        browser: SchoolBrowser(rawValue: Prefs.string(SchoolSignup.browserKey)) ?? .chrome,
                        rule: SchoolRule(teacherID: Prefs.string(SchoolSignup.teacherKey), teacherName: Prefs.string(SchoolSignup.teacherNameKey),
                                         words: Prefs.string(SchoolSignup.wordsKey), date: Prefs.string(SchoolSignup.dateKey),
-                                        keepWatching: Prefs.bool(SchoolSignup.repeatKey), replace: Prefs.bool(SchoolSignup.replaceKey)))
+                                        keepWatching: Prefs.bool(SchoolSignup.repeatKey), replace: Prefs.bool(SchoolSignup.replaceKey)),
+                       google: Prefs.string(SchoolSignup.googleKey))
     }
 }
 
@@ -103,6 +104,10 @@ enum SchoolPageResult: Equatable { case value(String), noTab, opened, reloaded, 
     /// Runs `start` in the TeachMore page, then `poll` until it returns something (about 20 seconds at most).
     /// `openURL` (if not empty) is opened in a background tab when no TeachMore tab is open.
     func run(_ start: String, poll: String, openURL: String) async -> SchoolPageResult
+    /// Sends the TeachMore tab to `url` (to sign in again with Google).
+    func navigate(_ url: String) async -> SchoolPageResult
+    /// On Google's "Choose an account" page, clicks `email` (or the only account there). Never types anything.
+    func chooseGoogleAccount(_ email: String) async -> SchoolPageResult
 }
 
 /// Your signed-in tab in Chrome, Brave, Edge or Safari, through AppleScript. Never launches or brings the browser forward.
@@ -155,7 +160,67 @@ struct BrowserTab: SchoolPage {
             return "ONYX_NO_TAB"
         end run
         """
-        let r = await Shell.read("/usr/bin/osascript", ["-e", script, key, start, poll, openURL])
+        return Self.result(await Shell.read("/usr/bin/osascript", ["-e", script, key, start, poll, openURL]))
+    }
+
+    func navigate(_ url: String) async -> SchoolPageResult {
+        guard browser.running else { return .notRunning }
+        let script = """
+        on run argv
+            set tabKey to item 1 of argv
+            set newURL to item 2 of argv
+            with timeout of 20 seconds
+                tell application id "\(browser.rawValue)"
+                    repeat with w in windows
+                        repeat with t in tabs of w
+                            set u to ""
+                            try
+                                set u to (URL of t) as text
+                            end try
+                            if u contains ("//" & tabKey) or u contains ("." & tabKey) then
+                                set URL of t to newURL
+                                return "ONYX_DONE"
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+            end timeout
+            return "ONYX_NO_TAB"
+        end run
+        """
+        return Self.result(await Shell.read("/usr/bin/osascript", ["-e", script, key, url]))
+    }
+
+    func chooseGoogleAccount(_ email: String) async -> SchoolPageResult {
+        guard browser.running else { return .notRunning }
+        let exec = browser == .safari ? "do JavaScript js in t" : "execute t javascript js"
+        let script = """
+        on run argv
+            set js to item 1 of argv
+            with timeout of 20 seconds
+                tell application id "\(browser.rawValue)"
+                    repeat with w in windows
+                        repeat with t in tabs of w
+                            set u to ""
+                            try
+                                set u to (URL of t) as text
+                            end try
+                            if u starts with "https://accounts.google.com/" then
+                                set r to \(exec)
+                                if r is missing value then return "none"
+                                return r
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+            end timeout
+            return "ONYX_NO_TAB"
+        end run
+        """
+        return Self.result(await Shell.read("/usr/bin/osascript", ["-e", script, SchoolJS.pickAccount(email)]))
+    }
+
+    private static func result(_ r: (status: Int32, output: String)) -> SchoolPageResult {
         let out = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard r.status == 0 else {
             if out.contains("Allow JavaScript") || out.contains("JavaScript through AppleScript is turned off") { return .jsOff }
@@ -187,6 +252,7 @@ struct BrowserTab: SchoolPage {
     func webView(_ w: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { loaded?.resume(); loaded = nil }
 
     func run(_ start: String, poll: String, openURL: String) async -> SchoolPageResult {
+        guard web.url?.path.contains("/students/") == true else { return .noTab }   // like a tab that's gone to Google
         guard (try? await web.evaluateJavaScript(start)) is String else { return .failed("The page didn't run the script.") }
         for _ in 0..<80 {
             if let r = try? await web.evaluateJavaScript(poll) as? String, !r.isEmpty { return .value(r) }
@@ -194,12 +260,40 @@ struct BrowserTab: SchoolPage {
         }
         return .failed("TeachMore didn't answer in time.")
     }
+
+    func navigate(_ url: String) async -> SchoolPageResult {
+        guard let u = URL(string: url) else { return .failed("Bad link") }
+        await load(u)
+        return .value("ONYX_DONE")
+    }
+
+    func chooseGoogleAccount(_ email: String) async -> SchoolPageResult {
+        guard web.url?.path.contains("google") == true, let r = try? await web.evaluateJavaScript(SchoolJS.pickAccount(email)) as? String else { return .noTab }
+        if r == "clicked" {   // wait for Google to send it back to TeachMore
+            for _ in 0..<40 where !(web.url?.path.contains("/students/") == true && !web.isLoading) { try? await Task.sleep(for: .milliseconds(150)) }
+        }
+        return .value(r)
+    }
 }
 
 // MARK: The JavaScript: the same requests TeachMore's own page makes
 
 enum SchoolJS {
     static let poll = "(function(){var x=window.__onyxTM;return (x&&x.state!=='pending')?JSON.stringify(x):''})()"
+
+    /// Google's "Choose an account": clicks the matching account (or the only one listed). Stops if Google wants a password.
+    static func pickAccount(_ email: String) -> String {
+        """
+        (function(E){E=(E||'').trim().toLowerCase();
+        if(document.querySelector('input[type=password]'))return 'password';
+        var els=[].slice.call(document.querySelectorAll('[data-identifier],[data-email]'));
+        var ids=els.map(function(e){return (e.getAttribute('data-identifier')||e.getAttribute('data-email')||'').toLowerCase();});
+        var uniq=ids.filter(function(x,i){return x&&ids.indexOf(x)===i;});
+        var i=E?ids.indexOf(E):(uniq.length===1?ids.indexOf(uniq[0]):-1);
+        if(i<0)return ids.length?'nomatch':'none';
+        els[i].click();return 'clicked';})(\(lit(email)))
+        """
+    }
 
     /// A JavaScript string literal.
     static func lit(_ s: String) -> String {
@@ -256,7 +350,7 @@ enum SchoolJS {
     static let shared = SchoolSignup()
     nonisolated static let onKey = "school.on", linkKey = "school.link", browserKey = "school.browser", teacherKey = "school.teacherID",
                            teacherNameKey = "school.teacherName", wordsKey = "school.words", dateKey = "school.date",
-                           repeatKey = "school.repeat", replaceKey = "school.replace"
+                           repeatKey = "school.repeat", replaceKey = "school.replace", googleKey = "school.google"
 
     @Published private(set) var status: String?
     @Published private(set) var problem = false
@@ -276,6 +370,8 @@ enum SchoolJS {
     private var failedAt: [String: Date] = [:]
     private var warned = Set<String>()    // notch warnings already shown; cleared once a check works
     private var lastOpened: Date?
+    private var reauthTries = 0           // times Onyx sent the tab to "Sign in with Google" since the last check that worked
+    private var pickTries = 0             // times it picked your account on Google's "Choose an account"
     private var timer: Timer?
     private var file: URL { Prefs.supportDir.appendingPathComponent("school-signups.json") }
 
@@ -341,18 +437,34 @@ enum SchoolJS {
             if settings.on && testPage == nil { schedule(after: next) }
         }
         let p = page(s, b)
-        let openURL = (lastOpened.map { Date().timeIntervalSince($0) > 1800 } ?? true) ? b.url + "offerings" : ""   // at most one new tab every half hour
+        // At most one new tab every half hour, and none while a Google sign-in is under way.
+        let openURL = reauthTries == 0 && (lastOpened.map { Date().timeIntervalSince($0) > 1800 } ?? true) ? b.url + "offerings" : ""
         let r = await p.run(SchoolJS.search(b.path, teacher: s.rule.teacherID), poll: SchoolJS.poll, openURL: openURL)
-        guard case .value(let raw) = r else { next = trouble(r, s); return }
+        guard case .value(let raw) = r else {
+            // The tab went to Google's "Choose an account" after Onyx signed you back in: pick your school account there.
+            if r == .noTab, reauthTries > 0, pickTries < 2, case .value("clicked") = await p.chooseGoogleAccount(s.google) {
+                pickTries += 1
+                report("Picking your Google account to sign back in to TeachMore…", problem: false); next = 15; return
+            }
+            next = trouble(r, s); return
+        }
         guard let res = Self.object(raw), !Self.signedOut(res), let list = Self.offerings(res["body"] as? String ?? "") else {
             if let res = Self.object(raw), Self.signedOut(res) {
-                report("TeachMore signed you out. Sign in again in \(s.browser.name) and Onyx carries on.", problem: true)
-                warn("signedOut", "Sign in to TeachMore again so Onyx can sign you up")
-                next = 300
+                // TeachMore only signs in with Google, and your browser is already signed in to Google: going through
+                // "Sign in with Google" usually lands straight back on TeachMore, signed in. Twice at most.
+                if reauthTries < 2, case .value = await p.navigate(b.url + "auth/google") {
+                    reauthTries += 1
+                    report("TeachMore signed you out, so Onyx is signing you back in with Google…", problem: false)
+                    next = 15
+                } else {
+                    report("TeachMore signed you out and Google needs you to finish signing in. Sign in to TeachMore once in \(s.browser.name) and Onyx carries on.", problem: true)
+                    warn("signedOut", "Sign in to TeachMore again so Onyx can sign you up")
+                    next = 300
+                }
             } else { report("TeachMore sent something Onyx didn't understand. It tries again soon.", problem: true); next = 120 }
             return
         }
-        warned.removeAll()
+        warned.removeAll(); reauthTries = 0; pickTries = 0
         let c = Self.choose(list, rule: s.rule, done: done, today: Self.dayKey(Date()))
         if c.satisfied, !s.rule.keepWatching {
             report("\(c.note), so Onyx stopped watching.", problem: false); turnOff(); return
@@ -368,6 +480,9 @@ enum SchoolJS {
         case .notRunning:
             report("Open \(s.browser.name) and sign in to TeachMore. Onyx checks again in 2 minutes.", problem: true)
             warn("notRunning", "Open \(s.browser.name) so Onyx can watch TeachMore"); return 120
+        case .noTab where reauthTries > 0:   // the tab is on Google's sign-in page
+            report("Finish signing in with Google in \(s.browser.name). Onyx sent your TeachMore tab there because TeachMore signed you out." + (s.google.isEmpty ? " Add your school Google account in Settings › Academy Sign-Up so Onyx can pick it next time." : ""), problem: true)
+            warn("google", "Finish signing in to TeachMore in \(s.browser.name)"); return 60
         case .noTab:
             report("Open a \(s.browser.name) window with TeachMore in it.", problem: true); return 120
         case .opened:
@@ -563,6 +678,7 @@ struct SchoolSignupSection: View {
     @AppStorage(SchoolSignup.onKey) private var on = false
     @AppStorage(SchoolSignup.linkKey) private var link = ""
     @AppStorage(SchoolSignup.browserKey) private var browser = SchoolBrowser.chrome.rawValue
+    @AppStorage(SchoolSignup.googleKey) private var google = ""
     @AppStorage(SchoolSignup.teacherKey) private var teacher = ""
     @AppStorage(SchoolSignup.teacherNameKey) private var teacherName = ""
     @AppStorage(SchoolSignup.wordsKey) private var words = ""
@@ -581,6 +697,11 @@ struct SchoolSignupSection: View {
             }
             Picker("Browser", selection: $browser) {
                 ForEach(SchoolBrowser.allCases.filter { $0.installed || $0.rawValue == browser }) { Text($0.name).tag($0.rawValue) }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                TextField("School Google account", text: $google, prompt: Text("you@yourschool.org"))
+                Text("When TeachMore signs you out, Onyx signs you back in with Google. If Google asks which account to use, it picks this one (or the only one there). It never types a password.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             HStack {
                 Button(school.teachers.isEmpty ? "Connect" : "Refresh Teachers") { Task { await school.connect() } }

@@ -1458,6 +1458,22 @@ enum SchoolTest {
         await school.check(force: true)
         p = await posts()
         check("signed out: says so and sends nothing (\(school.status ?? ""))", p.isEmpty && school.status?.contains("signed you out") == true)
+        await school.check(force: true)
+        let auth = await mock("log")["auth"] as? Int
+        p = await posts()
+        check("signs itself back in with Google and carries on (\(school.status ?? ""), \(auth ?? -1) sign-in)", auth == 1 && p.isEmpty && school.status?.contains("Watching") == true)
+        _ = await mock("set?name=chooser&reset=1")
+        school.testSettings?.google = "Sam@School.org"
+        for _ in 0..<3 { await school.check(force: true) }
+        var mlog = await mock("log")
+        check("Google asks which account: picks your school one and carries on (\(school.status ?? ""))",
+              mlog["auth"] as? Int == 1 && mlog["picked"] as? String == "school" && school.status?.contains("Watching") == true)
+        _ = await mock("set?name=chooser&reset=1")
+        school.testSettings?.google = ""
+        for _ in 0..<3 { await school.check(force: true) }
+        mlog = await mock("log")
+        check("two accounts and none set: doesn't guess, asks you (\(school.status ?? ""))",
+              (mlog["picked"] as? String ?? "").isEmpty && school.status?.contains("Finish signing in") == true)
         finish()
     }
 }

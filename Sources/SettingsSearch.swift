@@ -62,6 +62,7 @@ enum SettingsIndex {
         e(.accounts, "Never read email from", "Never read email from", "block ignore skip sender privacy don't read exclude"),
         e(.accounts, "Read carefully", "Read carefully", "important sender vip boss teacher coach careful priority"),
         e(.school, "Academy sign-up (TeachMore)", "Watch TeachMore and sign me up", "teachmore academy flex time flextime sign up signup register enroll offering seat automatic school class bot"),
+        e(.school, "Academy sign-up (TeachMore)", "School Google account", "google account sign in signed out login email choose account teachmore"),
         e(.school, "Academy sign-up (TeachMore)", "Teacher", "teachmore academy teacher offering which class"),
         e(.school, "Academy sign-up (TeachMore)", "If I already have a sign-up that day", "teachmore academy replace switch conflict existing appointment"),
         e(.lock, "AI model", "Model", "model claude chatgpt openai gemini grok mistral deepseek groq openrouter ollama api key cloud gpt anthropic llm switch"),

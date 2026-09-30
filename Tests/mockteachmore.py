@@ -33,8 +33,9 @@ SCENARIOS = {
     "stale": [off("5005", "Robotics Club", "305", "Park", "Julia", d(9), "10", 4)],
     "conflict": [off("5006", "Robotics Club", "305", "Park", "Julia", d(11), "10", 4, appt=3, existing="Castillo-Reyes, Ana")],
     "signedout": [],
+    "chooser": [],
 }
-state = {"name": "start", "enrolled": set(), "taken": {}, "posts": [], "searches": 0, "token": "tok-1"}
+state = {"name": "start", "enrolled": set(), "taken": {}, "posts": [], "searches": 0, "token": "tok-1", "out": False, "chooser": False, "auth": 0}
 
 def offerings():
     out = []
@@ -76,14 +77,27 @@ class H(BaseHTTPRequestHandler):
         log("GET " + self.path)
         if u.path == "/__mock/set":
             state["name"] = q["name"]
-            if q.get("reset"): state.update(enrolled=set(), taken={}, posts=[], token="tok-1")
+            if q.get("reset"): state.update(enrolled=set(), taken={}, posts=[], token="tok-1", out=False, chooser=False, auth=0, picked="")
             if q["name"] == "stale": state["token"] = "tok-2"      # the page still holds tok-1
+            if q["name"] in ("signedout", "chooser"): state.update(out=True, chooser=q["name"] == "chooser")
             return self.send(200, json.dumps({"ok": True}))
         if u.path == "/__mock/log":
-            return self.send(200, json.dumps({"posts": state["posts"], "searches": state["searches"]}))
+            return self.send(200, json.dumps({"posts": state["posts"], "searches": state["searches"], "auth": state["auth"], "picked": state.get("picked", "")}))
+        if u.path == "/__mock/google":      # Google's "Choose an account", with a personal and a school account
+            return self.send(200, "<html><body><h1>Choose an account</h1>"
+                "<div data-identifier=\"sam.personal@gmail.com\" onclick=\"location='%sauth/google/callback?as=personal'\">Sam</div>"
+                "<div data-identifier=\"sam@school.org\" onclick=\"location='%sauth/google/callback?as=school'\">Sam</div></body></html>" % (B, B), "text/html")
+        if u.path == B + "auth/google/callback":
+            state.update(out=False, chooser=False, picked=q.get("as", ""))
+            return self.send(302, "", "text/html", [("Location", B + "offerings")])
+        if u.path == B + "auth/google":      # Sign in with Google: straight back in, unless Google wants you to pick an account
+            state["auth"] += 1
+            if state["chooser"]: return self.send(302, "", "text/html", [("Location", "/__mock/google")])
+            state["out"] = False
+            return self.send(302, "", "text/html", [("Location", B + "offerings")])
         if u.path == B + "login":
             return self.send(200, "<html><body><h1>Log in</h1><form>…</form></body></html>", "text/html")
-        if state["name"] == "signedout" and u.path.startswith(B):
+        if state["out"] and u.path.startswith(B):
             return self.send(302, "", "text/html", [("Location", B + "login")])
         if u.path == B + "offerings":
             return self.send(200, PAGE % state["token"], "text/html; charset=UTF-8")

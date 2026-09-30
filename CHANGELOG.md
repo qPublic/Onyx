@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Improved
+- **Academy sign-up signs itself back in.** When TeachMore signs you out, Onyx sends your TeachMore tab through "Sign in with Google". Your browser is already signed in to Google, so you land straight back on TeachMore and the watch carries on. If Google asks which account to use, Onyx picks your school account (set it once in Academy Sign-Up; if there's only one account it picks that). It never types a password: if Google wants one, Onyx tells you in the notch.
+
 ## 1.8.3
 
 ### Improved

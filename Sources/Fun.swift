@@ -28,9 +28,20 @@ enum Fun {
         notchSounds: true, openSound: "random", closeSound: "random", notchVolume: 0.7,
     ]
 
-    static var on: Bool { Prefs.bool(enabled) }
-    /// A fun feature is active only when Fun mode itself is on.
-    static func has(_ key: String) -> Bool { on && Prefs.bool(key) }
+    /// Everything the Fun mode switch turns on or off together.
+    static let items = [mirrorFilters, goose, gooseHonks, vinyl, bomb, sounds, surprise, redButton, notchSounds]
+    /// Fun mode shows as on while any of them is.
+    static var on: Bool { items.contains { Prefs.bool($0) } }
+    /// Each one works on its own; the Fun mode switch just turns them all on or off at once.
+    static func has(_ key: String) -> Bool { Prefs.bool(key) }
+    static func setAll(_ on: Bool) { items.forEach { UserDefaults.standard.set(on, forKey: $0) } }
+    /// Fun mode used to hide everything without changing the switches under it. Once: if it was off, switch them off.
+    static func migrate() {
+        let d = UserDefaults.standard
+        guard !d.bool(forKey: "fun.individual") else { return }
+        d.set(true, forKey: "fun.individual")
+        if !d.bool(forKey: enabled) { setAll(false) }
+    }
 }
 
 /// Starts/stops the always-running fun bits (goose, surprise noises) as settings change.

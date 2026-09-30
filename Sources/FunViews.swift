@@ -277,18 +277,20 @@ struct HazardStripes: View {
 
 struct FunPanelContent: View {
     @ObservedObject private var appearance = AppearanceStore.shared
+    @AppStorage(Fun.sounds) private var sounds = true
+    @AppStorage(Fun.redButton) private var red = true
 
     var body: some View {
-        if !Fun.on {
+        if !sounds && !red {
             VStack(spacing: 8) {
                 Text("🎉").font(.system(size: 26))
-                Text("Fun mode is off").font(.system(size: 12, weight: .medium))
-                Button("Turn it on") { UserDefaults.standard.set(true, forKey: Fun.enabled) }.controlSize(.small)
+                Text("The sound board and big red button are off").font(.system(size: 12, weight: .medium))
+                Button("Turn them on") { sounds = true; red = true }.controlSize(.small)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             HStack(spacing: 14) {
-                if Prefs.bool(Fun.sounds) {
+                if sounds {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Sound board").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
@@ -298,7 +300,7 @@ struct FunPanelContent: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
-                if Prefs.bool(Fun.redButton) { BigRedButton() }
+                if red { BigRedButton() }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -324,7 +326,6 @@ struct FunPanel: View {
 // MARK: - Settings › Fun Mode
 
 struct FunSettings: View {
-    @AppStorage(Fun.enabled) private var on = false
     @AppStorage(Fun.mirrorFilters) private var filters = true
     @AppStorage(Fun.mirrorFilter) private var filter = "none"
     @AppStorage(Fun.goose) private var goose = true
@@ -348,8 +349,8 @@ struct FunSettings: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Fun mode", isOn: $on)
-                Text("Turns on everything below that's switched on. Turn this off to put it all away at once.")
+                Toggle("Fun mode", isOn: Binding(get: { Fun.on }, set: { Fun.setAll($0) }))
+                Text("Turns everything below on or off at once. You can still switch each one on or off by itself.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Group {
@@ -399,7 +400,6 @@ struct FunSettings: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .disabled(!on)
         }
         .formStyle(.grouped)
     }

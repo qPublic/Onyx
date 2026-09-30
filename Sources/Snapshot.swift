@@ -84,8 +84,9 @@ enum Snapshot {
             shotView("privacy", dir, size: CGSize(width: 520, height: 560), LockSettings().background(DetailBackground()).environment(\.colorScheme, .dark))
             // Fun mode + bookshelf (settings restored afterwards).
             let d = UserDefaults.standard
-            let oldFun = d.bool(forKey: Fun.enabled), oldTool = d.string(forKey: "toolsSelection"), oldPanels = HomeLayout.shared.panels
-            d.set(true, forKey: Fun.enabled)
+            let funKeys = [Fun.sounds, Fun.redButton, Fun.bomb, Fun.vinyl]
+            let oldFun = funKeys.map { d.object(forKey: $0) }, oldTool = d.string(forKey: "toolsSelection"), oldPanels = HomeLayout.shared.panels
+            funKeys.forEach { d.set(true, forKey: $0) }
             m.expanded = true; m.tab = .home
             HomeLayout.shared.panels = [.fun, .music]; shot("fun-home", dir)
             FocusTimer.shared.begin(minutes: 10); FocusTimer.shared.endDate = Date().addingTimeInterval(360)
@@ -102,7 +103,7 @@ enum Snapshot {
             }
             shotView("fun-settings", dir, size: CGSize(width: 520, height: 1500), FunSettings().background(DetailBackground()).environment(\.colorScheme, .dark))
             HomeLayout.shared.panels = oldPanels
-            d.set(oldFun, forKey: Fun.enabled)
+            for (k, v) in zip(funKeys, oldFun) { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } }
             if let oldTool { d.set(oldTool, forKey: "toolsSelection") } else { d.removeObject(forKey: "toolsSelection") }
             exit(0)
         }

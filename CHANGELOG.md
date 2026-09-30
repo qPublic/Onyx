@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.2
+
+### Improved
+- Each Fun mode item now has its own switch that works whether Fun mode is on or off. The Fun mode switch turns them all on or off at once instead of locking them. If Fun mode was off when you update, its items are switched off, so nothing new appears.
+
 ## 1.9.1
 
 ### Improved

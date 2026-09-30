@@ -63,6 +63,7 @@ enum Prefs {
             SchoolSignup.replaceKey: true, ProtonVPN.warnKey: true,
         ].merging(AP.defaults) { a, _ in a }.merging(Fun.defaults) { a, _ in a }.merging(Opt.defaults) { a, _ in a }
          .merging(WallpaperEngine.defaults) { a, _ in a })
+        Fun.migrate()
     }
 
     static func bool(_ k: String) -> Bool { UserDefaults.standard.bool(forKey: k) }

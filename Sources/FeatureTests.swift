@@ -965,6 +965,7 @@ enum ViewShot {
                 shoot("school", Form { SchoolSetupSteps(); SchoolSignupSection() }.formStyle(.grouped), CGSize(width: 532, height: 900))
                 shoot("school-cal", Form { SchoolCalendarSection(day: ahead(3)) }.formStyle(.grouped), CGSize(width: 532, height: 720))
                 shoot("create", CreateLoopSheet(close: {}), CGSize(width: 640, height: 640))
+                shoot("fun", FunSettings(), CGSize(width: 520, height: 1150))
                 for t in [2.0, 4.8] {
                     save("tour-calmail-\(Int(t * 10))", TourDemo(step: .calendarMail, t: t).frame(height: 250).frame(maxWidth: .infinity)
                         .background(RadialGradient(colors: [TourStep.calendarMail.tint.opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 260)), CGSize(width: 472, height: 250))

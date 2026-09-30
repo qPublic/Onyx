@@ -960,12 +960,13 @@ struct ToolsTab: View {
         }
     }
     @AppStorage("toolsSelection") private var tool: Tool = .clipboard
-    @AppStorage(Fun.enabled) private var funOn = false
+    @AppStorage(Fun.sounds) private var funSounds = true
+    @AppStorage(Fun.redButton) private var funRed = true
 
     var body: some View {
         HStack(spacing: 10) {
             VStack(spacing: 2) {
-                ForEach(Tool.allCases.filter { $0 != .fun || funOn }) { t in
+                ForEach(Tool.allCases.filter { $0 != .fun || funSounds || funRed }) { t in
                     Button { tool = t } label: {
                         Label(t.rawValue, systemImage: t.icon).font(.system(size: 11, weight: .medium))
                             .frame(maxWidth: .infinity, alignment: .leading)

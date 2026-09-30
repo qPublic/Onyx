@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.8.5
 
 ### Fixed
 - Academy sign-up signs you back in in one go: through Google, picking your account, and straight back to checking, instead of a step every 15 seconds.

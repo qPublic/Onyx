@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.8.1
 
 ### New
 - **Academy sign-up for TeachMore.** In the new **Settings › Academy Sign-Up**, paste your school's TeachMore link, pick the teacher (or words in the title) and turn on **Watch TeachMore and sign me up**. Onyx checks your offerings list every 30 seconds in your own signed-in Chrome, Brave, Edge or Safari tab, so it never sees your password. When a teacher posts that academy with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. Full? It waits for a seat. It can switch you from a sign-up you made yourself (or keep it, your choice), never replaces an appointment a teacher assigned, and never signs you up again for one you left. Needs Allow JavaScript from Apple Events turned on in your browser.

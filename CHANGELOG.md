@@ -4,6 +4,7 @@
 
 ### New
 - **Private windows stay private.** While a private or incognito window is open in Safari, Chrome, Brave, Edge, Arc, Vivaldi, Opera or Firefox, Onyx records nothing and reads nothing from your screen, your browser or your clipboard. A screen recording stops. Screenshots, Circle to Search and Copy Text wait. Onyx AI can't look at your screen or what you've selected. Clipboard history skips what you copy. Focus sessions don't read websites, and academy sign-up waits. The notch tells you when this starts. It's always on and can't be turned off. See Settings › Privacy › Private windows.
+- **Proton VPN in the notch.** Add the VPN shield in Edit Tabs & Widgets: green when you're connected, with the country you're coming from, and a click connects or disconnects. It's in the quick toggles and the launcher (type “vpn”) too. The notch warns you if the VPN drops. In Settings › Privacy › Proton VPN you can have it connect whenever you join Wi-Fi you haven't trusted. Onyx uses macOS's own VPN controls, so Proton VPN still picks the server.
 
 ## 1.8.6
 

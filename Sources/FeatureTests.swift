@@ -918,6 +918,9 @@ enum ExtrasTest {
               !looked && PrivateGuard.blocks() && PrivateGuard.active)
         PrivateGuard.shared.force(false)
         check("and carries on once it's closed", !PrivateGuard.blocks())
+        let vpn = ProtonVPN.service("Available network connection services in the current set (*=enabled):\n* (Connected)      29152710-4CE3-46B5-836C-79F3E6F8FF6F VPN (ch.protonvpn.mac) \"ProtonVPN\"                      [VPN:ch.protonvpn.mac]\n")
+        check("finds the ProtonVPN connection in macOS's list (\(vpn.map { "\($0.id) \($0.name)" } ?? "none"))",
+              vpn?.id == "29152710-4CE3-46B5-836C-79F3E6F8FF6F" && vpn?.name == "ProtonVPN" && ProtonVPN.service("* (Disconnected) ABC VPN (com.other) \"Other\"") == nil)
         note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
         exit(0)
     }

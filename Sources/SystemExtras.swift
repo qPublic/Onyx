@@ -401,6 +401,7 @@ struct QuickTogglesGrid: View {
     @ObservedObject var t = QuickToggles.shared
     @ObservedObject var caf = Caffeinate.shared
     @ObservedObject var focus = FocusMonitor.shared
+    @ObservedObject var vpn = ProtonVPN.shared
 
     var body: some View {
         HStack(spacing: 6) {
@@ -409,6 +410,7 @@ struct QuickTogglesGrid: View {
             tile("cup.and.saucer.fill", "Keep awake", on: caf.active, tint: .orange) { caf.active ? caf.disable() : caf.enable(hours: nil) }
             tile(t.iconsHidden ? "eye.slash.fill" : "menubar.dock.rectangle", "Hide icons", on: t.iconsHidden, tint: .teal) { t.toggleDesktopIcons() }
             tile(t.micMuted ? "mic.slash.fill" : "mic.fill", "Mute mic", on: t.micMuted, tint: .red) { t.toggleMic() }
+            if vpn.usable { tile(VPNWidget.icon(vpn.status), "VPN", on: vpn.on, tint: .green) { vpn.toggle() } }
         }
         .onAppear { t.refresh() }
     }

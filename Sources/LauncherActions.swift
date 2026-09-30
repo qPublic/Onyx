@@ -5,7 +5,7 @@ import CoreServices
 // MARK: - App Launcher actions: type math, "timer 10", "define word" or a question and get it right there; files too
 
 struct LauncherAction: Identifiable {
-    enum Kind { case calc, timer, define, ask }
+    enum Kind { case calc, timer, define, ask, vpn }
     let kind: Kind
     let title: String
     let detail: String
@@ -17,6 +17,7 @@ struct LauncherAction: Identifiable {
         case .timer: "timer"
         case .define: "character.book.closed.fill"
         case .ask: "sparkles"
+        case .vpn: "lock.shield.fill"
         }
     }
     var tint: Color {
@@ -25,6 +26,7 @@ struct LauncherAction: Identifiable {
         case .timer: .orange
         case .define: .brown
         case .ask: .purple
+        case .vpn: .green
         }
     }
 }
@@ -49,6 +51,14 @@ enum LauncherActions {
                 NSPasteboard.general.clearContents(); NSPasteboard.general.setString(result, forType: .string)
                 NotchModel.shared.flash(.message(icon: "doc.on.doc", text: "Copied \(result)", tint: .orange), for: 1.8)
                 close()
+            })
+        }
+        // "vpn", "vpn on", "proton off", "connect vpn"…
+        if ["vpn", "proton"].contains(where: { lower.split(separator: " ").contains(Substring($0)) }), ProtonVPN.shared.usable {
+            let vpn = ProtonVPN.shared, off = lower.contains("off") || lower.contains("disconnect") || (!lower.contains("on") && !lower.contains("connect") && vpn.on)
+            out.append(LauncherAction(kind: .vpn, title: off ? "Disconnect Proton VPN" : "Connect Proton VPN",
+                                      detail: vpn.on ? "Connected\(vpn.place.map { " · \($0)" } ?? "")" : "Not connected") {
+                off ? vpn.disconnect() : vpn.connect(); close()
             })
         }
         if let word = defineWord(lower), let def = definition(word) {

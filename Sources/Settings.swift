@@ -822,6 +822,7 @@ struct LockSettings: View {
                 Button("Re-run setup…") { (NSApp.delegate as? AppDelegate)?.showOnboarding() }
             }
             PrivateWindowsSection()
+            ProtonVPNSection()
             Section("AI model") {
                 AIModelSettings()
             }

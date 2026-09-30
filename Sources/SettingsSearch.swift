@@ -66,6 +66,8 @@ enum SettingsIndex {
         e(.school, "Academy sign-up (TeachMore)", "School Google account", "google account sign in signed out login email choose account teachmore"),
         e(.school, "Academy sign-up (TeachMore)", "Teacher", "teachmore academy teacher offering which class"),
         e(.school, "Academy sign-up (TeachMore)", "If I already have a sign-up that day", "teachmore academy replace switch conflict existing appointment"),
+        e(.lock, "Proton VPN", "Proton VPN", "vpn proton connect disconnect privacy secure core wifi trusted network kill switch shield"),
+        e(.lock, "Proton VPN", "Connect on Wi-Fi I haven't trusted", "vpn auto connect public wifi hotel cafe untrusted network"),
         e(.lock, "Private windows", "Private windows", "incognito private browsing window pause recording screen clipboard privacy always on"),
         e(.lock, "AI model", "Model", "model claude chatgpt openai gemini grok mistral deepseek groq openrouter ollama api key cloud gpt anthropic llm switch"),
         e(.lock, "Memory", "Let Onyx AI remember things about you", "memory remember forget facts about me personal"),

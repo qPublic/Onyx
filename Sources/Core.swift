@@ -60,7 +60,7 @@ enum Prefs {
             AIMemory.key: true,
             MeetingWatch.key: true,
             MailWatch.scanKey: true, MailWatch.autoKey: true, MailWatch.skipBulkKey: true,
-            SchoolSignup.replaceKey: true,
+            SchoolSignup.replaceKey: true, ProtonVPN.warnKey: true,
         ].merging(AP.defaults) { a, _ in a }.merging(Fun.defaults) { a, _ in a }.merging(Opt.defaults) { a, _ in a }
          .merging(WallpaperEngine.defaults) { a, _ in a })
     }

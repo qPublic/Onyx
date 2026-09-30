@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.8.3
 
 ### Improved
 - Onyx checks for updates every 4 hours while your Mac is on (it was every 12), and catches up soon after your Mac wakes if it slept through a check.

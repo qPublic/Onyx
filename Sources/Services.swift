@@ -528,7 +528,7 @@ final class ClipboardHistory: ObservableObject {
         let pb = NSPasteboard.general
         guard pb.changeCount != lastCount else { return }
         lastCount = pb.changeCount
-        if paused { return }
+        if paused || PrivateGuard.active { return }   // nothing copied while a private window is open is kept
         let types = pb.types?.map(\.rawValue) ?? []
         if types.contains("org.nspasteboard.ConcealedType") || types.contains("org.nspasteboard.TransientType") { return }
         guard let s = pb.string(forType: .string), !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }

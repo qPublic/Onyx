@@ -910,6 +910,14 @@ enum ExtrasTest {
         }
 
         for (name, ok) in LinkedCalendars.selfTest() { check("linked calendars: " + name, ok) }
+        // Private windows: nothing captures or reads while one is open.
+        PrivateGuard.shared.force(true)
+        var looked = true
+        do { _ = try await ScreenReader.capture() } catch { looked = false }
+        check("with a private window open, Onyx doesn't look at the screen, and features that capture say they're paused",
+              !looked && PrivateGuard.blocks() && PrivateGuard.active)
+        PrivateGuard.shared.force(false)
+        check("and carries on once it's closed", !PrivateGuard.blocks())
         note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
         exit(0)
     }

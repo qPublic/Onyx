@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Private windows stay private.** While a private or incognito window is open in Safari, Chrome, Brave, Edge, Arc, Vivaldi, Opera or Firefox, Onyx records nothing and reads nothing from your screen, your browser or your clipboard. A screen recording stops. Screenshots, Circle to Search and Copy Text wait. Onyx AI can't look at your screen or what you've selected. Clipboard history skips what you copy. Focus sessions don't read websites, and academy sign-up waits. The notch tells you when this starts. It's always on and can't be turned off. See Settings › Privacy › Private windows.
+
 ## 1.8.6
 
 ### New

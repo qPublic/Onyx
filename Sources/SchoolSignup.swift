@@ -475,6 +475,7 @@ enum SchoolJS {
             checking = false; lastCheck = Date()
             if settings.on && testPage == nil { schedule(after: next) }
         }
+        if PrivateGuard.active { report("Waiting while a private window is open.", problem: false); next = 60; return }
         let p = page(s, b)
         var signedBackIn = false
         for _ in 0..<2 {

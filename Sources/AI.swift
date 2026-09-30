@@ -14,6 +14,9 @@ enum ScreenReader {
 
     /// Captures the display under the mouse, excluding Onyx's own windows.
     static func capture(screen: NSScreen = screenUnderMouse()) async throws -> CGImage {
+        if PrivateGuard.active {   // never while a private window is open (it can't be turned off)
+            throw NSError(domain: "Onyx", code: 9, userInfo: [NSLocalizedDescriptionKey: "Onyx doesn't look at your screen while a private or incognito window is open."])
+        }
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
             throw NSError(domain: "Onyx", code: 2, userInfo: [NSLocalizedDescriptionKey:
@@ -834,6 +837,7 @@ final class Assistant: ObservableObject {
 
     /// macOS's own area picker (crosshair), then back to the AI tab with the picture attached.
     func captureArea() {
+        guard !PrivateGuard.blocks() else { return }
         NotchController.current?.collapse()
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("onyx-ai-capture-\(UUID().uuidString).png")
         Task.detached {
@@ -889,6 +893,7 @@ final class CircleToSearch {
     private var panel: OverlayPanel?
 
     func begin() {
+        guard !PrivateGuard.blocks() else { return }
         guard panel == nil else { return }
         let screen = ScreenReader.screenUnderMouse()
         Task { @MainActor in

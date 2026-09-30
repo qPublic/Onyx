@@ -44,6 +44,7 @@ enum SelectionGrabber {
     /// The text selected in the app in front: asked for through Accessibility first, else copied with ⌘C (and your
     /// clipboard is put back the way it was, without the copy landing in Clipboard history).
     @MainActor static func grab() async -> String? {
+        guard !PrivateGuard.blocks() else { return nil }
         guard AXIsProcessTrusted() else { return nil }
         if let s = fromAccessibility(), !s.isEmpty { return s }
         return await byCopying()

@@ -175,6 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         OnyxReminders.shared.start()            // AI-set reminders that ring in the notch
         MainActor.assumeIsolated { Briefing.watch() }   // the morning briefing
         MainActor.assumeIsolated { MailWatch.shared.start() }   // events from your email (once an account is added)
+        PrivateGuard.shared.start()             // private or incognito windows: record and read nothing (always on)
         LinkedCalendars.shared.start()          // calendars pasted as a link, updated every 30 minutes
         MainActor.assumeIsolated { SchoolSignup.shared.start() }   // TeachMore academy sign-up (once it's set up)
         MeetingWatch.shared.start()             // video calls: countdown + Join in the notch

@@ -21,6 +21,7 @@ enum TextGrabber {
 
     /// Copy text from screen shortcut: drag over anything on screen, and its text is on your clipboard.
     @MainActor static func fromScreen() {
+        guard !PrivateGuard.blocks() else { return }
         NotchController.current?.collapse()
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("onyx-ocr-\(UUID().uuidString).png")
         Task.detached {

@@ -821,6 +821,7 @@ struct LockSettings: View {
                 permission("Location", "Accurate weather & rain alerts", "Privacy_LocationServices")
                 Button("Re-run setup…") { (NSApp.delegate as? AppDelegate)?.showOnboarding() }
             }
+            PrivateWindowsSection()
             Section("AI model") {
                 AIModelSettings()
             }

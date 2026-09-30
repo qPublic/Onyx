@@ -26,6 +26,7 @@ final class QuickCapture: ObservableObject {
     }
 
     func screenshot(_ mode: Mode) {
+        guard !PrivateGuard.blocks() else { return }
         guard !recording else { return }
         NotchController.current?.collapse()
         let url = Self.folder.appendingPathComponent("Screenshot \(Self.stamp()).png")
@@ -51,8 +52,11 @@ final class QuickCapture: ObservableObject {
     }
 
     func toggleRecording() { recording ? stopRecording() : startRecording() }
+    /// A private window opened: stop right away.
+    func stopIfRecording() { if recording { stopRecording() } }
 
     private func startRecording() {
+        guard !PrivateGuard.blocks() else { return }
         NotchController.current?.collapse()
         let url = Self.folder.appendingPathComponent("Recording \(Self.stamp()).mov")
         let p = Process()

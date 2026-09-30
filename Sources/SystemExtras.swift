@@ -218,7 +218,7 @@ final class FocusSession: ObservableObject {
 
     /// In Safari or a Chromium browser, a blocked site's tab is sent to a blank page.
     private func checkSite(_ app: NSRunningApplication) {
-        guard active, !sites.isEmpty, let id = app.bundleIdentifier else { return }
+        guard active, !sites.isEmpty, !PrivateGuard.active, let id = app.bundleIdentifier else { return }   // never reads a site while a private window is open
         let chromium = ["com.google.Chrome": "Google Chrome", "com.brave.Browser": "Brave Browser", "com.microsoft.edgemac": "Microsoft Edge",
                         "company.thebrowser.Browser": "Arc", "com.vivaldi.Vivaldi": "Vivaldi"]
         let sites = self.sites

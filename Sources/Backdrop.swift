@@ -28,7 +28,7 @@ final class BackdropSampler: ObservableObject {
     }
 
     private func tick() {
-        guard Self.enabled, !busy, !NotchModel.shared.animating, !LowBatteryMode.shared.active, CGPreflightScreenCaptureAccess(),
+        guard Self.enabled, !busy, !NotchModel.shared.animating, !LowBatteryMode.shared.active, !PrivateGuard.active, CGPreflightScreenCaptureAccess(),
               let panel = NotchController.current?.panel, panel.isVisible, let screen = panel.screen else {
             if !Self.enabled && isLight { isLight = false }
             return

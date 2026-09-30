@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.1
+
+### Improved
+- Privacy: Onyx's built-in self-tests and tour use a made-up school, teachers and student, so the app and its code contain no real names.
+
 ## 1.9.0
 
 ### New

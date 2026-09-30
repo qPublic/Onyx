@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Academy sign-up signs you back in in one go: through Google, picking your account, and straight back to checking, instead of a step every 15 seconds.
+- After signing in, your TeachMore tab goes back to Offerings instead of staying on TeachMore's calendar page.
+- When TeachMore signs you out it shows a 404 page. Onyx now recognizes that as signed out and signs you back in, instead of giving up or opening another tab.
+- Check Now no longer brings your browser to the front. If it ever jumps forward, Onyx puts back what you were using.
+
 ## 1.8.4
 
 ### Improved

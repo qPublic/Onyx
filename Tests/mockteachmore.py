@@ -89,17 +89,19 @@ class H(BaseHTTPRequestHandler):
                 "<div data-identifier=\"sam@school.org\" onclick=\"location='%sauth/google/callback?as=school'\">Sam</div></body></html>" % (B, B), "text/html")
         if u.path == B + "auth/google/callback":
             state.update(out=False, chooser=False, picked=q.get("as", ""))
-            return self.send(302, "", "text/html", [("Location", B + "offerings")])
+            return self.send(302, "", "text/html", [("Location", B + "dashboard")])   # like TeachMore: its home page (the calendar)
         if u.path == B + "auth/google":      # Sign in with Google: straight back in, unless Google wants you to pick an account
             state["auth"] += 1
             if state["chooser"]: return self.send(302, "", "text/html", [("Location", "/__mock/google")])
             state["out"] = False
-            return self.send(302, "", "text/html", [("Location", B + "offerings")])
+            return self.send(302, "", "text/html", [("Location", B + "dashboard")])
         if u.path == B + "login":
             return self.send(200, "<html><body><h1>Log in</h1><form>…</form></body></html>", "text/html")
+        if u.path == "/login":              # where TeachMore sends you when you're signed out: a 404 page
+            return self.send(404, "<html><body><h1>404 Not Found</h1></body></html>", "text/html")
         if state["out"] and u.path.startswith(B):
-            return self.send(302, "", "text/html", [("Location", B + "login")])
-        if u.path == B + "offerings":
+            return self.send(302, "", "text/html", [("Location", "/login")])
+        if u.path in (B + "offerings", B + "dashboard"):
             return self.send(200, PAGE % state["token"], "text/html; charset=UTF-8")
         if u.path == B + "offerings/search":
             state["searches"] += 1

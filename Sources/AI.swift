@@ -60,9 +60,50 @@ enum ScreenReader {
 
 // MARK: - Agent tools (dynamic schemas — no macros needed)
 
-struct AgentTool: Tool {
+/// A tool call's arguments, the same whether Apple's on-device model or a cloud model made the call.
+struct ToolArgs: Sendable {
+    let values: [String: String]
+    let jsonString: String
+
+    init(json: String) throws {
+        guard let o = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { throw CocoaError(.coderReadCorrupt) }
+        var v: [String: String] = [:]
+        for (k, x) in o {
+            switch x {
+            case let s as String: v[k] = s
+            case let n as NSNumber: v[k] = n.stringValue
+            case is NSNull: break
+            default: if let d = try? JSONSerialization.data(withJSONObject: x) { v[k] = String(decoding: d, as: UTF8.self) }
+            }
+        }
+        values = v; jsonString = json
+    }
+    @available(macOS 26, *)
+    init(_ g: GeneratedContent) {
+        if let a = try? ToolArgs(json: g.jsonString) { self = a } else { values = [:]; jsonString = g.jsonString }
+    }
+}
+
+/// One of Onyx's tools, handed to Apple's on-device model (macOS 26 and later).
+@available(macOS 26, *)
+struct AppleTool: Tool {
     typealias Arguments = GeneratedContent
     typealias Output = String
+    let tool: AgentTool
+    var name: String { tool.name }
+    var description: String { tool.description }
+    var parameters: GenerationSchema {
+        let props = tool.params.map {
+            DynamicGenerationSchema.Property(name: $0.name, description: $0.info,
+                                             schema: DynamicGenerationSchema(type: String.self), isOptional: $0.optional)
+        }
+        return try! GenerationSchema(root: DynamicGenerationSchema(name: tool.name + "_args", properties: props), dependencies: [])
+    }
+    func call(arguments: GeneratedContent) async throws -> String { try await tool.call(arguments: ToolArgs(arguments)) }
+    static func list(_ tools: [AgentTool]) -> [any Tool] { tools.map { AppleTool(tool: $0) } }
+}
+
+struct AgentTool {
     let name: String
     let description: String
     let params: [(name: String, info: String, optional: Bool)]
@@ -70,17 +111,9 @@ struct AgentTool: Tool {
     /// sometimes calls tools nobody asked for, like making up a calendar event for a math question).
     var requires: [String] = []
     var logs = true            // show the call in the chat (off for behind-the-scenes thinking)
-    let run: @Sendable (GeneratedContent) async throws -> String
+    let run: @Sendable (ToolArgs) async throws -> String
 
-    var parameters: GenerationSchema {
-        let props = params.map {
-            DynamicGenerationSchema.Property(name: $0.name, description: $0.info,
-                                             schema: DynamicGenerationSchema(type: String.self), isOptional: $0.optional)
-        }
-        return try! GenerationSchema(root: DynamicGenerationSchema(name: name + "_args", properties: props), dependencies: [])
-    }
-
-    func call(arguments: GeneratedContent) async throws -> String {
+    func call(arguments: ToolArgs) async throws -> String {
         // The small model can get stuck calling a tool over and over: answer repeats from memory and cap the total.
         let key = name + "|" + arguments.jsonString
         if let prev = ToolBudget.previous(key) { return prev + " (already done; now answer without calling tools again)" }
@@ -124,8 +157,8 @@ enum ToolBudget {
     static func record(_ key: String, _ result: String) { lock.withLock { done[key] = result } }
 }
 
-func arg(_ a: GeneratedContent, _ k: String) -> String? {
-    guard let s = try? a.value(String.self, forProperty: k) else { return nil }
+func arg(_ a: ToolArgs, _ k: String) -> String? {
+    guard let s = a.values[k] else { return nil }
     let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
     return t.isEmpty ? nil : t
 }
@@ -359,7 +392,11 @@ final class Assistant: ObservableObject {
     @Published var lastSources: [URL] = []    // web pages the last answer was based on
     var carryOver: String?                    // a summary of the chat so far, once it outgrew the on-device model
     var cloudHistory: [CloudMessage] = []
-    private var session: LanguageModelSession?
+    private var heldSession: Any?             // the on-device model's session (macOS 26 and later)
+    @available(macOS 26, *) private var session: LanguageModelSession? {
+        get { heldSession as? LanguageModelSession }
+        set { heldSession = newValue }
+    }
     private var sessionIsAgent = true
     private var sessionEffort = AIEffort.medium
     private var sessionTools = Set<String>()
@@ -399,7 +436,7 @@ final class Assistant: ObservableObject {
 
     /// Model errors in words people understand.
     static func describe(_ error: Error) -> String {
-        guard let e = error as? LanguageModelSession.GenerationError else { return error.localizedDescription }
+        guard #available(macOS 26, *), let e = error as? LanguageModelSession.GenerationError else { return error.localizedDescription }
         switch e {
         case .guardrailViolation: return "Apple's on-device safety filter stopped this answer. Try wording it differently, or pick a bigger model in Settings › Privacy › AI."
         case .refusal: return "The model chose not to answer that."
@@ -459,10 +496,11 @@ final class Assistant: ObservableObject {
 
     var unavailableReason: String? {
         if CloudAI.active { return nil }   // a cloud model doesn't need Apple Intelligence
+        guard OS.mayHaveAppleAI, #available(macOS 26, *) else { return Self.needsNewerMac }
         switch SystemLanguageModel.default.availability {
         case .available: return nil
         case .unavailable(.appleIntelligenceNotEnabled): return "Turn on Apple Intelligence in System Settings to use the free on-device AI."
-        case .unavailable(.deviceNotEligible): return "This Mac doesn't support Apple Intelligence."
+        case .unavailable(.deviceNotEligible): return "This Mac doesn't support Apple Intelligence. Pick a cloud model in Settings › Privacy › AI: Gemini gives you a free key with your Google account."
         case .unavailable(.modelNotReady): return "The on-device model is still downloading. Try again soon."
         case .unavailable: return "The on-device model is unavailable."
         }
@@ -496,9 +534,10 @@ final class Assistant: ObservableObject {
         return s
     }
 
-    func reset() { task?.cancel(); session = nil; messages = []; busy = false; status = nil; attachment = nil; carryOver = nil; cloudHistory = []; lastSources = [] }
+    func reset() { task?.cancel(); heldSession = nil; messages = []; busy = false; status = nil; attachment = nil; carryOver = nil; cloudHistory = []; lastSources = [] }
     /// Free the on-device model session while idle to reclaim memory; the chat log stays.
-    func releaseIfIdle() { if !busy { session = nil } }
+    func releaseIfIdle() { if !busy { heldSession = nil } }
+    static var needsNewerMac: String { "Onyx's free on-device AI \(OS.noAppleAIReason). On this Mac, pick a cloud model in Settings › Privacy › AI: Gemini gives you a free key with your Google account." }
     func stop() { task?.cancel(); busy = false; status = nil }
 
     func log(tool: String, result: String) {
@@ -535,6 +574,7 @@ final class Assistant: ObservableObject {
         }
         task = Task { @MainActor in
             defer { self.busy = false; self.status = nil }
+            guard #available(macOS 26, *) else { messages.append(Msg(role: .error, text: Self.needsNewerMac)); return }
             do {
                 // 1. Turn what the user shared into text the model can read.
                 var shared: [String] = []
@@ -576,14 +616,16 @@ final class Assistant: ObservableObject {
         }
     }
 
+    @available(macOS 26, *)
     private func makeSession(agent: Bool, effort: AIEffort) -> LanguageModelSession {
         // In Ask mode the calculator only helps with a thinking pass behind it (High / Max); at Low and Medium the
         // small model tends to feed it things like "m∠A + m∠B" and then guess, so it reasons in plain text instead.
         let tools = agent ? AgentTools.relevant(to: Self.currentRequest) : (effort == .high || effort == .max) ? [AgentTools.calculator] : []
         sessionTools = Set(tools.map(\.name))
-        return LanguageModelSession(tools: tools, instructions: instructions(agent: agent, effort: effort, tools: sessionTools))
+        return LanguageModelSession(tools: AppleTool.list(tools), instructions: instructions(agent: agent, effort: effort, tools: sessionTools))
     }
 
+    @available(macOS 26, *)
     private static func options(_ effort: AIEffort) -> GenerationOptions {
         switch effort {
         case .low: GenerationOptions(sampling: .greedy, maximumResponseTokens: 300)   // fastest, most predictable
@@ -593,6 +635,7 @@ final class Assistant: ObservableObject {
     }
 
     /// Streams the final answer. If the chat has grown too big for the model, starts fresh once with a trimmed prompt.
+    @available(macOS 26, *)
     @MainActor private func answer(_ request: String, notes: String?, agent: Bool, effort: AIEffort) async throws {
         func prompt(_ limit: Int) -> String {
             let r = request.count > limit ? String(request.prefix(limit)) + "…" : request
@@ -655,18 +698,20 @@ final class Assistant: ObservableObject {
         }
     }
 
-    static let reviewSchema = try? GenerationSchema(root: DynamicGenerationSchema(name: "Review", properties: [
+    @available(macOS 26, *)
+    static var reviewSchema: GenerationSchema? { try? GenerationSchema(root: DynamicGenerationSchema(name: "Review", properties: [
         .init(name: "parts", description: "Each separate thing the user asked for, a few words each",
               schema: DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(type: String.self), minimumElements: 1, maximumElements: 5)),
         .init(name: "complete", description: "True if the reply answers every question and every action asked for was confirmed by a tool result",
               schema: DynamicGenerationSchema(type: Bool.self)),
         .init(name: "missing", description: "If not complete: what's missing, in a few words. Otherwise an empty string",
               schema: DynamicGenerationSchema(type: String.self)),
-    ]), dependencies: [])
+    ]), dependencies: []) }
 
     /// Reads the finished reply back against the request: every part answered, and every action really done (a tool
     /// confirmed it, not just the reply saying so). If something was missed, it finishes the job once, then the
     /// complete reply takes the first one's place.
+    @available(macOS 26, *)
     @MainActor private func review(_ asked: String, since start: Int, agent: Bool, effort: AIEffort) async throws {
         guard let schema = Self.reviewSchema, let last = messages.indices.last, last >= start, messages[last].role == .assistant,
               !messages[last].text.isEmpty else { return }
@@ -729,16 +774,18 @@ final class Assistant: ObservableObject {
     }
 
     /// Runs a tool call the model wrote out as text (only a tool this session has, through all the usual checks), then answers in words.
+    @available(macOS 26, *)
     @MainActor private func finishLeaked(_ call: (name: String, args: [String: String]), prompt: String, effort: AIEffort) async throws {
         var p = prompt
         if sessionTools.contains(call.name), let tool = AgentTools.all.first(where: { $0.name == call.name }),
-           let json = try? JSONSerialization.data(withJSONObject: call.args), let args = try? GeneratedContent(json: String(decoding: json, as: UTF8.self)) {
+           let json = try? JSONSerialization.data(withJSONObject: call.args), let args = try? ToolArgs(json: String(decoding: json, as: UTF8.self)) {
             let out = (try? await tool.call(arguments: args)) ?? "That didn't work."
             p += "\n\nYou already used the \(call.name) tool for this. Its result: \(out.prefix(1500))\nNow reply to me in words, using that result."
         }
         try await answerWithoutTools(p, effort: effort)
     }
 
+    @available(macOS 26, *)
     @MainActor private func answerWithoutTools(_ prompt: String, effort: AIEffort) async throws {
         let s = LanguageModelSession(instructions: instructions(agent: false, effort: effort, tools: []) + " Answer directly; you have no tools.")
         var idx: Int?
@@ -749,12 +796,13 @@ final class Assistant: ObservableObject {
     }
 
     /// High: one careful step-by-step pass. Max: three independent attempts, then a pass that compares them.
+    @available(macOS 26, *)
     private static func think(_ request: String, effort: AIEffort) async throws -> String {
         let instructions = "You work problems out carefully. Restate what is asked, list the facts given, then reason step by step. Use the calculate tool for arithmetic. Be concise, plain text, no LaTeX. End with a line starting 'Answer:'."
         func attempt(_ temperature: Double) async throws -> String {
             try await retrying {
                 ToolBudget.reset()
-                let s = LanguageModelSession(tools: [AgentTools.quietCalculator], instructions: instructions)
+                let s = LanguageModelSession(tools: AppleTool.list([AgentTools.quietCalculator]), instructions: instructions)
                 return try await s.respond(to: String(request.prefix(5000)), options: GenerationOptions(temperature: temperature, maximumResponseTokens: 600)).content
             }
         }
@@ -768,13 +816,20 @@ final class Assistant: ObservableObject {
             guard let a, answers.filter({ $0 == a }).count >= 2 else { continue }
             return String(drafts[i].prefix(1500)) + "\n(Two of three independent attempts reached this same answer.)"
         }
-        let judge = LanguageModelSession(tools: [AgentTools.quietCalculator], instructions: "You compare several attempts at the same problem, spot mistakes, and settle on the correct answer. Be concise.")
+        let judge = LanguageModelSession(tools: AppleTool.list([AgentTools.quietCalculator]), instructions: "You compare several attempts at the same problem, spot mistakes, and settle on the correct answer. Be concise.")
         let compare = "Problem:\n\(request.prefix(1800))\n\n" + drafts.enumerated().map { "Attempt \($0.offset + 1):\n\($0.element.prefix(800))" }.joined(separator: "\n\n")
             + "\n\nWhich attempt is right? Point out mistakes, then give the correct reasoning and a final line starting 'Answer:'."
         return String(try await retrying { ToolBudget.reset(); return try await judge.respond(to: compare, options: GenerationOptions(temperature: 0.1, maximumResponseTokens: 600)).content }.prefix(1600))
     }
 
     /// The model is rate-limited (macOS throttles background apps) or already busy: worth waiting and retrying.
+    /// Any error: the on-device model was busy (always false before macOS 26).
+    static func busy(_ error: Error) -> Bool {
+        if #available(macOS 26, *), let e = error as? LanguageModelSession.GenerationError { return isBusy(e) }
+        return false
+    }
+
+    @available(macOS 26, *)
     static func isBusy(_ e: LanguageModelSession.GenerationError) -> Bool {
         switch e {
         case .rateLimited, .concurrentRequests: true
@@ -782,6 +837,7 @@ final class Assistant: ObservableObject {
         }
     }
 
+    @available(macOS 26, *)
     static func retrying<T>(_ op: () async throws -> T) async throws -> T {
         for attempt in 0..<3 {
             do { return try await op() }
@@ -866,6 +922,7 @@ final class Assistant: ObservableObject {
                                                            prompt: question, maxTokens: 900, images: [jpg])
                         cont.yield(Assistant.plain(r)); cont.finish(); return
                     }
+                    guard #available(macOS 26, *) else { throw NSError(domain: "Onyx", code: 4, userInfo: [NSLocalizedDescriptionKey: Assistant.needsNewerMac]) }
                     let report = await ImageReader.analyze(image, effort: effort)
                     let request = "\(question)\n\nThe user circled part of their screen. " + report.prompt(limit: effort.contextChars)
                     var prompt = request
@@ -873,7 +930,7 @@ final class Assistant: ObservableObject {
                         cont.yield("Thinking…")
                         prompt += "\n\nYour own working notes (check them, then answer):\n" + (try await think(request, effort: effort))
                     }
-                    let s = LanguageModelSession(tools: [AgentTools.calculator], instructions: "You explain or solve what a user circled on their screen. Use the calculate tool for arithmetic. Be concise: at most \(effort == .low ? 50 : 120) words, plain text.")
+                    let s = LanguageModelSession(tools: AppleTool.list([AgentTools.calculator]), instructions: "You explain or solve what a user circled on their screen. Use the calculate tool for arithmetic. Be concise: at most \(effort == .low ? 50 : 120) words, plain text.")
                     for try await snap in s.streamResponse(to: prompt, options: options(effort)) { cont.yield(snap.content) }
                     cont.finish()
                 } catch { cont.finish(throwing: error) }

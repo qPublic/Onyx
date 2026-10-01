@@ -65,13 +65,14 @@ extension LoopEffect: Identifiable {
 
 /// What the on-device model fills in (a schema built at runtime, so it doesn't need Xcode's macros to compile).
 enum LoopPlan {
-    static let schema: GenerationSchema? = try? GenerationSchema(root: DynamicGenerationSchema(name: "LoopPlan", properties: [
+    @available(macOS 26, *)
+    static var schema: GenerationSchema? { try? GenerationSchema(root: DynamicGenerationSchema(name: "LoopPlan", properties: [
         .init(name: "name", description: "A short name for the wallpaper, 1 to 4 words", schema: DynamicGenerationSchema(type: String.self)),
         .init(name: "subject", description: "The character or creature the user asked to see, described only by how it looks: what it is, its shape and colors, and clothes or armor if it wears any, under 15 words (for example 'a tall knight in ornate golden armor with a tattered red cape'). Not scenery. An empty string if the user didn't ask for one.",
               schema: DynamicGenerationSchema(type: String.self)),
         .init(name: "scene", description: "One wide, scenic view for an image generator, under 40 words. If there is a subject, start with it, in the foreground. Keep every place, thing and time of day from the idea, and add the light, colors and mood. Describe how things look instead of naming games, films, brands or characters.",
               schema: DynamicGenerationSchema(type: String.self)),
-    ] + questions.map { .init(name: $0.0.rawValue, description: $0.1, schema: DynamicGenerationSchema(type: Bool.self)) }), dependencies: [])
+    ] + questions.map { .init(name: $0.0.rawValue, description: $0.1, schema: DynamicGenerationSchema(type: Bool.self)) }), dependencies: []) }
 
     /// A yes or no for each effect about the scene it just wrote (the small model picks far better this way than from a
     /// list), in the order they win when more than two fit.
@@ -86,9 +87,10 @@ enum LoopPlan {
 }
 
 extension ImagePlaygroundStyle {
+    var isChatGPT: Bool { if #available(macOS 26, *) { self == .externalProvider } else { false } }
     var title: String {
         self == .animation ? "Animation" : self == .illustration ? "Illustration" : self == .sketch ? "Sketch"
-            : self == .externalProvider ? "ChatGPT" : id.capitalized
+            : isChatGPT ? "ChatGPT" : id.capitalized
     }
 }
 
@@ -150,7 +152,8 @@ enum ArtStyle: String, CaseIterable, Identifiable {
 
     func checkImagePlayground() async {
         guard canDraw == nil else { return }
-        let suitable: [ImagePlaygroundStyle] = [.animation, .illustration, .sketch, .externalProvider]   // not Emoji or Messages backgrounds
+        var suitable: [ImagePlaygroundStyle] = [.animation, .illustration, .sketch]   // not Emoji or Messages backgrounds
+        if #available(macOS 26, *) { suitable.append(.externalProvider) }
         do { styles = try await ImageCreator().availableStyles.filter { suitable.contains($0) }; canDraw = !styles.isEmpty } catch { canDraw = false }
     }
 
@@ -462,7 +465,7 @@ enum ArtStyle: String, CaseIterable, Identifiable {
            let a = r.firstIndex(of: "{"), let b = r.lastIndex(of: "}"), let d = String(r[a...b]).data(using: .utf8),
            let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
             painter = o["painter"] as? String ?? ""; look = o["look"] as? String ?? ""
-        } else if case .available = SystemLanguageModel.default.availability,
+        } else if #available(macOS 26, *), case .available = SystemLanguageModel.default.availability,
                   let schema = try? GenerationSchema(root: DynamicGenerationSchema(name: "StyleChoice", properties: [
                     .init(name: "painter", description: "The painter to use", schema: DynamicGenerationSchema(name: "Painter", anyOf: options.map(\.rawValue))),
                     .init(name: "look", description: "The look, 8 to 16 words", schema: DynamicGenerationSchema(type: String.self)),
@@ -499,7 +502,7 @@ enum ArtStyle: String, CaseIterable, Identifiable {
                         effects: LoopEffect.guess(trimmed), subject: someone ? trimmed : "")
         planError = nil
         if CloudAI.active, !trimmed.isEmpty, let c = await cloudPlan(trimmed, look: look, style: style, someone: someone) { return c }
-        guard case .available = SystemLanguageModel.default.availability, !trimmed.isEmpty, let schema = LoopPlan.schema else { return fallback }
+        guard #available(macOS 26, *), case .available = SystemLanguageModel.default.availability, !trimmed.isEmpty, let schema = LoopPlan.schema else { return fallback }
         let styleLine = style.map { "\nIt will be drawn in a \($0.lowercased()) style." } ?? ""
         let who = someone ? "\nThe idea asks for a character or creature. Keep the one it names; if it just says character, invent one that fits this world."
             : "\nNo characters, people or animals: just the place."
@@ -639,7 +642,7 @@ enum ArtStyle: String, CaseIterable, Identifiable {
 
     /// Apple's on-device super resolution (the still-image model), when the picture is smaller than the screen.
     nonisolated static func upscale(_ img: CGImage, to width: Int, modelProgress: @escaping @Sendable (Double) -> Void) async -> CGImage? {
-        guard VTSuperResolutionScalerConfiguration.isSupported, img.width < width * 9 / 10, img.width <= 1920, img.height <= 1920 else { return nil }
+        guard #available(macOS 26, *), VTSuperResolutionScalerConfiguration.isSupported, img.width < width * 9 / 10, img.width <= 1920, img.height <= 1920 else { return nil }
         let factors = VTSuperResolutionScalerConfiguration.supportedScaleFactors.filter { $0 > 1 }.sorted()
         guard let f = factors.first(where: { img.width * $0 >= width * 9 / 10 }) ?? factors.last,
               let c = VTSuperResolutionScalerConfiguration(frameWidth: img.width, frameHeight: img.height, scaleFactor: f, inputType: .image,
@@ -931,7 +934,7 @@ enum DepthModel {
         var v = [Float](repeating: 0, count: w * h)
         for y in 0..<h {
             let row = base.advanced(by: y * bpr)
-            for x in 0..<w { v[y * w + x] = half ? Float(row.assumingMemoryBound(to: Float16.self)[x]) : row.assumingMemoryBound(to: Float.self)[x] }
+            for x in 0..<w { v[y * w + x] = half ? Half.toFloat(row.assumingMemoryBound(to: UInt16.self)[x]) : row.assumingMemoryBound(to: Float.self)[x] }
         }
         // Stretch the 2nd–98th percentile to 0…1.
         let sorted = v.sorted()
@@ -1040,7 +1043,7 @@ struct CreateLoopSheet: View {
             HStack {
                 Label("Create with AI", systemImage: "wand.and.sparkles").font(.system(size: 20, weight: .bold))
                 Spacer()
-                Button(maker.busy ? "Hide" : "Close") { if !maker.busy { maker.reset() }; close() }.buttonStyle(.glass)
+                Button(maker.busy ? "Hide" : "Close") { if !maker.busy { maker.reset() }; close() }.glassButton()
             }
             switch maker.step {
             case .idle, .failed: form
@@ -1089,7 +1092,7 @@ struct CreateLoopSheet: View {
                 Text("Everything happens on this Mac. Nothing is uploaded.").font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
                 Button { start() } label: { Label(fromPicture && !restyle ? "Next" : "Create", systemImage: "sparkles") }
-                    .buttonStyle(.glassProminent).controlSize(.large)
+                    .glassButton(prominent: true).controlSize(.large)
                     .disabled(fromPicture ? picture == nil : (idea.trimmingCharacters(in: .whitespaces).isEmpty || (art.playground != nil && maker.canDraw != true)))
             }
         }
@@ -1106,15 +1109,16 @@ struct CreateLoopSheet: View {
                         VStack(spacing: 4) {
                             Image(systemName: a.icon).font(.system(size: 17)).frame(height: 20)
                             Text(a.title).font(.system(size: 12, weight: .semibold))
-                            Text(needs ? "2 GB download" : a.blurb).font(.system(size: 9.5)).foregroundStyle(.secondary).lineLimit(1)
+                            Text(a.diffusion != nil && !DiffusionStyle.supported ? "Needs Apple silicon" : needs ? "2 GB download" : a.blurb)
+                                .font(.system(size: 9.5)).foregroundStyle(.secondary).lineLimit(1)
                         }
                         .frame(maxWidth: .infinity).padding(.vertical, 9)
                         .background(on ? RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.cyan.opacity(0.3)) : nil)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 12))
-                    .opacity(a.playground != nil && maker.canDraw == false ? 0.4 : 1)
+                    .onyxGlass(.regular.interactive(), in: .rect(cornerRadius: 12))
+                    .opacity((a.playground != nil && maker.canDraw == false) || (a.diffusion != nil && !DiffusionStyle.supported) ? 0.4 : 1)
                 }
             }
             if let sd = art.diffusion, sd.ready {
@@ -1145,7 +1149,7 @@ struct CreateLoopSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+        .onyxGlass(.regular.interactive(), in: .rect(cornerRadius: 16))
         .overlay { if dropping { RoundedRectangle(cornerRadius: 16).strokeBorder(.cyan, style: StrokeStyle(lineWidth: 2, dash: [7])) } }
         .onDrop(of: [.fileURL, .image], isTargeted: $dropping) { providers in
             _ = providers.first?.loadObject(ofClass: URL.self) { u, _ in if let u { DispatchQueue.main.async { load(u) } } }
@@ -1192,7 +1196,7 @@ struct CreateLoopSheet: View {
             if !maker.scene.isEmpty && maker.step == .drawing { Text(maker.scene).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(3) }
             grid(selectable: false)
             Spacer(minLength: 0)
-            HStack { Spacer(); Button("Stop") { maker.cancel() }.buttonStyle(.glass) }
+            HStack { Spacer(); Button("Stop") { maker.cancel() }.glassButton() }
         }
     }
 
@@ -1243,15 +1247,15 @@ struct CreateLoopSheet: View {
                 .font(.system(size: 12))
             Spacer(minLength: 0)
             HStack {
-                Button("Back") { maker.reset() }.buttonStyle(.glass)
+                Button("Back") { maker.reset() }.glassButton()
                 Button { if chosen < maker.images.count { maker.moreLike(maker.images[chosen]) } } label: { Label("More like this", systemImage: "square.on.square") }
-                    .buttonStyle(.glass).disabled(maker.art == nil && maker.canDraw != true)
+                    .glassButton().disabled(maker.art == nil && maker.canDraw != true)
                     .help("Paints two new versions of the picture you picked")
                 Spacer()
                 Button { if chosen < maker.images.count { maker.make(maker.images[chosen], motion: [0.004, 0.007, 0.012][motion]) } } label: {
                     Label("Make Loop", systemImage: "play.circle")
                 }
-                .buttonStyle(.glassProminent).controlSize(.large)
+                .glassButton(prominent: true).controlSize(.large)
             }
         }
     }
@@ -1268,7 +1272,7 @@ struct CreateLoopSheet: View {
             ProgressView(value: p).tint(.cyan)
             Text("About a minute. You can hide this window; it keeps going.").font(.system(size: 11)).foregroundStyle(.secondary)
             Spacer(minLength: 0)
-            HStack { Spacer(); Button("Cancel") { maker.cancel() }.buttonStyle(.glass) }
+            HStack { Spacer(); Button("Cancel") { maker.cancel() }.glassButton() }
         }
     }
 
@@ -1281,8 +1285,8 @@ struct CreateLoopSheet: View {
                 .font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 420)
             Spacer()
             HStack {
-                Button("Make Another") { maker.reset() }.buttonStyle(.glass)
-                Button("Done") { maker.reset(); close() }.buttonStyle(.glassProminent)
+                Button("Make Another") { maker.reset() }.glassButton()
+                Button("Done") { maker.reset(); close() }.glassButton(prominent: true)
             }
         }
         .frame(maxWidth: .infinity)
@@ -1310,7 +1314,7 @@ struct FlowChips: View {
                     .background(on ? Capsule().fill(Color.cyan.opacity(0.35)) : nil)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(on ? .regular.tint(.cyan.opacity(0.5)).interactive() : .regular.interactive(), in: .capsule)
+                .onyxGlass(on ? .regular.tint(.cyan.opacity(0.5)).interactive() : .regular.interactive(), in: .capsule)
             }
         }
     }

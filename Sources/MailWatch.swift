@@ -93,7 +93,11 @@ import FoundationModels
     func process(_ messages: [MailMessage], never: [String], careful: [String], auto: Bool) async -> [FoundEvent] {
         var out: [FoundEvent] = [], reads = 0
         let skipBulk = Prefs.bool(Self.skipBulkKey), cloud = CloudAI.active && Prefs.bool(Self.cloudKey)
-        let modelReady = cloud || SystemLanguageModel.default.availability == .available
+        let modelReady: Bool = {
+            if cloud { return true }
+            if #available(macOS 26, *) { return SystemLanguageModel.default.availability == .available }
+            return false   // macOS 15: only a cloud model reads email
+        }()
         emails: for m in messages.sorted(by: { $0.date < $1.date }) where !seenSet.contains(m.key) {
             if MailRules.matches(never, address: m.from, name: m.fromName) { markSeen(m.key); continue }   // not even opened
             let isCareful = MailRules.matches(careful, address: m.from, name: m.fromName)
@@ -112,7 +116,7 @@ import FoundationModels
                 reads += 1
                 readLog.append(m.subject)
                 do { found += try await MailEventFinder.find(in: m, careful: isCareful, cloud: cloud) }
-                catch let e as LanguageModelSession.GenerationError where Assistant.isBusy(e) { break emails }   // busy: try again next time
+                catch let e where Assistant.busy(e) { break emails }   // busy: try again next time
                 catch {}
             }
             markSeen(m.key)
@@ -325,6 +329,10 @@ struct MailEventsSection: View {
     var body: some View {
         Section {
             Toggle("Find events in my email", isOn: $scan)
+            if scan && !OS.mayHaveAppleAI && !CloudAI.active {
+                Text("Reading emails for events needs Apple's on-device AI (\(OS.noAppleAIReason)) or a cloud model. Pick one in Settings › Privacy › AI. Calendar invitations still come through.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             if scan {
                 Picker("When Onyx finds one", selection: $auto) {
                     Text("Add it to my calendar").tag(true)

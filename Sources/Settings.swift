@@ -286,11 +286,14 @@ struct AppearanceSettings: View {
     var body: some View {
         Form {
             Section("Style") {
-                Picker("Notch material", selection: $style) {
-                    ForEach(NotchStyle.allCases) { Text($0.title).tag($0.rawValue) }
+                Picker("Notch material", selection: Binding(get: { AP.notchStyle.rawValue }, set: { style = $0 })) {
+                    ForEach(NotchStyle.allCases.filter { $0 != .glass || OS.hasLiquidGlass }) { Text($0.title).tag($0.rawValue) }
                 }
                 .pickerStyle(.segmented)
-                if style == NotchStyle.glass.rawValue {
+                if !OS.hasLiquidGlass {
+                    Text("Liquid Glass comes with macOS 26. On this Mac, the frosted look is the closest.").font(.caption).foregroundStyle(.secondary)
+                }
+                if style == NotchStyle.glass.rawValue && OS.hasLiquidGlass {
                     Picker("Glass", selection: $glassVariant) {
                         Text("Regular").tag("regular"); Text("Clear").tag("clear")
                     }
@@ -414,6 +417,7 @@ struct BehaviorSettings: View {
     @AppStorage(Prefs.hoverDelay) var hoverDelay = 0.12
     @AppStorage(AP.animation) var animation = AnimationStyle.bouncy.rawValue
     @AppStorage(Motion.key) var reduceMotion = false
+    @AppStorage(QuickTranslate.targetKey) var translateTarget = ""
     @AppStorage(AP.haptics) var haptics = true
     @AppStorage(AP.hideFullscreen) var hideFullscreen = true
     @AppStorage(AP.hideFromCapture) var hideFromCapture = true
@@ -466,6 +470,15 @@ struct BehaviorSettings: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle("Haptic feedback on open", isOn: $haptics)
+            }
+            if battery.hasBattery { LidAwakeSection() }
+            Section("Quick Translate") {
+                Picker("Translate into", selection: $translateTarget) {
+                    Text("Automatic").tag("")
+                    ForEach(QuickTranslate.languages, id: \.code) { Text($0.name).tag($0.code) }
+                }
+                Text("Select text in any app and press \(Shortcuts.get(.translateSelection)?.display ?? "its shortcut") to see the translation under the notch. Automatic translates into your Mac's language, or into English if it's already in that (Spanish if you use English). Apple's translation works on this Mac once a language is downloaded in System Settings › General › Language & Region › Translation Languages. With a cloud model picked in Privacy › AI, any language works.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if battery.hasBattery {
                 Section("Battery") {

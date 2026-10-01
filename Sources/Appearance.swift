@@ -136,7 +136,11 @@ enum AP {
     static func reset() { defaults.keys.forEach { UserDefaults.standard.removeObject(forKey: $0) } }
 
     private static var d: UserDefaults { .standard }
-    static var notchStyle: NotchStyle { NotchStyle(rawValue: Prefs.string(style)) ?? .solid }
+    /// Liquid Glass needs macOS 26: before that the notch uses the frosted look (your choice is kept for later).
+    static var notchStyle: NotchStyle {
+        let s = NotchStyle(rawValue: Prefs.string(style)) ?? .solid
+        return s == .glass && !OS.hasLiquidGlass ? .blur : s
+    }
     /// The style also shows while closed, except over a built-in notch, where the closed notch stays black to blend in.
     static var styleWhenCollapsed: Bool { Prefs.bool(styleCollapsed) && !NotchModel.shared.geometry.hasNotch }
     static var placementValue: Placement { Placement(rawValue: Prefs.string(placement)) ?? .attached }
@@ -152,9 +156,9 @@ enum AP {
     static var collapsedLeft: NotchWidget? { NotchWidget(rawValue: Prefs.string(collLeft)) }
     static var collapsedMid: NotchWidget? { NotchWidget(rawValue: Prefs.string(collMid)) }
     static var collapsedRight: NotchWidget? { NotchWidget(rawValue: Prefs.string(collRight)) }
-    static var glass: Glass {
+    static var glass: OnyxGlass {
         if Prefs.string(glassVariant) == "clear" { return .clear }   // Apple's see-through glass: no tint, just edge lensing
-        let base: Glass = .regular
+        let base: OnyxGlass = .regular
         return base.tint(Color(hex: Prefs.string(tint)).opacity(d.double(forKey: tintStrength)))
     }
 
@@ -313,7 +317,7 @@ struct NotchBackground<S: Shape>: View {
                 if Prefs.string(AP.glassVariant) == "clear" && Prefs.bool(AP.clearBlur) {
                     shape.fill(.ultraThinMaterial)
                 }
-                Color.clear.glassEffect(AP.glass, in: shape)
+                Color.clear.onyxGlass(AP.glass, in: shape)
             }
         } else {
             VisualEffectBlur().clipShape(shape)

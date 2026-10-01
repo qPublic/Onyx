@@ -618,6 +618,7 @@ final class SceneView: NSView {
 
     /// Floating Liquid Glass shapes that bend the colors drifting behind them.
     private func addGlassDrops() {
+        guard #available(macOS 26, *) else { return }   // Liquid Glass came with macOS 26: before that, just the colors
         let shapes: [(CGFloat, CGFloat, CGFloat, CGFloat, CGFloat)] = [   // x, y, width, height, corner (fractions of the screen)
             (0.14, 0.58, 0.16, 0.16, 0.08), (0.62, 0.22, 0.26, 0.11, 0.055), (0.7, 0.64, 0.12, 0.12, 0.06), (0.36, 0.3, 0.09, 0.09, 0.045)]
         let s = min(bounds.width, bounds.height)

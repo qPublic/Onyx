@@ -62,7 +62,8 @@ enum MailEventFinder {
         sent: "Friday" means the next Friday after that day. Use only what the email says: never invent a time, place or event.
         """
 
-    static let schema = try? GenerationSchema(root: DynamicGenerationSchema(name: "EmailEvents", properties: [
+    @available(macOS 26, *)
+    static var schema: GenerationSchema? { try? GenerationSchema(root: DynamicGenerationSchema(name: "EmailEvents", properties: [
         .init(name: "events", description: "Events in this email to put on the calendar. Empty if there are none.",
               schema: DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(name: "Event", properties: [
                 .init(name: "title", description: "What it is, 2 to 6 words, e.g. Dentist appointment, Soccer practice, Dinner with Sam",
@@ -73,13 +74,14 @@ enum MailEventFinder {
                 .init(name: "location", description: "Where, if the email says; otherwise empty", schema: DynamicGenerationSchema(type: String.self)),
                 .init(name: "evidence", description: "The exact words from the email that give the day and time", schema: DynamicGenerationSchema(type: String.self)),
               ]), minimumElements: 0, maximumElements: 3)),
-    ]), dependencies: [])
+    ]), dependencies: []) }
 
-    static let reviewSchema = try? GenerationSchema(root: DynamicGenerationSchema(name: "EventCheck", properties: [
+    @available(macOS 26, *)
+    static var reviewSchema: GenerationSchema? { try? GenerationSchema(root: DynamicGenerationSchema(name: "EventCheck", properties: [
         .init(name: "real", description: "True if the email really describes this event for the reader", schema: DynamicGenerationSchema(type: Bool.self)),
         .init(name: "date", description: "The correct day, yyyy-MM-dd", schema: DynamicGenerationSchema(type: String.self)),
         .init(name: "start", description: "The correct start time, HH:mm in 24-hour time, or empty if none is given", schema: DynamicGenerationSchema(type: String.self)),
-    ]), dependencies: [])
+    ]), dependencies: []) }
 
     static func prompt(_ m: MailMessage, limit: Int) -> String {
         let sent = m.date.formatted(.dateTime.weekday(.wide).month(.wide).day().year().hour().minute())
@@ -87,6 +89,7 @@ enum MailEventFinder {
             + "From: \(m.fromName) <\(m.from)>\nSubject: \(m.subject)\n\n\(m.text.prefix(limit))"
     }
 
+    @available(macOS 26, *)
     static func candidates(_ c: GeneratedContent) -> [Candidate] {
         guard case .structure(let props, _) = c.kind, let list = props["events"], case .array(let items) = list.kind else { return [] }
         func s(_ e: GeneratedContent, _ k: String) -> String { ((try? e.value(String.self, forProperty: k)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -101,7 +104,7 @@ enum MailEventFinder {
                                                  prompt: prompt(m, limit: 30_000), maxTokens: 900)
             list = json(raw)
         } else {
-            guard let schema else { return [] }
+            guard #available(macOS 26, *), let schema else { return [] }   // macOS 15: only a cloud model reads email
             let s = LanguageModelSession(instructions: instructions)
             let out = try await Assistant.retrying {
                 try await s.respond(to: prompt(m, limit: careful ? 7000 : 3000), schema: schema, options: GenerationOptions(sampling: .greedy)).content
@@ -117,6 +120,7 @@ enum MailEventFinder {
     }
 
     /// Careful senders: a second, separate look at each event against the email.
+    @available(macOS 26, *)
     static func review(_ c: Candidate, _ m: MailMessage) async throws -> Candidate {
         guard let reviewSchema else { return c }
         let s = LanguageModelSession(instructions: "You check an event someone took from an email. Compare it with the email word by word, and work out weekdays from the day the email was sent.")

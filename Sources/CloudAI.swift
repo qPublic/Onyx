@@ -12,7 +12,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .apple: "Apple on-device (free, private)"
+        case .apple: OS.mayHaveAppleAI ? "Apple on-device (free, private)" : "Apple on-device (\(OS.noAppleAIReason))"
         case .anthropic: "Claude (Anthropic)"
         case .openai: "ChatGPT (OpenAI)"
         case .gemini: "Gemini (Google, free with your Google account)"
@@ -218,7 +218,7 @@ enum CloudAI {
         guard let t = tools.first(where: { $0.name == name }) else { return "No tool called \(name)" }
         let strings = input.mapValues { v -> String in (v as? String) ?? "\(v)" }
         guard let d = try? JSONSerialization.data(withJSONObject: strings), let json = String(data: d, encoding: .utf8),
-              let args = try? GeneratedContent(json: json) else { return "Couldn't read the arguments" }
+              let args = try? ToolArgs(json: json) else { return "Couldn't read the arguments" }
         do { return try await t.call(arguments: args) } catch { return "TOOL ERROR: \(error.localizedDescription)" }
     }
 
@@ -272,7 +272,10 @@ struct AIModelSettings: View {
         }
         .onChange(of: providerRaw) { _, _ in load() }
         .onAppear { load() }
-        if p == .apple {
+        if p == .apple && !OS.mayHaveAppleAI {
+            Text("Apple's free on-device AI \(OS.noAppleAIReason), so Onyx AI is off on this Mac. Pick Gemini above for a free key with your Google account, or Ollama to run a model on this Mac.")
+                .font(.caption).foregroundStyle(.orange)
+        } else if p == .apple {
             Text("Runs on your Mac: free, private and offline. It's a small model, so for hard questions you can switch to a bigger one here.")
                 .font(.caption).foregroundStyle(.secondary)
         } else {

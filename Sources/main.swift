@@ -178,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         MainActor.assumeIsolated { Briefing.watch() }   // the morning briefing
         MainActor.assumeIsolated { MailWatch.shared.start() }   // events from your email (once an account is added)
         MainActor.assumeIsolated { ProtonVPN.shared.start() }   // Proton VPN status (macOS tells Onyx when it changes)
+        MainActor.assumeIsolated { LidAwake.shared.start() }    // Lid Awake: whether it's on, and the battery while it is
         PrivateGuard.shared.start()             // private or incognito windows: record and read nothing (always on)
         LinkedCalendars.shared.start()          // calendars pasted as a link, updated every 30 minutes
         MainActor.assumeIsolated { SchoolSignup.shared.start() }   // TeachMore academy sign-up (once it's set up)
@@ -256,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         // Debug: ONYX_ENHANCE_TEST=<dir> runs a generated clip through the AI video enhancer (see EnhanceSelfTest).
-        if let dir = ProcessInfo.processInfo.environment["ONYX_ENHANCE_TEST"] { Task.detached { await EnhanceSelfTest.run(dir) } }
+        if let dir = ProcessInfo.processInfo.environment["ONYX_ENHANCE_TEST"], #available(macOS 26, *) { Task.detached { await EnhanceSelfTest.run(dir) } }
         // Debug: ONYX_WALLTEST=<dir> checks live wallpapers and the app launcher (see WallpaperSelfTest).
         if let dir = ProcessInfo.processInfo.environment["ONYX_WALLTEST"] {
             Task { @MainActor in try? await Task.sleep(for: .seconds(2)); await WallpaperSelfTest.run(dir) }

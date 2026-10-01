@@ -119,7 +119,7 @@ enum ImageReader {
         }.value
 
         // High / Max: also read the page's structure, so tables come through as rows and columns.
-        if effort == .high || effort == .max, let docs = try? await RecognizeDocumentsRequest().perform(on: img) {
+        if effort == .high || effort == .max, #available(macOS 26, *), let docs = try? await RecognizeDocumentsRequest().perform(on: img) {
             for d in docs {
                 for t in d.document.tables.prefix(3) {
                     let rows = t.rows.prefix(20).map { row in

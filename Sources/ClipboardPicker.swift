@@ -114,7 +114,7 @@ struct ClipboardPickerView: View {
         }
         .padding(12)
         .frame(width: 520, height: 430)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .onyxGlass(.regular, in: .rect(cornerRadius: 20))
         .environment(\.colorScheme, .dark)
         .onAppear { DispatchQueue.main.async { focused = true } }
     }

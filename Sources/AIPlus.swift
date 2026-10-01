@@ -10,6 +10,7 @@ enum AIText {
     /// A single answer (no chat, no tools). Uses the cloud model if you picked one, else Apple's on-device model.
     static func complete(system: String, prompt: String, maxTokens: Int = 600, temperature: Double = 0.3) async throws -> String {
         if CloudAI.active { return try await CloudAI.complete(system: system, prompt: prompt, maxTokens: maxTokens) }
+        guard #available(macOS 26, *) else { throw CloudError(message: Assistant.needsNewerMac) }
         let s = LanguageModelSession(instructions: system)
         return try await Assistant.retrying { try await s.respond(to: prompt, options: GenerationOptions(temperature: temperature, maximumResponseTokens: maxTokens)).content }
     }
@@ -269,6 +270,7 @@ enum OnDeviceTranslate {
         }
         let source = Locale.Language(identifier: src)
         guard await LanguageAvailability().status(from: source, to: target) == .installed else { return nil }
+        guard #available(macOS 26, *) else { return await TranslationHost.shared.translate(text, from: source, to: target) }   // macOS 15
         let session = TranslationSession(installedSource: source, target: target)
         return try? await session.translate(text).targetText
     }
@@ -429,6 +431,7 @@ extension Assistant {
     }
 
     /// The chat outgrew the on-device model's memory: keep a short summary instead of forgetting it all.
+    @available(macOS 26, *)
     @MainActor func summarizeSoFar() async {
         let turns = messages.filter { $0.role == .user || $0.role == .assistant }.dropLast().suffix(12)
         let transcript = turns.map { ($0.role == .user ? "User: " : "Onyx: ") + $0.text.prefix(400) }.joined(separator: "\n")

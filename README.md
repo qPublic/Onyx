@@ -8,7 +8,7 @@ This walks you through installing Onyx and opening it for the first time. It tak
 
 ### 1. Check your Mac
 
-You need a Mac with Apple silicon (M1 or later) running macOS 26 or later. Onyx AI's free on-device assistant also needs Apple Intelligence turned on in **System Settings › Apple Intelligence & Siri**. You can use Onyx without it, or connect Claude, ChatGPT or Gemini in Settings instead.
+You need a Mac running macOS 15.4 (Sequoia) or later, with Apple silicon or Intel. Onyx checks what your Mac can do and adapts. Onyx AI's free on-device assistant needs an Apple silicon Mac with macOS 26 and Apple Intelligence turned on in **System Settings › Apple Intelligence & Siri**. Without it, connect Gemini (free with your Google account), Claude or ChatGPT in Settings, or use Onyx without AI. On Sequoia the notch uses a frosted look instead of Liquid Glass.
 
 ### 2. Download and install
 
@@ -89,9 +89,9 @@ Some features need a little setup in Settings first:
 
 ## Requirements
 
-- Apple silicon Mac
-- macOS 26 or later
-- Xcode Command Line Tools with the macOS 26 SDK
+- macOS 15.4 or later, on Apple silicon or Intel (one universal app)
+- The free on-device AI, Liquid Glass and video enhancing need macOS 26 on Apple silicon
+- To build: Xcode Command Line Tools with the macOS 26 SDK or later
 
 ## Build and Run
 

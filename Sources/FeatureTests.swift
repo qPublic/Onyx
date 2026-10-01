@@ -7,6 +7,9 @@ import AVFoundation
 import Speech
 import ImagePlayground
 import Metal
+import PDFKit
+import Translation
+import UniformTypeIdentifiers
 
 // MARK: - Self-test (debug): ONYX_FEATURES_TEST=<dir> checks AirPods, rain, weather stations, voice and settings sync,
 // writing features.log (and a screenshot of the AirPods pop-up) there, then quits. Never touches your real settings.
@@ -102,7 +105,7 @@ enum FeatureSelfTest {
         check("airport reports work outside the US (London Heathrow)", metar.contains { $0.id == "EGLL" })
 
         // Live: speech-to-text on a sentence spoken by macOS's own voice, through the same converter the mic uses.
-        await voiceTest(dir, note: note, check: check)
+        if #available(macOS 26, *) { await voiceTest(dir, note: note, check: check) } else { note("(voice test skipped: it checks macOS 26's speech engine)") }
 
         // The AirPods pop-up, captured (debug builds show the notch in screenshots).
         NotchModel.shared.flash(.earbuds(name: "Sam’s AirPods Pro", left: 80, right: 75, caseLevel: 18, main: nil), for: 4)
@@ -119,6 +122,7 @@ enum FeatureSelfTest {
         exit(0)
     }
 
+    @available(macOS 26, *)
     @MainActor static func voiceTest(_ dir: String, note: (String) -> Void, check: (String, Bool) -> Void) async {
         let aiff = dir + "/voice.aiff"
         let say = Process(); say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
@@ -164,6 +168,7 @@ enum FeatureSelfTest {
 // (60 fps; plus 2× when ONYX_ENHANCE_TEST_SR=1, which downloads Apple's model once), and checks the result.
 
 enum EnhanceSelfTest {
+    @available(macOS 26, *)
     static func run(_ dir: String) async {
         var log: [String] = []
         func note(_ s: String) { log.append(s); try? log.joined(separator: "\n").write(toFile: dir + "/enhance.log", atomically: true, encoding: .utf8) }
@@ -904,12 +909,90 @@ enum ExtrasTest {
         let long = (1...14).map { i in "Section \(i). " + String(repeating: "The committee reviewed routine budget items and approved minor changes. ", count: 8) + (i == 9 ? "The launch date was moved to March 14 because the supplier was late. " : "") }.joined(separator: "\n")
         let doc = AIDocument(name: "minutes.txt", text: long)
         let t0 = Date()
-        if let notes = try? await Assistant.shared.read(doc, for: "When is the launch, and why did it change?", effort: .medium) {
+        if #available(macOS 26, *), let notes = try? await Assistant.shared.read(doc, for: "When is the launch, and why did it change?", effort: .medium) {
             note(String(format: "long document (%d chars) read in %.0f s:\n", long.count, Date().timeIntervalSince(t0)) + notes.prefix(700))
             check("notes found the launch date", notes.contains("March 14") || notes.lowercased().contains("march"))
         }
 
         for (name, ok) in LinkedCalendars.selfTest() { check("linked calendars: " + name, ok) }
+
+        // macOS 15 and Intel: the same app adapts to the Mac it's on.
+        let args = try? ToolArgs(json: #"{"text": "hi", "count": 3, "on": true}"#)
+        check("tool arguments read the same from any model (\(args?.values ?? [:]))", args?.values["text"] == "hi" && args?.values["count"] == "3" && args.map { arg($0, "text") } == "hi")
+        check("half-precision numbers read by hand (Intel has no Float16)",
+              Half.toFloat(0x3C00) == 1 && Half.toFloat(0xC000) == -2 && Half.toFloat(0x3800) == 0.5 && Half.toFloat(0x0001) == 0x1p-24 && Half.toFloat(0x7C00).isInfinite && Half.toFloat(0) == 0)
+        check("knows what this Mac can do (Liquid Glass \(OS.hasLiquidGlass), Apple AI \(OS.mayHaveAppleAI), Apple silicon \(OS.appleSilicon))",
+              OS.hasLiquidGlass == (ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26) && (!OS.mayHaveAppleAI || OS.appleSilicon))
+
+        // Quick Translate: which way it goes, and Apple's translation through the macOS 15 route (it works on 26 too).
+        let pick = { (src: String) in QuickTranslate.target(for: src) }
+        let mine = Locale.current.language.languageCode?.identifier ?? "en"
+        check("Quick Translate: into your language, or the other way if it's already in it (\(pick("fr")), \(pick(mine)))",
+              QuickTranslate.same(pick("fr"), mine == "fr" ? "en" : mine) && !QuickTranslate.same(pick(mine), mine))
+        let en = Locale.Language(identifier: "en"), es = Locale.Language(identifier: "es")
+        if await LanguageAvailability().status(from: en, to: es) == .installed {
+            let t0 = Date()
+            let viaHost = await TranslationHost.shared.translate("Good morning, how are you?", from: en, to: es)
+            check(String(format: "translates on this Mac the macOS 15 way (%.1f s): %@", Date().timeIntervalSince(t0), viaHost ?? "nil"), (viaHost ?? "").lowercased().contains("buen"))
+        } else { note("(English → Spanish isn't downloaded here, so the on-device translation check was skipped)") }
+
+        // Convert on the Shelf: a picture and a short video, made on this Mac.
+        let png = tmp.appendingPathComponent("Shelf test.png")
+        if let img = AISelfTest.render(["Onyx"]), let d = CGImageDestinationCreateWithURL(png as CFURL, UTType.png.identifier as CFString, 1, nil) {
+            CGImageDestinationAddImage(d, img, nil); CGImageDestinationFinalize(d)
+            let w = img.width
+            func size(_ u: URL?) -> Int { u.flatMap { CGImageSourceCreateWithURL($0 as CFURL, nil) }.flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [CFString: Any] }?[kCGImagePropertyPixelWidth] as? Int ?? 0 }
+            let jpg = try? await ShelfConverter.make(.jpeg, [png]), heic = try? await ShelfConverter.make(.heic, [png]), half = try? await ShelfConverter.make(.smaller, [png])
+            check("Shelf: picture to JPEG and HEIC, same size, next to the original (\(jpg?.lastPathComponent ?? "nil") \(size(jpg)) px, \(heic?.lastPathComponent ?? "nil") \(size(heic)) px, from \(w) px)",
+                  jpg?.pathExtension == "jpg" && heic?.pathExtension == "heic" && size(jpg) == w && size(heic) == w
+                  && jpg?.deletingLastPathComponent().resolvingSymlinksInPath().path == tmp.resolvingSymlinksInPath().path)
+            check("Shelf: half the size (\(size(half)) from \(w) px)", abs(size(half) - w / 2) <= 1)
+            let again = try? await ShelfConverter.make(.jpeg, [png])
+            check("Shelf: never writes over a file (\(again?.lastPathComponent ?? "nil"))", again?.lastPathComponent == "Shelf test 2.jpg")
+            let pdf = try? await ShelfConverter.make(.pdf, [png, jpg].compactMap { $0 })
+            check("Shelf: pictures into one PDF (\(pdf.flatMap { PDFDocument(url: $0)?.pageCount } ?? 0) pages)", pdf.flatMap { PDFDocument(url: $0)?.pageCount } == 2)
+            let zip = try? await ShelfConverter.make(.zip, [png])
+            let listing = Process(); let pipe = Pipe()
+            listing.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo"); listing.arguments = ["-1", zip?.path ?? "/dev/null"]; listing.standardOutput = pipe
+            try? listing.run(); listing.waitUntilExit()
+            check("Shelf: ZIP for email", String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).contains("Shelf test.png"))
+        } else { check("Shelf: test picture", false) }
+        let clip = tmp.appendingPathComponent("Shelf clip.mov")
+        do {
+            try await EnhanceSelfTest.makeClip(clip, width: 320, height: 180, fps: 24, seconds: 2)
+            let mp4 = try await ShelfConverter.make(.mp4, [clip]), gif = try await ShelfConverter.make(.gif, [clip])
+            let frames = CGImageSourceCreateWithURL(gif as CFURL, nil).map(CGImageSourceGetCount) ?? 0
+            let plays = (try? await AVURLAsset(url: mp4).load(.isPlayable)) ?? false
+            check("Shelf: video to MP4 and a GIF (\(frames) frames)", plays && mp4.pathExtension == "mp4" && frames >= 20)
+            check("Shelf: offers the right things (\(ShelfConverter.options(for: clip).map(\.rawValue)))",
+                  ShelfConverter.options(for: clip).contains(.gif) && !ShelfConverter.options(for: png).contains(.png) && ShelfConverter.options(for: png).contains(.jpeg))
+        } catch { check("Shelf: video conversion (\(error))", false) }
+
+        // Lid Awake: the watcher, run with a stand-in for pmset (your Mac's real sleep setting is never touched).
+        check("Lid Awake reads macOS's sleep setting", LidAwake.sleepDisabled(" SleepDisabled\t\t1\n") && !LidAwake.sleepDisabled(" SleepDisabled\t\t0\n") && !LidAwake.sleepDisabled(""))
+        let fakePM = tmp.appendingPathComponent("pmset"), calls = tmp.appendingPathComponent("pmset-calls"), batt = tmp.appendingPathComponent("batt")
+        try? "#!/bin/sh\necho \"$@\" >> '\(calls.path)'\n".write(to: fakePM, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakePM.path)
+        func watch(_ battery: String) async -> (early: String, late: String) {
+            try? battery.write(to: batt, atomically: true, encoding: .utf8)
+            try? FileManager.default.removeItem(at: calls)
+            let flag = tmp.appendingPathComponent("lid-off-\(UUID().uuidString)")
+            let sh = Process(); sh.executableURL = URL(fileURLWithPath: "/bin/sh")
+            sh.arguments = ["-c", LidAwake.startWatcher(pmset: fakePM.path, flag: flag.path, offAt: 10, interval: 1, battery: "/bin/cat '\(batt.path)'")]
+            try? sh.run(); sh.waitUntilExit()
+            try? await Task.sleep(for: .seconds(2.5))
+            let early = (try? String(contentsOf: calls, encoding: .utf8)) ?? ""
+            FileManager.default.createFile(atPath: flag.path, contents: nil)   // what turning it off in Onyx does
+            try? await Task.sleep(for: .seconds(2))
+            return (early, (try? String(contentsOf: calls, encoding: .utf8)) ?? "")
+        }
+        let low = await watch("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t9%; discharging; 0:40 remaining\n")
+        check("Lid Awake: on battery at 9%, it lets the Mac sleep again by itself (\(low.early.trimmingCharacters(in: .whitespacesAndNewlines)))", low.early.contains("-a disablesleep 0"))
+        let fine = await watch("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t55%; discharging\n")
+        let plugged = await watch("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t5%; charging\n")
+        check("Lid Awake: stays on at 55% or plugged in, and turning it off in Onyx ends it (\(fine.late.trimmingCharacters(in: .whitespacesAndNewlines)))",
+              fine.early.isEmpty && fine.late.contains("-a disablesleep 0") && plugged.early.isEmpty && plugged.late.contains("-a disablesleep 0"))
+        check("Lid Awake: nothing left running afterwards", await !LidAwake.watcherRunning())
         // Private windows: nothing captures or reads while one is open.
         PrivateGuard.shared.force(true)
         var looked = true
@@ -988,6 +1071,13 @@ enum ViewShot {
                 shoot("cal-full", FullCalendarView(), CGSize(width: 628, height: 212))
                 shoot("cal-window", FullCalendarView(onClose: {}).padding(.horizontal, 12).padding(.bottom, 12).padding(.top, 30), CGSize(width: 780, height: 500))
                 shoot("secret-guide", SecretLinkGuide(), CGSize(width: 440, height: 560))
+                QuickTranslate.shared.preview("¿Nos vemos mañana en la biblioteca a las cuatro?", "See you tomorrow at the library at four?", from: "Spanish", to: "English")
+                shoot("translate", QuickTranslateView(model: QuickTranslate.shared).padding(10), CGSize(width: 480, height: 270))
+                shoot("behavior", BehaviorSettings().formStyle(.grouped), CGSize(width: 560, height: 1700))
+                shoot("lid", Form { LidAwakeSection() }.formStyle(.grouped), CGSize(width: 560, height: 260))
+                shoot("appearance", AppearanceSettings(), CGSize(width: 560, height: 520))
+                shoot("ai-model", Form { AIModelSettings() }.formStyle(.grouped), CGSize(width: 560, height: 300))
+                shoot("shelf", ShelfTab().background(Color.black), CGSize(width: 680, height: 220))
                 HomeLayout.shared.editing = true   // only in memory
                 shoot("home-edit", HomeTab().background(Color.black), CGSize(width: 680, height: 230))
                 HomeLayout.shared.editing = false
@@ -1185,7 +1275,7 @@ enum SafetyTest {
         let copy = AgentTools.all.first { $0.name == "copy_to_clipboard" }!
         func call(_ request: String, untrusted: Bool) async -> String {
             Assistant.currentRequest = request; Assistant.untrusted = untrusted; ToolBudget.reset()
-            guard let args = try? GeneratedContent(json: #"{"text": "pwned"}"#) else { return "bad args" }
+            guard let args = try? ToolArgs(json: #"{"text": "pwned"}"#) else { return "bad args" }
             return (try? await copy.call(arguments: args)) ?? "error"
         }
         check("an instruction hidden in a web page is refused", (await call("Summarize this web page", untrusted: true)).hasPrefix("Not done"))

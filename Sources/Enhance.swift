@@ -24,12 +24,13 @@ import CoreVideo
 
     var busy: Bool { if case .working = state { return true }; if case .downloadingModel = state { return true }; return false }
 
-    nonisolated static var canInterpolate: Bool { VTFrameRateConversionConfiguration.isSupported }
-    nonisolated static var canUpscale: Bool { VTSuperResolutionScalerConfiguration.isSupported }
+    // Apple's video models need macOS 26 (on macOS 15 Onyx doesn't offer these).
+    nonisolated static var canInterpolate: Bool { if #available(macOS 26, *) { VTFrameRateConversionConfiguration.isSupported } else { false } }
+    nonisolated static var canUpscale: Bool { if #available(macOS 26, *) { VTSuperResolutionScalerConfiguration.isSupported } else { false } }
 
     /// Scale factors Apple's model supports for this size (2× turns 1080p into 4K), capped so the result stays ≤ 8K wide.
     nonisolated static func scaleFactors(width: Int, height: Int) -> [Int] {
-        guard canUpscale, width > 0 else { return [] }
+        guard #available(macOS 26, *), canUpscale, width > 0 else { return [] }
         if let m = VTSuperResolutionScalerConfiguration.maximumDimensions, width > Int(m.width) || height > Int(m.height) { return [] }
         return VTSuperResolutionScalerConfiguration.supportedScaleFactors.filter { $0 > 1 && width * $0 <= 7680 }.sorted()
     }
@@ -47,6 +48,7 @@ import CoreVideo
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("onyx-enhanced-\(UUID().uuidString).mov")
         task = Task {
             do {
+                guard #available(macOS 26, *) else { throw VoiceError("Making videos smoother or sharper needs macOS 26.") }
                 try await Self.enhance(input: input, output: out, scale: scale, fps: Double(fps)) { p in
                     Task { @MainActor in if case .working = self.state { self.state = .working(p) } else if case .downloadingModel = self.state, p >= 0 { self.state = .working(p) } }
                 } modelProgress: { p in
@@ -72,6 +74,7 @@ import CoreVideo
 
     // MARK: The pipeline (off the main thread)
 
+    @available(macOS 26, *)
     nonisolated static func enhance(input: URL, output: URL, scale: Int, fps target: Double,
                                     progress: @escaping @Sendable (Double) -> Void,
                                     modelProgress: @escaping @Sendable (Double) -> Void) async throws {
@@ -183,6 +186,7 @@ import CoreVideo
     }
 
     /// The two model sessions and the buffer pools that feed them.
+    @available(macOS 26, *)
     private final class Stages {
         let frc: VTFrameProcessor?, sr: VTFrameProcessor?
         let frcIn: CVPixelBufferPool?, frcOut: CVPixelBufferPool?, srIn: CVPixelBufferPool?, srOut: CVPixelBufferPool?
@@ -302,10 +306,10 @@ struct EnhanceSheet: View {
                 } else {
                     Button("Close") { enhancer.reset(); close() }
                     if case .done(let id) = enhancer.state, let w = WallpaperLibrary.shared.item(id) {
-                        Button("Use It") { WallpaperEngine.shared.set(w); enhancer.reset(); close() }.buttonStyle(.glassProminent)
+                        Button("Use It") { WallpaperEngine.shared.set(w); enhancer.reset(); close() }.glassButton(prominent: true)
                     } else {
                         Button("Enhance") { enhancer.start(wallpaper, scale: scale, fps: fps) }
-                            .buttonStyle(.glassProminent).disabled(scale == 1 && fps == 0)
+                            .glassButton(prominent: true).disabled(scale == 1 && fps == 0)
                     }
                 }
             }

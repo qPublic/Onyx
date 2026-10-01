@@ -39,7 +39,7 @@ struct WallpapersView: View {
             VStack(spacing: 14) {
                 header
                 ScrollView {
-                    GlassEffectContainer(spacing: 16) {
+                    OnyxGlassContainer(spacing: 16) {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 260), spacing: 16)], spacing: 16) {
                             ForEach(lib.all) { w in card(w) }
                             addCard
@@ -96,15 +96,15 @@ struct WallpapersView: View {
                 .labelsHidden().fixedSize()
             }
             Button { creating = true } label: { Label("Create with AI", systemImage: "wand.and.sparkles") }
-                .buttonStyle(.glassProminent).tint(.purple).controlSize(.large)
+                .glassButton(prominent: true).tint(.purple).controlSize(.large)
             Button { chooseVideos() } label: { Label("Add Videos", systemImage: "plus") }
-                .buttonStyle(.glass).controlSize(.large)
+                .glassButton().controlSize(.large)
             Toggle("", isOn: Binding(get: { enabled }, set: { engine.setEnabled($0) }))
                 .toggleStyle(.switch).labelsHidden().controlSize(.large)
                 .help(enabled ? "Turn live wallpapers off" : "Turn live wallpapers on")
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+        .onyxGlass(.regular, in: .rect(cornerRadius: 22))
     }
 
     private var statusLine: String {
@@ -128,12 +128,12 @@ struct WallpapersView: View {
                             ProgressView().controlSize(.small).padding(8)
                         } else if w.enhanced {
                             Image(systemName: "wand.and.sparkles").font(.system(size: 11, weight: .semibold))
-                                .padding(6).glassEffect(.regular, in: .circle).padding(6)
+                                .padding(6).onyxGlass(.regular, in: .circle).padding(6)
                         }
                     }
                     .overlay(alignment: .topLeading) {
                         if night == w.id {
-                            Image(systemName: "moon.stars.fill").font(.system(size: 11)).padding(6).glassEffect(.regular, in: .circle).padding(6)
+                            Image(systemName: "moon.stars.fill").font(.system(size: 11)).padding(6).onyxGlass(.regular, in: .circle).padding(6)
                         }
                     }
                 HStack(spacing: 6) {
@@ -150,7 +150,7 @@ struct WallpapersView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .glassEffect(selected ? .regular.tint(.cyan.opacity(0.25)).interactive() : .regular.interactive(), in: .rect(cornerRadius: 22))
+        .onyxGlass(selected ? .regular.tint(.cyan.opacity(0.25)).interactive() : .regular.interactive(), in: .rect(cornerRadius: 22))
         .contextMenu { menu(w) }
     }
 
@@ -187,7 +187,7 @@ struct WallpapersView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .glassEffect(.clear.interactive(), in: .rect(cornerRadius: 22))
+        .onyxGlass(.clear.interactive(), in: .rect(cornerRadius: 22))
     }
 
     // MARK: Options
@@ -227,7 +227,7 @@ struct WallpapersView: View {
         }
         .font(.system(size: 12))
         .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+        .onyxGlass(.regular, in: .rect(cornerRadius: 22))
     }
 
     // MARK: Actions

@@ -43,7 +43,11 @@ enum DiffusionStyle: String, CaseIterable {
     }
 
     /// Downloads and unpacks the model once. progress: 0…1.
+    /// These models are built for Apple silicon's Neural Engine: on an Intel Mac one picture would take many minutes.
+    static var supported: Bool { OS.appleSilicon }
+
     func download(progress: @escaping @Sendable (Double) -> Void) async throws {
+        guard Self.supported else { throw VoiceError("Painting on this Mac needs Apple silicon. Use your own picture instead.") }
         guard !ready else { return }
         let fm = FileManager.default
         try fm.createDirectory(at: DepthModel.dir, withIntermediateDirectories: true)
@@ -265,9 +269,16 @@ final class Diffusion {
 
     private func array(_ v: [Float], shape: [Int], like desc: MLFeatureDescription?) throws -> MLMultiArray {
         let type = desc?.multiArrayConstraint?.dataType ?? .float32
-        let a = try MLMultiArray(shape: shape.map { NSNumber(value: $0) }, dataType: type == .float16 ? .float16 : .float32)
+        #if arch(arm64)
+        let half = type == .float16
+        #else
+        let half = false   // Intel Macs have no Float16: hand Core ML 32-bit numbers instead
+        #endif
+        let a = try MLMultiArray(shape: shape.map { NSNumber(value: $0) }, dataType: half ? .float16 : .float32)
         if a.dataType == .float16 {
+            #if arch(arm64)
             a.withUnsafeMutableBufferPointer(ofType: Float16.self) { p, _ in for i in 0..<v.count { p[i] = Float16(v[i]) } }
+            #endif
         } else {
             a.withUnsafeMutableBufferPointer(ofType: Float.self) { p, _ in for i in 0..<v.count { p[i] = v[i] } }
         }
@@ -292,7 +303,21 @@ final class Diffusion {
                 }
             }
         }
-        if a.dataType == .float16 { read(Float16.self) { Float($0) } } else if a.dataType == .double { read(Double.self) { Float($0) } } else { read(Float.self) { $0 } }
+        if a.dataType == .float16 {
+            #if arch(arm64)
+            read(Float16.self) { Float($0) }
+            #else
+            let p = a.dataPointer.assumingMemoryBound(to: UInt16.self)   // the raw half-precision bits, converted by hand
+            var idx = [Int](repeating: 0, count: shape.count)
+            for i in 0..<count {
+                var off = 0
+                for d in 0..<shape.count { off += idx[d] * strides[d] }
+                out[i] = Half.toFloat(p[off])
+                var d = shape.count - 1
+                while d >= 0 { idx[d] += 1; if idx[d] < shape[d] { break }; idx[d] = 0; d -= 1 }
+            }
+            #endif
+        } else if a.dataType == .double { read(Double.self) { Float($0) } } else { read(Float.self) { $0 } }
         return out
     }
 

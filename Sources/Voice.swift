@@ -6,8 +6,8 @@ import Combine
 
 // MARK: - Voice for Onyx AI: speak your question (on-device speech recognition), hear the answer
 
-/// Listens to the microphone and turns speech into text on this Mac (Apple's SpeechAnalyzer). It stops by itself
-/// after a short pause, then hands the text over.
+/// Listens to the microphone and turns speech into text on this Mac (Apple's SpeechAnalyzer on macOS 26, its older
+/// speech recognizer before that). It stops by itself after a short pause, then hands the text over.
 @MainActor final class VoiceInput: ObservableObject {
     static let shared = VoiceInput()
     enum State: Equatable { case idle, preparing, listening, failed(String) }
@@ -15,8 +15,9 @@ import Combine
     @Published private(set) var transcript = ""
 
     private var engine: AVAudioEngine?
-    private var analyzer: SpeechAnalyzer?
-    private var feed: AsyncStream<AnalyzerInput>.Continuation?
+    private var analyzer: Any?                 // SpeechAnalyzer (macOS 26)
+    private var endFeed: (() -> Void)?         // no more sound: finishes the analyzer's input, or the older recognizer's
+    private var oldTask: SFSpeechRecognitionTask?   // macOS 15
     private var results: Task<Void, Never>?
     private var silence: Timer?
     private var finished = "", volatile = ""
@@ -38,20 +39,7 @@ import Combine
             return
         }
         do {
-            let transcriber = try await Self.transcriber()
-            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
-                throw VoiceError("Speech recognition isn't available for your language.")
-            }
-            let analyzer = SpeechAnalyzer(modules: [transcriber])
-            let (stream, feed) = AsyncStream<AnalyzerInput>.makeStream()
-            self.analyzer = analyzer; self.feed = feed
-            results = Task { [weak self] in
-                do {
-                    for try await r in transcriber.results { self?.heard(String(r.text.characters), final: r.isFinal) }
-                } catch {}
-            }
-            try await analyzer.start(inputSequence: stream)
-            try startMic(format: format, into: feed)
+            if #available(macOS 26, *) { try await startAnalyzer() } else { try await startOlder() }
             state = .listening
             began = Date(); lastChange = Date()
             silence = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -63,16 +51,63 @@ import Combine
         }
     }
 
+    @available(macOS 26, *)
+    private func startAnalyzer() async throws {
+        let transcriber = try await Self.transcriber()
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+            throw VoiceError("Speech recognition isn't available for your language.")
+        }
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let (stream, feed) = AsyncStream<AnalyzerInput>.makeStream()
+        self.analyzer = analyzer; endFeed = { feed.finish() }
+        results = Task { [weak self] in
+            do {
+                for try await r in transcriber.results { self?.heard(String(r.text.characters), final: r.isFinal) }
+            } catch {}
+        }
+        try await analyzer.start(inputSequence: stream)
+        try startMic(format: format, into: feed)
+    }
+
+    /// macOS 15: Apple's older speech recognizer, on this Mac when it can be.
+    private func startOlder() async throws {
+        let allowed = await withCheckedContinuation { c in SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0 == .authorized) } }
+        guard allowed else { throw VoiceError("Allow Onyx to use Speech Recognition in System Settings › Privacy & Security › Speech Recognition.") }
+        guard let rec = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en_US")), rec.isAvailable else {
+            throw VoiceError("Speech recognition isn't available for your language.")
+        }
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.shouldReportPartialResults = true
+        if rec.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
+        let engine = AVAudioEngine()
+        let input = engine.inputNode, inFormat = input.outputFormat(forBus: 0)
+        guard inFormat.sampleRate > 0 else { throw VoiceError("No microphone found.") }
+        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat, block: Self.olderTap(req))
+        engine.prepare()
+        try engine.start()
+        self.engine = engine
+        endFeed = { req.endAudio() }
+        oldTask = rec.recognitionTask(with: req, resultHandler: Self.olderResults)
+    }
+
+    /// Built outside the main actor: these run on the audio and speech threads.
+    nonisolated static func olderTap(_ req: SFSpeechAudioBufferRecognitionRequest) -> AVAudioNodeTapBlock { { buffer, _ in req.append(buffer) } }
+    nonisolated static func olderResults(_ r: SFSpeechRecognitionResult?, _ e: Error?) {
+        guard let text = r?.bestTranscription.formattedString else { return }
+        Task { @MainActor in VoiceInput.shared.heard(text, final: false) }   // the whole transcript so far, each time
+    }
+
     /// Stops listening; the text so far is sent unless `send` is false.
     func stop(send: Bool = true) {
         guard active else { return }
         silence?.invalidate(); silence = nil
         engine?.inputNode.removeTap(onBus: 0); engine?.stop(); engine = nil
-        feed?.finish()
+        endFeed?()
         let analyzer = self.analyzer, results = self.results, done = onDone
         state = .idle
         Task {
-            try? await analyzer?.finalizeAndFinishThroughEndOfInput()
+            if #available(macOS 26, *), let a = analyzer as? SpeechAnalyzer { try? await a.finalizeAndFinishThroughEndOfInput() }
+            else { try? await Task.sleep(for: .milliseconds(700)) }   // macOS 15: the last words arrive just after
             await Self.wait(for: results, seconds: 2)   // the last words arrive as the analyzer finishes
             let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             teardown()
@@ -80,7 +115,7 @@ import Combine
         }
     }
 
-    private func heard(_ text: String, final: Bool) {
+    fileprivate func heard(_ text: String, final: Bool) {
         if final { finished += text; volatile = "" } else { volatile = text }
         transcript = (finished + volatile).trimmingCharacters(in: .whitespaces)
         lastChange = Date()
@@ -96,9 +131,11 @@ import Combine
     }
 
     private func teardown() {
-        results?.cancel(); results = nil; analyzer = nil; feed = nil; engine = nil
+        results?.cancel(); results = nil; analyzer = nil; endFeed = nil; engine = nil
+        oldTask?.cancel(); oldTask = nil
     }
 
+    @available(macOS 26, *)
     private func startMic(format: AVAudioFormat, into feed: AsyncStream<AnalyzerInput>.Continuation) throws {
         let engine = AVAudioEngine()
         let input = engine.inputNode, inFormat = input.outputFormat(forBus: 0)
@@ -112,6 +149,7 @@ import Combine
     }
 
     /// Converts microphone buffers to the analyzer's format. Built outside the main actor: it runs on the audio thread.
+    @available(macOS 26, *)
     nonisolated static func converterTap(from inFormat: AVAudioFormat, to format: AVAudioFormat,
                                          into feed: AsyncStream<AnalyzerInput>.Continuation) -> AVAudioNodeTapBlock? {
         guard let converter = AVAudioConverter(from: inFormat, to: format) else { return nil }
@@ -129,6 +167,7 @@ import Combine
     }
 
     /// The on-device transcriber for your language, downloading Apple's speech model the first time if needed.
+    @available(macOS 26, *)
     nonisolated static func transcriber() async throws -> SpeechTranscriber {
         var found = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current)
         if found == nil { found = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "en_US")) }

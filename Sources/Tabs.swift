@@ -449,6 +449,12 @@ struct ShelfTab: View {
                 .onDrop(of: [.fileURL, .image, .plainText], isTargeted: $airTarget) { ShelfStore.shared.handleDrop($0, airDrop: true) }
                 .onTapGesture { ShelfStore.airDrop(shelf.items) }
                 .help("Drop files to AirDrop them, or click to AirDrop everything on the shelf")
+                Menu {   // things to make from everything on the shelf at once
+                    Button { ShelfConverter.shared.convert(.pdf, shelf.items.filter { ShelfConverter.kind($0) == .image }) } label: { Label("Pictures into One PDF", systemImage: "doc.richtext") }
+                        .disabled(!shelf.items.contains { ShelfConverter.kind($0) == .image })
+                    Button { ShelfConverter.shared.convert(.zip, shelf.items) } label: { Label("Everything into a ZIP", systemImage: "doc.zipper") }
+                } label: { Label("Combine", systemImage: "square.stack.3d.down.right").frame(maxWidth: .infinity) }
+                    .controlSize(.small).disabled(shelf.items.isEmpty)
                 Button { shelf.clear() } label: { Label("Clear", systemImage: "trash").frame(maxWidth: .infinity) }
                     .controlSize(.small).disabled(shelf.items.isEmpty)
             }
@@ -488,6 +494,7 @@ struct ShelfItem: View {
                 }
             }
             Button("Copy Path") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.path, forType: .string) }
+            ConvertMenu(url: url)
             Divider()
             Button("Remove from Shelf") { ShelfStore.shared.remove(url) }
         }

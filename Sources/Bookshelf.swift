@@ -153,6 +153,7 @@ struct BookView: View {
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             Button("AirDrop") { ShelfStore.airDrop([url]) }
             Button("Copy Path") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.path, forType: .string) }
+            ConvertMenu(url: url)
             Divider()
             Button("Remove from Shelf") { ShelfStore.shared.remove(url) }
         }

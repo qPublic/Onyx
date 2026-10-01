@@ -41,6 +41,8 @@ enum SettingsIndex {
         e(.behavior, "Opening", "Close when the pointer leaves", "close auto mouse leave pointer away"),
         e(.behavior, "Opening", "Close delay", "close delay seconds timeout auto close"),
         e(.behavior, "Motion", "Animation", "animation bouncy smooth snappy spring motion"),
+        e(.behavior, "Lid closed", "Keep running with the lid closed", "lid closed clamshell sleep awake keep running amphetamine caffeine lid sleep battery"),
+        e(.behavior, "Quick Translate", "Translate into", "translate translation language selected text spanish french english quick translate"),
         e(.behavior, "Motion", "Reduce motion", "reduce motion animations accessibility calm turn off animations smooth vestibular dizzy"),
         e(.behavior, "Motion", "Haptic feedback on open", "haptic vibration trackpad feedback"),
         e(.live, "Live activities in the notch", "Meeting countdown", "meeting zoom meet teams webex call join countdown calendar video"),

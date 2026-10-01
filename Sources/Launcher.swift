@@ -356,7 +356,7 @@ struct LauncherView: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
         .frame(width: 300)
-        .glassEffect(.regular, in: .capsule)
+        .onyxGlass(.regular, in: .capsule)
     }
 
     /// Your own order (pages you arrange) or by category.
@@ -425,7 +425,7 @@ struct LauncherView: View {
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
-            .glassEffect(.regular, in: .capsule)
+            .onyxGlass(.regular, in: .capsule)
             .opacity(chunks.count > 1 ? 1 : 0)
             .padding(.bottom, 44)
         }
@@ -560,7 +560,7 @@ struct LauncherView: View {
                 Text("Drag an app outside to take it out of the folder.").font(.system(size: 11)).foregroundStyle(.secondary)
             }
             .padding(28)
-            .glassEffect(.regular, in: .rect(cornerRadius: 40))
+            .onyxGlass(.regular, in: .rect(cornerRadius: 40))
             .transition(.scale(scale: 0.85).combined(with: .opacity))
         }
     }
@@ -633,7 +633,7 @@ struct FolderTile: View {
                     ForEach(icons.indices, id: \.self) { i in Image(nsImage: icons[i]).resizable().frame(width: size * 0.26, height: size * 0.26) }
                 }
                 .frame(width: size, height: size)
-                .glassEffect(.regular, in: .rect(cornerRadius: size * 0.24))
+                .onyxGlass(.regular, in: .rect(cornerRadius: size * 0.24))
                 if !name.isEmpty {
                     Text(name).font(.system(size: 12, weight: .medium)).lineLimit(1).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 3, y: 1)
                 }

@@ -40,7 +40,7 @@ struct Shortcut: Equatable {
 }
 
 enum HotAction: String, CaseIterable, Identifiable {
-    case toggleNotch, toggleHide, circleSearch, askAI, captureRegion, captureScreen, toggleRecording, openLauncher, askSelection, clipboardPicker, copyText
+    case toggleNotch, toggleHide, circleSearch, askAI, captureRegion, captureScreen, toggleRecording, openLauncher, askSelection, clipboardPicker, copyText, translateSelection
     var id: String { rawValue }
 
     var title: String {
@@ -56,6 +56,7 @@ enum HotAction: String, CaseIterable, Identifiable {
         case .askSelection: "Ask AI about selected text"
         case .clipboardPicker: "Clipboard history (paste)"
         case .copyText: "Copy text from screen"
+        case .translateSelection: "Translate selected text"
         }
     }
 
@@ -73,6 +74,7 @@ enum HotAction: String, CaseIterable, Identifiable {
         case .askSelection: return Shortcut(keyCode: 1, mods: co)      // ⌃⌥S
         case .clipboardPicker: return Shortcut(keyCode: 9, mods: co)   // ⌃⌥V
         case .copyText: return Shortcut(keyCode: 17, mods: co)         // ⌃⌥T
+        case .translateSelection: return Shortcut(keyCode: 37, mods: co)   // ⌃⌥L
         }
     }
 
@@ -91,6 +93,7 @@ enum HotAction: String, CaseIterable, Identifiable {
         case .askSelection: Task { @MainActor in await SelectionGrabber.askAI() }
         case .clipboardPicker: MainActor.assumeIsolated { ClipboardPicker.shared.toggle() }
         case .copyText: MainActor.assumeIsolated { TextGrabber.fromScreen() }
+        case .translateSelection: Task { @MainActor in await QuickTranslate.shared.run() }
         }
     }
 }

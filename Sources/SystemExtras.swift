@@ -402,6 +402,8 @@ struct QuickTogglesGrid: View {
     @ObservedObject var caf = Caffeinate.shared
     @ObservedObject var focus = FocusMonitor.shared
     @ObservedObject var vpn = ProtonVPN.shared
+    @ObservedObject var lid = LidAwake.shared
+    @ObservedObject var battery = BatteryMonitor.shared
 
     var body: some View {
         HStack(spacing: 6) {
@@ -411,6 +413,7 @@ struct QuickTogglesGrid: View {
             tile(t.iconsHidden ? "eye.slash.fill" : "menubar.dock.rectangle", "Hide icons", on: t.iconsHidden, tint: .teal) { t.toggleDesktopIcons() }
             tile(t.micMuted ? "mic.slash.fill" : "mic.fill", "Mute mic", on: t.micMuted, tint: .red) { t.toggleMic() }
             if vpn.usable { tile(VPNWidget.icon(vpn.status), "VPN", on: vpn.on, tint: .green) { vpn.toggle() } }
+            if battery.hasBattery { tile("laptopcomputer", "Lid Awake", on: lid.on, tint: .orange) { lid.set(!lid.on) } }
         }
         .onAppear { t.refresh() }
     }

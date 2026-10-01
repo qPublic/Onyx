@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.0
+
+### New
+- **Works on macOS Sequoia, and on Intel Macs.** Onyx now runs on macOS 15.4 and later, not just macOS 26, and on Intel Macs as well as Apple silicon: one download, and Onyx checks what your Mac can do each time it starts. A few things need macOS 26 and turn off or step aside on Sequoia: Apple's free on-device AI (pick a cloud model in Settings › Privacy › AI instead; Gemini gives you a free key), the Liquid Glass look (Sequoia gets a frosted look), and making videos smoother or sharper. Voice input uses Apple's older speech recognition on Sequoia. On Intel Macs, Apple's on-device AI, Image Playground and the Realistic, Anime and Painted painters (built for Apple silicon) aren't available; a cloud model does Onyx AI instead.
+- **Quick Translate.** Select text in any app and press ⌃⌥L: the translation shows under the notch, with a Copy button. Apple's translation does it on your Mac once a language is downloaded in System Settings; with a cloud model, any language works. Pick the language in Settings › Behavior › Quick Translate.
+- **Convert on the Shelf.** Right-click a file on the shelf and choose Convert To: pictures to JPEG, PNG, HEIC, half the size or a PDF; videos to MP4, a smaller 720p video, a GIF or just the audio; anything into a ZIP for email. Combine makes one PDF of all the pictures on the shelf, or one ZIP of everything. The new file goes next to the original and onto the shelf.
+- **Lid Awake.** Keep your MacBook running with the lid closed, for a download, a render or music to a speaker. Turn it on in Settings › Behavior › Lid closed or with the Lid Awake quick toggle; macOS asks for your password (Onyx never sees it). Onyx warns you when you turn it on unplugged and when the battery gets low, and it lets your Mac sleep again by itself at the battery level you pick (10% unless you change it). Turning it off in Onyx doesn't ask for the password again.
+
 ## 1.9.5
 
 ### New

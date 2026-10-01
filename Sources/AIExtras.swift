@@ -177,6 +177,7 @@ extension Assistant {
 
     /// What the model gets from an attached document. Short ones go in whole. Long ones are read part by part for
     /// what matters to the question, and those notes go in instead (the on-device model only reads a few pages at once).
+    @available(macOS 26, *)
     @MainActor func read(_ doc: AIDocument, for question: String, effort: AIEffort) async throws -> String {
         let label = doc.selection ? "Selected text" : "The file \"\(doc.name)\""
         let limit = effort.contextChars + 1500

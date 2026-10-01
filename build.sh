@@ -8,8 +8,17 @@ SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 # (an Onyx that starts while it's building would run unsigned, with none of its settings).
 OUT=build/Onyx.app; WORK=$(mktemp -d); APP="$WORK/Onyx.app"
 mkdir -p build "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -sdk "$SDK" -target arm64-apple-macosx26.0 -swift-version 5 -O \
-  -o "$APP/Contents/MacOS/Onyx" Sources/*.swift
+# One app for Apple silicon and Intel Macs (each runs its own half), from macOS 15.4 on. Apple's on-device AI framework only
+# exists on macOS 26, so it's linked weakly and Onyx still opens without it. ONYX_ARM_ONLY=1 skips Intel for a quicker test build.
+ARCHS=(arm64 x86_64); [ -n "$ONYX_ARM_ONLY" ] && ARCHS=(arm64)
+PIDS=(); BINS=()
+for A in $ARCHS; do
+  swiftc -sdk "$SDK" -target $A-apple-macosx15.4 -swift-version 5 -O -Xlinker -weak_framework -Xlinker FoundationModels \
+    -o "$WORK/Onyx-$A" Sources/*.swift &
+  PIDS+=($!); BINS+=("$WORK/Onyx-$A")
+done
+for P in $PIDS; do wait $P; done
+lipo -create $BINS -output "$APP/Contents/MacOS/Onyx"
 cp Resources/Info.plist "$APP/Contents/"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cp Resources/*.gif "$APP/Contents/Resources/" 2>/dev/null || true

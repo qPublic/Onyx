@@ -142,7 +142,7 @@ struct CalendarAccountsSection: View {
                 Button("Refresh") { cal.store.refreshSourcesIfNecessary(); cal.reload(); tick += 1; Task { await LinkedCalendars.shared.refreshAll() } }
                 Spacer()
             }
-            Text("Sign in to as many Google accounts as you like (and iCloud, Outlook or Exchange) in System Settings › Internet Accounts, with Calendars turned on. Onyx puts every calendar you pick here together in one calendar in the notch, shows an event that's on two accounts only once, and anything you add syncs back to Google. Or paste a Google Calendar link above: Onyx copies in all its events and updates them every 30 minutes.")
+            Text("Sign in to as many Google accounts as you like (and iCloud, Outlook or Exchange) in System Settings › Internet Accounts, with Calendars turned on. Onyx puts every calendar you pick here together in one calendar in the notch, shows an event that's on two accounts only once, and anything you add syncs back to Google. Or paste the link to one calendar above (its share link, or its Secret address in iCal format from its settings): Onyx copies in all its events and updates them every 30 minutes.")
                 .font(.caption).foregroundStyle(.secondary)
         } header: { Text("Calendars") }
     }

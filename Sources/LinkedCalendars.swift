@@ -53,6 +53,7 @@ final class LinkedCalendars: ObservableObject, @unchecked Sendable {
 
     /// Adds a calendar from a pasted link. Returns what went wrong, if anything.
     @MainActor func add(_ link: String) async -> String? {
+        if Self.isGooglePage(link) { return Self.googlePageHint }
         guard let feed = Self.feed(for: link) else { return "That doesn't look like a calendar link. Copy it from Google Calendar's settings for that calendar." }
         guard !calendars.contains(where: { $0.feed == feed }) else { return "That calendar is already here." }
         busy = true; defer { busy = false }
@@ -138,6 +139,17 @@ final class LinkedCalendars: ObservableObject, @unchecked Sendable {
               let enc = id.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._"))) else { return nil }
         return "https://calendar.google.com/calendar/ical/\(enc)/public/basic.ics"
     }
+
+    /// Google Calendar's own page (like calendar.google.com/calendar/u/0/r): it only opens for you, signed in, so a link
+    /// to it can't bring anything in. Your Google account on your Mac can, with every calendar and its switch.
+    static func isGooglePage(_ link: String) -> Bool {
+        var s = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !s.contains("://") { s = "https://" + s }
+        guard let c = URLComponents(string: s), let host = c.host?.lowercased() else { return false }
+        let google = host == "calendar.google.com" || (host == "www.google.com" && c.path.hasPrefix("/calendar"))
+        return google && feed(for: link) == nil
+    }
+    static let googlePageHint = "That's Google Calendar's own page, which only opens for you when you're signed in, so Onyx can't read it from a link. To bring in all your Google calendars, each with its own switch, press Add Google Account…, sign in and keep Calendars turned on. They show up here in a few seconds."
 
     /// Google's share links carry the calendar's address in base64 ("cid=…").
     static func decodeCID(_ cid: String) -> String? {
@@ -288,6 +300,9 @@ final class LinkedCalendars: ObservableObject, @unchecked Sendable {
                   feed(for: secret) == secret && feed(for: "https://calendar.google.com/calendar/embed?src=abc%40group.calendar.google.com&ctz=America/Los_Angeles") == pub
                   && feed(for: "https://calendar.google.com/calendar/u/0?cid=\(cid)") == pub && feed(for: "webcal://example.com/school.ics") == "https://example.com/school.ics"
                   && feed(for: "http://evil.example/x.ics") == nil && feed(for: "not a link") == nil))
+        r.append(("knows Google Calendar's own page from a calendar's link",
+                  isGooglePage("https://calendar.google.com/calendar/u/0/r") && isGooglePage("calendar.google.com/calendar/u/1/r/week/2026/9/30")
+                  && !isGooglePage(secret) && !isGooglePage("https://calendar.google.com/calendar/u/0?cid=\(cid)") && !isGooglePage("webcal://example.com/school.ics")))
         let ics = """
         BEGIN:VCALENDAR\r
         X-WR-CALNAME:Lincoln High Bell Schedule\r
@@ -344,6 +359,7 @@ struct LinkedCalendarRows: View {
     @ObservedObject var linked = LinkedCalendars.shared
     @State private var link = ""
     @State private var error: String?
+    @State private var googlePage = false
 
     var body: some View {
         ForEach(linked.calendars) { c in
@@ -367,10 +383,12 @@ struct LinkedCalendarRows: View {
             if linked.busy { ProgressView().controlSize(.small) }
         }
         if let error { Text(error).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+        if googlePage { Button("Add Google Account…") { CalendarAccounts.addAccount() } }
     }
 
     private func add() {
         let l = link
+        googlePage = LinkedCalendars.isGooglePage(l)
         Task { @MainActor in
             if let e = await linked.add(l) { error = e } else { error = nil; link = "" }
         }

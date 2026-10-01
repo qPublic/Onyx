@@ -316,10 +316,22 @@ final class CalendarService: ObservableObject {
     @Published var busyDays = Set<Int>()
     @Published var copies: [String: [NSColor]] = [:]   // other accounts an event is also on
 
+    // Calendar lookups run here, off the main thread, so a big calendar never makes the notch stutter.
+    private let work = DispatchQueue(label: "onyx.calendar", qos: .userInitiated)
+    private var generation = 0
+    private var fullPending = false                      // a full reload is under way; a quicker one mustn't drop it
+    private var month: (start: Date, days: Set<Int>)?    // the busy days of the month on show, until something changes
+    private var soon: DispatchWorkItem?
+
     func start() {
         authorized = EKEventStore.authorizationStatus(for: .event) == .fullAccess
+        // A sync can send dozens of changes in a row: one reload for the lot.
         NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: store, queue: .main) { [weak self] _ in
-            self?.reload()
+            guard let self else { return }
+            self.soon?.cancel()
+            let w = DispatchWorkItem { [weak self] in self?.reload() }
+            self.soon = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
         }
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.reload() }.tolerant()
         reload()
@@ -331,30 +343,59 @@ final class CalendarService: ObservableObject {
         }
     }
 
+    /// Picking a day only looks up that day (and its month, the first time it's shown).
     func select(_ day: Date) {
         selectedDay = Calendar.current.startOfDay(for: day)
-        reload()
+        load(full: false)
     }
 
-    func reload() {
+    func reload() { month = nil; load(full: true) }
+
+    private func load(full asked: Bool) {
         guard authorized else { return }
+        let full = asked || fullPending
+        if full { fullPending = true }
+        generation += 1
+        let gen = generation, store = store, selected = selectedDay
         let cal = Calendar.current
-        let dayEnd = cal.date(byAdding: .day, value: 1, to: selectedDay)!
-        let day = CalendarAccounts.merged(store, from: selectedDay, to: dayEnd).sorted { $0.first.startDate < $1.first.startDate }
-        let today = cal.startOfDay(for: Date())
-        let todays = selectedDay == today ? day : CalendarAccounts.merged(store, from: today, to: cal.date(byAdding: .day, value: 1, to: today)!).sorted { $0.first.startDate < $1.first.startDate }
-        dayEvents = day.map(\.first)
-        todayEvents = todays.map(\.first)
-        copies = Dictionary((day + todays).map { ($0.first.eventIdentifier ?? "", $0.copies.compactMap { $0.calendar?.color }) }, uniquingKeysWith: { a, _ in a })
-        let now = Date()
-        upcoming = Array(CalendarAccounts.events(store, from: now, to: now.addingTimeInterval(7 * 86400))
-            .filter { !$0.isAllDay }
-            .sorted { $0.startDate < $1.startDate }
-            .prefix(4))
-        if let month = cal.dateInterval(of: .month, for: selectedDay) {
-            let evs = CalendarAccounts.events(store, from: month.start, to: month.end)
-            busyDays = Set(evs.map { cal.component(.day, from: $0.startDate) })
+        let monthStart = cal.dateInterval(of: .month, for: selected)?.start
+        let knownMonth = month.flatMap { $0.start == monthStart ? $0.days : nil }
+        work.async { [weak self] in
+            let sorted: (Date, Date) -> [(first: EKEvent, copies: [EKEvent])] = { a, b in
+                CalendarAccounts.merged(store, from: a, to: b).sorted { $0.first.startDate < $1.first.startDate }
+            }
+            let day = sorted(selected, cal.date(byAdding: .day, value: 1, to: selected)!)
+            let today = cal.startOfDay(for: Date())
+            let todays = !full ? nil : selected == today ? day : sorted(today, cal.date(byAdding: .day, value: 1, to: today)!)
+            let now = Date()
+            let upcoming = !full ? nil : Array(CalendarAccounts.events(store, from: now, to: now.addingTimeInterval(7 * 86400))
+                .filter { !$0.isAllDay }.sorted { $0.startDate < $1.startDate }.prefix(4))
+            var busy = knownMonth
+            if busy == nil, let m = cal.dateInterval(of: .month, for: selected) {
+                busy = Set(CalendarAccounts.events(store, from: m.start, to: m.end).map { cal.component(.day, from: $0.startDate) })
+            }
+            DispatchQueue.main.async {
+                guard let self, gen == self.generation else { return }   // a newer lookup is on its way
+                // Only what changed is published, so the views don't redraw for nothing.
+                let d = day.map(\.first)
+                if Self.changed(self.dayEvents, d) { self.dayEvents = d }
+                if let t = todays?.map(\.first), Self.changed(self.todayEvents, t) { self.todayEvents = t }
+                if let upcoming, Self.changed(self.upcoming, upcoming) { self.upcoming = upcoming }
+                if let busy, busy != self.busyDays { self.busyDays = busy }
+                if let s = monthStart, let busy { self.month = (s, busy) }
+                let c = Dictionary((day + (todays ?? [])).map { ($0.first.eventIdentifier ?? "", $0.copies.compactMap { $0.calendar?.color }) },
+                                   uniquingKeysWith: { a, _ in a })
+                if full { if c != self.copies { self.copies = c } } else { self.copies.merge(c) { _, b in b } }
+                if full { self.fullPending = false }
+            }
         }
+    }
+
+    private static func changed(_ old: [EKEvent], _ new: [EKEvent]) -> Bool {
+        func sig(_ e: EKEvent) -> String {
+            "\(e.eventIdentifier ?? "")|\(e.title ?? "")|\(e.startDate.timeIntervalSince1970)|\(e.endDate.timeIntervalSince1970)|\(e.isAllDay)|\(e.location ?? "")|\(e.notes?.count ?? 0)|\(e.calendar?.calendarIdentifier ?? e.calendar?.title ?? "")"
+        }
+        return old.count != new.count || zip(old, new).contains { sig($0) != sig($1) }
     }
 
     // Used by the AI agent

@@ -114,6 +114,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let file = ProcessInfo.processInfo.environment["ONYX_MAILTEST"] { Task { @MainActor in await MailTest.run(file) }; return }
         // Debug: ONYX_SCHOOLTEST=<file> checks academy sign-up against a stand-in TeachMore (see SchoolTest; ./test.sh starts one).
         if let file = ProcessInfo.processInfo.environment["ONYX_SCHOOLTEST"] { Task { @MainActor in await SchoolTest.run(file) }; return }
+        // Debug: ONYX_CALWINDOWTEST=<file> checks the calendar window closes after you click away (it shows a window briefly).
+        if let file = ProcessInfo.processInfo.environment["ONYX_CALWINDOWTEST"] { Task { @MainActor in await CalendarWindowTest.run(file) }; return }
         // Debug: ONYX_AIPLUSTEST=<file> checks web answers, search, translation, lettering and picture versions (see AIPlusTest).
         if let file = ProcessInfo.processInfo.environment["ONYX_AIPLUSTEST"] { Task { @MainActor in await AIPlusTest.run(file) }; return }
         // Debug: ONYX_SAFETYTEST=<file> and ONYX_ENERGYTEST=<file> (see SafetyTest and EnergyTest; ./test.sh runs them all).

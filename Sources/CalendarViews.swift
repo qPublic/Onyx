@@ -15,6 +15,8 @@ struct FullCalendarView: View {
     @State private var time = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date()) ?? Date()
     @State private var minutes = 60
     @State private var problem: String?
+    var onClose: (() -> Void)?               // in the calendar window: closes it (otherwise, back to Home)
+    @AppStorage(CalendarWindow.pinKey) private var pinned = false
 
     private var isToday: Bool { Calendar.current.isDateInToday(cal.selectedDay) }
     private var spring: Animation { Motion.reduced ? .easeInOut(duration: 0.2) : .spring(response: 0.42, dampingFraction: 0.86) }
@@ -23,7 +25,7 @@ struct FullCalendarView: View {
         Card {
             GeometryReader { g in
                 // The month fills the height: 6 weeks of rows under the month name and the weekday letters.
-                let cell = min(30, max(16, floor((g.size.height - 48) / 6) - 3))
+                let cell = min(onClose == nil ? 30 : 46, max(16, floor((g.size.height - 48) / 6) - 3))
                 HStack(alignment: .top, spacing: 14) {
                     MonthGrid(cell: cell).frame(width: cell * 7 + 18)
                     Divider()
@@ -43,12 +45,20 @@ struct FullCalendarView: View {
                 }
                 Spacer(minLength: 4)
                 if !isToday { Button("Today") { cal.select(Date()) }.controlSize(.small) }
+                if onClose != nil {   // in the window: pinned, it stays open and on top
+                    Button { CalendarWindow.shared.setPinned(!pinned) } label: {
+                        Image(systemName: pinned ? "pin.fill" : "pin").font(.system(size: 14))
+                            .foregroundStyle(pinned ? Color.orange : Color.primary.opacity(0.5)).rotationEffect(.degrees(pinned ? 0 : 45))
+                    }
+                    .buttonStyle(.plain).help(pinned ? "Unpin: close after I click away" : "Pin: keep it open and on top")
+                    .accessibilityLabel(pinned ? "Unpin" : "Pin")
+                }
                 Button { withAnimation(spring) { adding.toggle() } } label: {
                     Image(systemName: adding ? "minus.circle.fill" : "plus.circle.fill").font(.system(size: 16))
                 }.buttonStyle(.plain).foregroundStyle(.red).help(adding ? "Cancel" : "Add an event").accessibilityLabel(adding ? "Cancel" : "Add an event")
                 Button { close() } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(Color.primary.opacity(0.5))
-                }.buttonStyle(.plain).help("Back to Home").accessibilityLabel("Back to Home")
+                }.buttonStyle(.plain).help(onClose == nil ? "Back to Home" : "Close").accessibilityLabel(onClose == nil ? "Back to Home" : "Close")
             }
             if adding { addBar.transition(.move(edge: .top).combined(with: .opacity)) }
             if let problem { Text(problem).font(.caption).foregroundStyle(.orange).lineLimit(2) }
@@ -189,6 +199,7 @@ struct FullCalendarView: View {
 
     private func close() {
         cal.select(Date())
+        if let onClose { onClose(); return }
         withAnimation(spring) { HomeLayout.shared.fullCalendar = false }
     }
 }

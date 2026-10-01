@@ -360,6 +360,7 @@ struct LinkedCalendarRows: View {
     @State private var link = ""
     @State private var error: String?
     @State private var googlePage = false
+    @State private var guide = false
 
     var body: some View {
         ForEach(linked.calendars) { c in
@@ -382,6 +383,8 @@ struct LinkedCalendarRows: View {
             Button("Add", action: add).disabled(link.trimmingCharacters(in: .whitespaces).isEmpty || linked.busy)
             if linked.busy { ProgressView().controlSize(.small) }
         }
+        Button("How to get a calendar's private link…") { guide = true }
+            .buttonStyle(.link).popover(isPresented: $guide, arrowEdge: .trailing) { SecretLinkGuide() }
         if let error { Text(error).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
         if googlePage { Button("Add Google Account…") { CalendarAccounts.addAccount() } }
     }
@@ -391,6 +394,112 @@ struct LinkedCalendarRows: View {
         googlePage = LinkedCalendars.isGooglePage(l)
         Task { @MainActor in
             if let e = await linked.add(l) { error = e } else { error = nil; link = "" }
+        }
+    }
+}
+
+// MARK: - How to get a calendar's private link: a picture for each step
+
+struct SecretLinkGuide: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Get a calendar's private link").font(.headline)
+                Text("Google calls it the calendar's Secret address in iCal format. Do this on a computer, at calendar.google.com.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                step(1, "In the list on the left, point at the calendar, click ⋮ and choose Settings and sharing.") { menuPicture }
+                step(2, "In that calendar's settings, click Integrate calendar.") { navPicture }
+                step(3, "Under Secret address in iCal format, click the copy button.") { secretPicture }
+                step(4, "Paste it into Onyx, under Calendars, and press Add.") { pastePicture }
+                Text("Keep the link to yourself: anyone who has it can see that calendar's events. If a school account doesn't show a secret address, the school has turned it off. Use Add Google Account… instead.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+        }
+        .frame(width: 440, height: 560)
+    }
+
+    private func step<P: View>(_ n: Int, _ text: String, @ViewBuilder picture: () -> P) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(n)").font(.caption.weight(.bold)).frame(width: 18, height: 18).background(Circle().fill(Color.accentColor.opacity(0.35)))
+                Text(text).fixedSize(horizontal: false, vertical: true)
+            }
+            picture()   // drawn like the web page, with the thing to click outlined
+                .foregroundStyle(Color.black.opacity(0.8))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.black.opacity(0.12)))
+                .environment(\.colorScheme, .light)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var target: some View {
+        RoundedRectangle(cornerRadius: 4).fill(Color.accentColor.opacity(0.18)).overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.accentColor, lineWidth: 1.5))
+    }
+
+    private var menuPicture: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("My calendars").font(.system(size: 10, weight: .semibold))
+                calRow("Sam", .blue, false); calRow("School", .green, true); calRow("Family", .orange, false)
+            }
+            .frame(width: 150, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Display this only").font(.system(size: 10))
+                Text("Hide from list").font(.system(size: 10))
+                Text("Settings and sharing").font(.system(size: 10, weight: .semibold)).padding(.horizontal, 5).padding(.vertical, 2).background(target)
+                HStack(spacing: 3) { ForEach([Color.red, .orange, .yellow, .green, .blue, .purple], id: \.self) { Circle().fill($0).frame(width: 8, height: 8) } }
+            }
+            .padding(8).background(Color.white, in: RoundedRectangle(cornerRadius: 6)).shadow(color: .black.opacity(0.2), radius: 3, y: 1)
+        }
+    }
+
+    private func calRow(_ name: String, _ color: Color, _ pointed: Bool) -> some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 10, height: 10)
+                .overlay(Image(systemName: "checkmark").font(.system(size: 7, weight: .bold)).foregroundStyle(.white))
+            Text(name).font(.system(size: 10))
+            Spacer()
+            if pointed { Image(systemName: "ellipsis").rotationEffect(.degrees(90)).font(.system(size: 9, weight: .bold)).frame(width: 16, height: 16).background(target) }
+        }
+        .padding(.horizontal, 4).padding(.vertical, 2)
+        .background(pointed ? Color.black.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 4))
+    }
+
+    private var navPicture: some View {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(["Calendar settings", "Access permissions for events", "Share with specific people", "Event notifications"], id: \.self) { Text($0).font(.system(size: 10)) }
+                Text("Integrate calendar").font(.system(size: 10, weight: .semibold)).padding(.horizontal, 5).padding(.vertical, 2).background(target)
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach([120, 90, 140, 70], id: \.self) { w in RoundedRectangle(cornerRadius: 2).fill(Color.black.opacity(0.08)).frame(width: CGFloat(w), height: 7) }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private var secretPicture: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Secret address in iCal format").font(.system(size: 10, weight: .semibold))
+            HStack(spacing: 6) {
+                Text("••••••••••••••••••••••••••••").font(.system(size: 10, design: .monospaced)).padding(.horizontal, 6).padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading).background(Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 4))
+                Image(systemName: "eye").font(.system(size: 10))
+                Image(systemName: "doc.on.doc").font(.system(size: 10, weight: .semibold)).frame(width: 20, height: 20).background(target)
+            }
+            Text("Only share this address with people you trust.").font(.system(size: 9)).foregroundStyle(Color.black.opacity(0.5))
+        }
+    }
+
+    private var pastePicture: some View {
+        HStack(spacing: 6) {
+            Text(verbatim: "https://calendar.google.com/calendar/ical/…/basic.ics").font(.system(size: 10)).lineLimit(1).padding(.horizontal, 6).padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading).background(Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 4))
+            Text("Add").font(.system(size: 10, weight: .semibold)).padding(.horizontal, 8).padding(.vertical, 3).background(target)
         }
     }
 }

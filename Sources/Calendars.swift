@@ -100,6 +100,7 @@ enum CalendarAccounts {
 struct CalendarAccountsSection: View {
     @ObservedObject var cal = CalendarService.shared
     @State private var tick = 0
+    @AppStorage(CalendarWindow.hideKey) private var hideAfter = 5
 
     var body: some View {
         let _ = tick   // redraws after a switch; the accounts stay open (rebuilding the list used to close them)
@@ -142,6 +143,12 @@ struct CalendarAccountsSection: View {
                 Button("Refresh") { cal.store.refreshSourcesIfNecessary(); cal.reload(); tick += 1; Task { await LinkedCalendars.shared.refreshAll() } }
                 Spacer()
             }
+            Picker("Close the calendar window after I click away", selection: $hideAfter) {
+                Text("Right away").tag(0); Text("After 5 seconds").tag(5); Text("After 15 seconds").tag(15)
+                Text("After 30 seconds").tag(30); Text("After 1 minute").tag(60); Text("After 5 minutes").tag(300); Text("Never").tag(-1)
+            }
+            Text("Clicking the calendar box on Home opens the whole calendar in a window. Go back to it before the time's up and it stays. Pin it (the pin at the top of the window) to keep it open and on top.")
+                .font(.caption).foregroundStyle(.secondary)
             Text("Sign in to as many Google accounts as you like (and iCloud, Outlook or Exchange) in System Settings › Internet Accounts, with Calendars turned on. Onyx puts every calendar you pick here together in one calendar in the notch, shows an event that's on two accounts only once, and anything you add syncs back to Google. Or paste the link to one calendar above (its share link, or its Secret address in iCal format from its settings): Onyx copies in all its events and updates them every 30 minutes.")
                 .font(.caption).foregroundStyle(.secondary)
         } header: { Text("Calendars") }

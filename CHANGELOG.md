@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **The calendar opens in its own window.** Click the calendar box on Home and the whole calendar opens in a window you can move and resize. Click somewhere else and it closes by itself after a time you choose in Settings › Calendar & Mail (right away, 5 seconds up to 5 minutes, or never). Go back to it before then and it stays. Press the pin at the top to keep it open and on top of your other windows.
+- **How to get a calendar's private link, with pictures.** Settings › Calendar & Mail has a step-by-step guide, with a drawing for each step, to finding a Google calendar's Secret address in iCal format and pasting it into Onyx.
+
+### Improved
+- The calendar box and the full calendar are much quicker. Onyx looks up your calendars in the background instead of while drawing, handles a burst of sync changes in one go, and only redraws when something actually changed. Picking a day only looks up that day. The box's rotating list only runs when there's more than one page.
+
 ## 1.9.3
 
 ### Fixed

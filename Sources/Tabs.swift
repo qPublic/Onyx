@@ -239,10 +239,9 @@ struct DancingCow: View {
 /// Home: today only. Too many to fit? They take turns, a page at a time. Click to open the whole calendar.
 struct CalendarCard: View {
     @ObservedObject var cal = CalendarService.shared
-    @ObservedObject var mail = MailWatch.shared
+    private var mail: MailWatch { .shared }   // read when the box redraws, without redrawing on every mail check
     @State private var page = 0
     @State private var hovering = false
-    private let tick = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
     private let rowH: CGFloat = 30
 
     var body: some View {
@@ -291,8 +290,8 @@ struct CalendarCard: View {
 
     private func open() {
         guard !HomeLayout.shared.editing else { return }   // clicks while arranging boxes are for arranging
-        cal.select(Date())
-        withAnimation(Motion.reduced ? .easeInOut(duration: 0.2) : .spring(response: 0.42, dampingFraction: 0.86)) { HomeLayout.shared.fullCalendar = true }
+        NotchController.current?.collapse()
+        CalendarWindow.shared.show()
     }
 
     private func rows(_ events: [EKEvent], now: Date) -> some View {
@@ -317,9 +316,13 @@ struct CalendarCard: View {
                     .padding(4).background(.black.opacity(0.35), in: Capsule())
                 }
             }
-            .onReceive(tick) { _ in
-                guard pages > 1, !hovering else { return }   // resting the pointer on it holds the page
-                withAnimation(Motion.reduced ? .easeInOut(duration: 0.25) : .spring(response: 0.55, dampingFraction: 0.9)) { page += 1 }
+            .task(id: pages > 1) {   // only ticks while there's more than one page to show
+                guard pages > 1 else { return }
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(4))
+                    guard !Task.isCancelled, !hovering else { continue }   // resting the pointer on it holds the page
+                    withAnimation(Motion.reduced ? .easeInOut(duration: 0.25) : .spring(response: 0.55, dampingFraction: 0.9)) { page += 1 }
+                }
             }
         }
     }

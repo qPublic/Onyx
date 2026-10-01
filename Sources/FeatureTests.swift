@@ -986,6 +986,8 @@ enum ViewShot {
                 shoot("cal-card-many", CalendarCard(), CGSize(width: 205, height: 200))
                 cal.dayEvents = many; cal.busyDays = [3, 9, 14, Calendar.current.component(.day, from: now)]
                 shoot("cal-full", FullCalendarView(), CGSize(width: 628, height: 212))
+                shoot("cal-window", FullCalendarView(onClose: {}).padding(.horizontal, 12).padding(.bottom, 12).padding(.top, 30), CGSize(width: 780, height: 500))
+                shoot("secret-guide", SecretLinkGuide(), CGSize(width: 440, height: 560))
                 for t in [1.0, 2.2, 4.0] {
                     save("tour-academy-\(Int(t * 10))", TourDemo(step: .academy, t: t).frame(height: 250).frame(maxWidth: .infinity)
                         .background(RadialGradient(colors: [TourStep.academy.tint.opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 260)), CGSize(width: 472, height: 250))
@@ -1580,5 +1582,49 @@ enum SchoolTest {
         let field = try? await own.web.evaluateJavaScript("document.querySelector('input[type=password]').value") as? String
         check("never types the password anywhere but Google's sign-in page (\(there ?? "nil"))", there == "none" && field == "")
         finish()
+    }
+}
+
+enum CalendarWindowTest {
+    @MainActor static func run(_ file: String) async {
+        var log: [String] = [], fails = 0
+        func check(_ name: String, _ ok: Bool) {
+            log.append((ok ? "PASS " : "FAIL ") + name); if !ok { fails += 1 }
+            try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8)
+        }
+        func wait(_ s: Double) async { try? await Task.sleep(for: .milliseconds(Int(s * 1000))) }
+        let cw = CalendarWindow.shared
+        func clickAway() { cw.clickedAway() }   // what a click outside the window does (a real one would click on your screen)
+        var shown: Bool { cw.window?.isVisible == true }
+
+        CalendarWindow.testHideAfter = 1; CalendarWindow.testPinned = false
+        cw.show(); await wait(0.6)
+        check("opens the calendar in a window", shown)
+        clickAway(); await wait(0.5)
+        let stillThere = shown
+        await wait(1.2)
+        check("click away: stays for the time you chose, then closes (\(stillThere), \(shown))", stillThere && !shown)
+
+        cw.show(); await wait(0.5)
+        clickAway(); await wait(0.5)
+        cw.clickedInside(); await wait(1.3)
+        check("back in the window before the time's up: it stays", shown)
+
+        CalendarWindow.testHideAfter = -1
+        clickAway(); await wait(1.5)
+        check("set to Never: it stays after clicking away", shown)
+
+        CalendarWindow.testHideAfter = 1; CalendarWindow.testPinned = true; cw.applyPin()
+        clickAway(); await wait(1.5)
+        check("pinned: stays open after clicking away, on top of other windows", shown && cw.window?.level == .floating)
+        CalendarWindow.testPinned = false; cw.applyPin()
+
+        CalendarWindow.testHideAfter = 0
+        clickAway(); await wait(0.6)
+        check("set to Right away: it closes as soon as you click away (\(cw.window?.level == .normal ? "back to a normal window" : "still on top"))",
+              !shown && cw.window?.level == .normal)
+        log.append(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
+        try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8)
+        exit(0)
     }
 }

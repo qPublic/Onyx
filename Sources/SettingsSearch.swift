@@ -54,6 +54,8 @@ enum SettingsIndex {
         e(.behavior, "Help", "Take the Tour", "tour tutorial how to use help guide learn features explain"),
         e(.behavior, "Help", "Getting Started Guide", "getting started first time setup install tutorial help guide readme how to"),
         e(.accounts, "Calendars", "Add Google Account", "google calendar gmail account accounts sync multiple several calendars internet accounts combine merge one calendar"),
+        e(.accounts, "Calendars", "Close the calendar window after I click away", "calendar window pop out popup close hide click away timeout delay seconds"),
+        e(.accounts, "Calendars", "How to get a calendar's private link", "secret address ical private link calendar id integrate calendar tutorial help how to"),
         e(.accounts, "Calendars", "Paste a Google Calendar link", "google calendar link url ical ics webcal subscribe import copy public secret address share school calendar"),
         e(.accounts, "Calendars", "Choose calendars", "calendar hide show pick which calendars accounts colors"),
         e(.accounts, "Email", "Add Email Account", "email mail imap gmail icloud yahoo sign in login app password inbox accounts"),

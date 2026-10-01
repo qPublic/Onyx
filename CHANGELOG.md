@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.9.3
 
 ### Fixed
 - Pasting Google Calendar's own page (a calendar.google.com/…/r link) in Settings › Calendar & Mail no longer just says it isn't a calendar link. It explains that the page only opens when you're signed in, and gives you an Add Google Account… button. Add the account once and every one of its calendars shows up with its own switch.

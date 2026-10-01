@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.9.4
 
 ### New
 - **The calendar opens in its own window.** Click the calendar box on Home and the whole calendar opens in a window you can move and resize. Click somewhere else and it closes by itself after a time you choose in Settings › Calendar & Mail (right away, 5 seconds up to 5 minutes, or never). Go back to it before then and it stays. Press the pin at the top to keep it open and on top of your other windows.

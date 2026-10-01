@@ -276,5 +276,13 @@ enum Feedback {
 // MARK: - Reduce Motion (System Settings › Accessibility › Display)
 
 enum Motion {
-    static var reduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    static let key = "reduceMotion"   // Settings › Behavior › Motion
+    static var reduced: Bool { Prefs.bool(key) || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+}
+
+extension View {
+    /// With Reduce Motion on, changes happen at once: no slides, springs or growing.
+    func motionAware() -> some View {
+        transaction { t in if Motion.reduced { t.animation = nil; t.disablesAnimations = true } }
+    }
 }

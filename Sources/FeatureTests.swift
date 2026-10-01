@@ -988,6 +988,9 @@ enum ViewShot {
                 shoot("cal-full", FullCalendarView(), CGSize(width: 628, height: 212))
                 shoot("cal-window", FullCalendarView(onClose: {}).padding(.horizontal, 12).padding(.bottom, 12).padding(.top, 30), CGSize(width: 780, height: 500))
                 shoot("secret-guide", SecretLinkGuide(), CGSize(width: 440, height: 560))
+                HomeLayout.shared.editing = true   // only in memory
+                shoot("home-edit", HomeTab().background(Color.black), CGSize(width: 680, height: 230))
+                HomeLayout.shared.editing = false
                 for t in [1.0, 2.2, 4.0] {
                     save("tour-academy-\(Int(t * 10))", TourDemo(step: .academy, t: t).frame(height: 250).frame(maxWidth: .infinity)
                         .background(RadialGradient(colors: [TourStep.academy.tint.opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 260)), CGSize(width: 472, height: 250))
@@ -1598,8 +1601,13 @@ enum CalendarWindowTest {
         var shown: Bool { cw.window?.isVisible == true }
 
         CalendarWindow.testHideAfter = 1; CalendarWindow.testPinned = false
-        cw.show(); await wait(0.6)
+        cw.show()
+        let start = cw.window?.frame ?? .zero
+        await wait(0.6)
+        let end = cw.window?.frame ?? .zero
         check("opens the calendar in a window", shown)
+        if Motion.reduced { check("Reduce motion: it opens in place, without sliding", start == end) }
+        else { check("it drops into place from the notch as it opens (\(Int(start.minY - end.minY)) pt)", start.minY > end.minY && start.size == end.size) }
         clickAway(); await wait(0.5)
         let stillThere = shown
         await wait(1.2)

@@ -241,7 +241,7 @@ final class LauncherPanel: NSPanel {
         p.isReleasedWhenClosed = false
         p.setFrame(screen.frame, display: false)
         nav.page = 0
-        p.contentView = NSHostingView(rootView: LauncherView(nav: nav) { [weak self] in self?.close() })
+        p.contentView = NSHostingView(rootView: LauncherView(nav: nav) { [weak self] in self?.close() }.motionAware())
         panel = p
         NSApp.activate(ignoringOtherApps: true)
         p.makeKeyAndOrderFront(nil)

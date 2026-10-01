@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.9.5
+
+### New
+- **Reduce motion.** Settings › Behavior › Motion has a Reduce motion switch. It turns off most of Onyx's animations: the notch opening and closing, boxes and pages sliding, and the calendar window growing. It's also on whenever Reduce Motion is on in macOS's Accessibility settings.
+
+### Improved
+- The calendar window animates: it drops in from the notch as the calendar grows into place, and lifts away when it closes. Months slide when you change them, and the white circle glides to the day you pick.
+
+### Fixed
+- While arranging Home boxes, the Add box and Done buttons sit in their own row under the boxes instead of covering the boxes' arrows and remove buttons.
+
 ## 1.9.4
 
 ### New

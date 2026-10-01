@@ -413,6 +413,7 @@ struct BehaviorSettings: View {
     @AppStorage(AP.closeDelay) var closeDelay = 1.5
     @AppStorage(Prefs.hoverDelay) var hoverDelay = 0.12
     @AppStorage(AP.animation) var animation = AnimationStyle.bouncy.rawValue
+    @AppStorage(Motion.key) var reduceMotion = false
     @AppStorage(AP.haptics) var haptics = true
     @AppStorage(AP.hideFullscreen) var hideFullscreen = true
     @AppStorage(AP.hideFromCapture) var hideFromCapture = true
@@ -457,6 +458,12 @@ struct BehaviorSettings: View {
             Section("Motion") {
                 Picker("Animation", selection: $animation) {
                     ForEach(AnimationStyle.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .disabled(reduceMotion)
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Reduce motion", isOn: $reduceMotion)
+                    Text("Turns off most of Onyx's animations: the notch opening and closing, boxes and pages sliding, and the calendar window growing. It's also on whenever Reduce Motion is on in System Settings › Accessibility › Display.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle("Haptic feedback on open", isOn: $haptics)
             }

@@ -352,6 +352,14 @@ struct CalendarCard: View {
 struct MonthGrid: View {
     @ObservedObject var cal = CalendarService.shared
     var cell: CGFloat = 18
+    @Namespace private var ns
+    @State private var forward = true   // which way the months slide
+    private let glide = Animation.spring(response: 0.32, dampingFraction: 0.82)
+
+    private func go(_ months: Int) {
+        forward = months > 0
+        withAnimation(glide) { cal.select(Calendar.current.date(byAdding: .month, value: months, to: cal.selectedDay)!) }
+    }
 
     var body: some View {
         let c = Calendar.current
@@ -363,11 +371,11 @@ struct MonthGrid: View {
         let ordered = Array(symbols[(c.firstWeekday - 1)...] + symbols[..<(c.firstWeekday - 1)])
         VStack(spacing: 3) {
             HStack {
-                Button { cal.select(c.date(byAdding: .month, value: -1, to: cal.selectedDay)!) } label: { Image(systemName: "chevron.left") }
+                Button { go(-1) } label: { Image(systemName: "chevron.left") }
                 Spacer()
                 Text(cal.selectedDay.formatted(.dateTime.month(.wide).year())).font(.system(size: cell > 20 ? 12.5 : 11, weight: .semibold))
                 Spacer()
-                Button { cal.select(c.date(byAdding: .month, value: 1, to: cal.selectedDay)!) } label: { Image(systemName: "chevron.right") }
+                Button { go(1) } label: { Image(systemName: "chevron.right") }
             }
             .buttonStyle(.plain).font(.system(size: cell > 20 ? 11.5 : 10))
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(cell), spacing: 3), count: 7), spacing: 3) {
@@ -378,11 +386,14 @@ struct MonthGrid: View {
                     let date = c.date(byAdding: .day, value: d - 1, to: month.start)!
                     let sel = c.isDate(date, inSameDayAs: cal.selectedDay)
                     let isToday = date == today
-                    Button { cal.select(date) } label: {
+                    Button { withAnimation(glide) { cal.select(date) } } label: {
                         Text("\(d)")
                             .font(.system(size: cell * 0.53, weight: isToday ? .bold : .regular))
                             .frame(width: cell, height: cell)
-                            .background(sel ? Color.white : isToday ? Color.red.opacity(0.8) : .clear, in: Circle())
+                            .background {   // the white circle glides to the day you pick
+                                if sel { Circle().fill(Color.white).matchedGeometryEffect(id: "selected-\(month.start)", in: ns) }
+                                else if isToday { Circle().fill(Color.red.opacity(0.8)) }
+                            }
                             .foregroundStyle(sel ? .black : Color.primary)
                             .overlay(alignment: .bottom) {
                                 if cal.busyDays.contains(d) && !sel { Circle().fill(.cyan).frame(width: 3, height: 3).offset(y: 1) }
@@ -390,7 +401,11 @@ struct MonthGrid: View {
                     }.buttonStyle(.plain)
                 }
             }
+            .id(month.start)   // a new month slides in from the side you're going
+            .transition(.asymmetric(insertion: .move(edge: forward ? .trailing : .leading).combined(with: .opacity),
+                                    removal: .move(edge: forward ? .leading : .trailing).combined(with: .opacity)))
         }
+        .clipped()
     }
 }
 

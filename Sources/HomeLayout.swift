@@ -103,16 +103,17 @@ struct HomeTab: View {
                 .transition(.scale(scale: 0.9, anchor: calendarAnchor).combined(with: .opacity))
                 .onDisappear { if NotchController.current?.model.expanded != true || NotchController.current?.model.tab != .home { layout.fullCalendar = false } }
         } else {
-            HStack(spacing: 10) {
-                ForEach(layout.panels) { panel in
-                    PanelHost(panel: panel, editing: layout.editing)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.scale.combined(with: .opacity))
+            VStack(spacing: 6) {
+                HStack(spacing: 10) {
+                    ForEach(layout.panels) { panel in
+                        PanelHost(panel: panel, editing: layout.editing)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .transition(.scale.combined(with: .opacity))
+                    }
                 }
-            }
-            .animation(.snappy(duration: 0.22), value: layout.panels)
-            .overlay(alignment: .top) {
-                if layout.editing { editBar }
+                .animation(.snappy(duration: 0.22), value: layout.panels)
+                // Its own row under the boxes, so it never covers a box's arrows or remove button.
+                if layout.editing { editBar.transition(.move(edge: .bottom).combined(with: .opacity)) }
             }
             .transition(.opacity)
         }
@@ -136,7 +137,6 @@ struct HomeTab: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 5)
         .background(.ultraThinMaterial, in: Capsule())
-        .padding(.top, -2)
     }
 }
 

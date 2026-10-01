@@ -41,6 +41,7 @@ enum SettingsIndex {
         e(.behavior, "Opening", "Close when the pointer leaves", "close auto mouse leave pointer away"),
         e(.behavior, "Opening", "Close delay", "close delay seconds timeout auto close"),
         e(.behavior, "Motion", "Animation", "animation bouncy smooth snappy spring motion"),
+        e(.behavior, "Motion", "Reduce motion", "reduce motion animations accessibility calm turn off animations smooth vestibular dizzy"),
         e(.behavior, "Motion", "Haptic feedback on open", "haptic vibration trackpad feedback"),
         e(.live, "Live activities in the notch", "Meeting countdown", "meeting zoom meet teams webex call join countdown calendar video"),
         e(.behavior, "Shortcuts", "Clipboard history (paste)", "clipboard history paste picker snippets copy"),

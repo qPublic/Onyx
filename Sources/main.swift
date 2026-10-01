@@ -621,7 +621,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             w.titlebarAppearsTransparent = true
             w.isReleasedWhenClosed = false
             w.isRestorable = false
-            w.contentViewController = NSHostingController(rootView: SettingsView())
+            w.contentViewController = NSHostingController(rootView: SettingsView().motionAware())
             w.setContentSize(NSSize(width: 760, height: 580))
             w.center()
             settingsWindow = w

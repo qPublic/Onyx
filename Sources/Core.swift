@@ -335,7 +335,7 @@ final class NotchController {
         panel.hidesOnDeactivate = false
         panel.acceptsMouseMovedEvents = true
         panel.isReleasedWhenClosed = false
-        let host = NSHostingView(rootView: NotchRootView().environmentObject(model))
+        let host = NSHostingView(rootView: NotchRootView().environmentObject(model).motionAware())
         host.sizingOptions = []
         panel.contentView = host
         panel.ignoresMouseEvents = true

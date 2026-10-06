@@ -18,7 +18,7 @@ enum AIEval {
         case bullets(Int)           // exactly this many bullet lines
     }
     struct Case { let area: String; let q: String; let agent: Bool; let expect: Expect }
-    struct Result { let c: Case; let pass: Bool; let answer: String; let tools: [String]; let seconds: Double }
+    struct Result { let c: Case; let pass: Bool; let answer: String; let tools: [String]; let seconds: Double; var worked: String? = nil; var trace = "" }
 
     static func c(_ area: String, _ q: String, _ e: Expect, agent: Bool = true) -> Case { Case(area: area, q: q, agent: agent, expect: e) }
 
@@ -37,7 +37,7 @@ enum AIEval {
         c("Word problems", "A train goes 60 mph for 2.5 hours. How far does it go?", .number(150)),
         c("Word problems", "If 5 notebooks cost $12.50, how much do 8 notebooks cost?", .number(20)),
         c("Word problems", "Tom is twice as old as Ana. Ana is 7. How old will Tom be in 3 years?", .number(17)),
-        c("Word problems", "A pizza is cut into 8 slices and 3 are eaten. What fraction is left?", .any(["5/8", "0.625", "five eighths", "five-eighths"])),
+        c("Word problems", "A pizza is cut into 8 slices and 3 are eaten. What fraction is left?", .any(["5/8", "0.625", "five eighths", "five-eighths", "5 out of 8", "five out of eight", "⅝"])),
         c("Word problems", "What is the perimeter of a square with sides of 9 cm?", .number(36)),
         c("Word problems", "How many minutes are in a week?", .number(10080)),
         c("Word problems", "If you save $15 a week, how many weeks does it take to save $180?", .number(12)),
@@ -49,7 +49,7 @@ enum AIEval {
         c("Facts", "Who wrote Romeo and Juliet?", .any(["shakespeare"])), c("Facts", "What is the boiling point of water in Fahrenheit?", .number(212)),
         c("Facts", "What is the largest ocean on Earth?", .any(["pacific"])), c("Facts", "How many continents are there?", .any(["7", "seven"])),
         c("Facts", "What is called the powerhouse of the cell?", .any(["mitochondri"])), c("Facts", "Who painted the Mona Lisa?", .any(["leonardo", "da vinci"])),
-        c("Facts", "What is H2O?", .any(["water", "hydrogen"])), c("Facts", "At what temperature does water freeze in Celsius?", .any(["0 °", "0°", "zero", " 0 "])),
+        c("Facts", "What is H2O?", .any(["water", "hydrogen"])), c("Facts", "At what temperature does water freeze in Celsius?", .number(0)),
         c("Facts", "What is the tallest mountain in the world?", .any(["everest"])), c("Facts", "In what year did World War II end?", .number(1945)),
         c("Facts", "What is the largest planet in our solar system?", .any(["jupiter"])), c("Facts", "What gas do plants give off during photosynthesis?", .any(["oxygen"])),
         c("Facts", "How many sides does a hexagon have?", .any(["6", "six"])), c("Facts", "Who was the first president of the United States?", .any(["washington"])),
@@ -138,10 +138,12 @@ enum AIEval {
             let t0 = Date()
             ai.send(c.q)
             while ai.busy && Date().timeIntervalSince(t0) < 120 { try? await Task.sleep(for: .milliseconds(150)) }
+            let timedOut = ai.busy
             if ai.busy { ai.stop() }
             let answer = ai.messages.last.flatMap { $0.role == .error ? "ERROR: " + $0.text : nil } ?? ai.messages.last { $0.role == .assistant }?.text ?? ""
             let tools = AgentTools.dryCalls.map { String($0.split(separator: " ").first ?? "") } + ai.messages.filter { $0.role == .tool }.map { String($0.text.split(separator: ":").first ?? "") }
-            out.append(Result(c: c, pass: passes(c.expect, answer, tools), answer: answer, tools: tools, seconds: Date().timeIntervalSince(t0)))
+            out.append(Result(c: c, pass: passes(c.expect, answer, tools), answer: answer, tools: tools, seconds: Date().timeIntervalSince(t0), worked: ai.lastWorked,
+                              trace: (timedOut ? "timed out; " : "") + ai.messages.dropFirst().map { "\($0.role): \($0.text.prefix(40))" }.joined(separator: " | ")))
         }
         progress(list.count, list.count)
         return out
@@ -156,9 +158,16 @@ enum AIEval {
             let g = r.filter { $0.c.area == a }
             s += "\(a): \(g.filter(\.pass).count)/\(g.count)\n"
         }
+        // Right answers whose working reached a different number: what trusting the working over the reply would have broken.
+        let differ = r.filter { x in x.pass && x.worked != nil && !Assistant.carries(x.answer, resultOf: "Answer: " + (x.worked ?? "")) }
+        if r.contains(where: { $0.worked != nil }) {
+            s += "\nWorked out first: \(r.filter { $0.worked != nil }.count). Right answers where the working differed: \(differ.count)\n"
+            for x in differ { s += "  ~ \(x.c.q.prefix(60)) → \(x.answer.replacingOccurrences(of: "\n", with: " ").prefix(70))  (worked out: \((x.worked ?? "").prefix(50)))\n" }
+        }
         s += "\nMisses:\n"
         for x in r where !x.pass {
-            s += "✗ [\(x.c.area)] \(x.c.q)\n   → \(x.answer.replacingOccurrences(of: "\n", with: " ").prefix(220))" + (x.tools.isEmpty ? "" : "  (tools: \(x.tools.joined(separator: ", ")))") + "\n"
+            s += "✗ [\(x.c.area)] \(x.c.q)\n   → \(x.answer.replacingOccurrences(of: "\n", with: " ").prefix(220))" + (x.tools.isEmpty ? "" : "  (tools: \(x.tools.joined(separator: ", ")))") + (x.worked.map { "  (worked out: \($0.prefix(60)))" } ?? "")
+                + String(format: "  [%.0f s; %@]", x.seconds, x.trace.isEmpty ? "no messages" : x.trace.replacingOccurrences(of: "\n", with: " ")) + "\n"
         }
         return s
     }

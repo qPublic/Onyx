@@ -246,6 +246,7 @@ final class LauncherPanel: NSPanel {
         NSApp.activate(ignoringOtherApps: true)
         p.makeKeyAndOrderFront(nil)
         Task { await LauncherStore.shared.refresh() }
+        LauncherPlaces.shared.load()
         // A mouse wheel flips pages, like Launchpad (trackpads swipe the pages directly).
         monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
             guard let self, !e.hasPreciseScrollingDeltas, !LauncherStore.shared.byCategory else { return e }   // by category, it scrolls
@@ -275,6 +276,7 @@ final class LauncherPanel: NSPanel {
 
 struct LauncherView: View {
     @ObservedObject var store = LauncherStore.shared
+    @ObservedObject var places = LauncherPlaces.shared
     @ObservedObject var nav: LauncherNav
     let close: () -> Void
     @State private var query = ""
@@ -350,6 +352,8 @@ struct LauncherView: View {
                 }
                 .onKeyPress(.leftArrow) { if query.isEmpty { withAnimation { nav.step(-1) }; return .handled } else { selected = max(selected - 1, 0); return .handled } }
                 .onKeyPress(.rightArrow) { if query.isEmpty { withAnimation { nav.step(1) }; return .handled } else { selected += 1; return .handled } }
+                .onKeyPress(.downArrow) { if query.isEmpty { return .ignored }; selected += 1; return .handled }
+                .onKeyPress(.upArrow) { if query.isEmpty { return .ignored }; selected = max(selected - 1, 0); return .handled }
             if !query.isEmpty {
                 Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain)
             }
@@ -473,11 +477,12 @@ struct LauncherView: View {
 
     // MARK: Search results
 
-    /// Actions (math, timers, definitions, questions) on top, then matching apps, then matching files.
+    /// Actions (math, timers, definitions, questions) on top, then matching apps, places inside apps, then matching files.
     private func results(_ m: Metrics) -> some View {
         let actions = LauncherActions.parse(query, close: close)
         let found = Array(store.search(query).prefix(actions.isEmpty ? m.perPage : m.perPage - m.cols))
-        let pick = min(selected, actions.count + found.count - 1)
+        let shown = places.search(query)
+        let pick = min(selected, actions.count + found.count + shown.count - 1)
         return ScrollView {
             VStack(spacing: 18) {
                 ForEach(Array(actions.enumerated()), id: \.element.id) { i, a in LauncherActionRow(action: a, highlighted: i == pick) }
@@ -491,6 +496,15 @@ struct LauncherView: View {
                         }
                     }
                 }
+                if !shown.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Settings & Places").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white.opacity(0.7)).padding(.leading, 6)
+                        ForEach(Array(shown.enumerated()), id: \.element.id) { i, p in
+                            LauncherPlaceRow(place: p, highlighted: actions.count + found.count + i == pick) { places.open(p); close() }
+                        }
+                    }
+                    .frame(width: 560)
+                }
                 if !files.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Files").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white.opacity(0.7)).padding(.leading, 6)
@@ -498,7 +512,7 @@ struct LauncherView: View {
                     }
                     .frame(width: 560)
                 }
-                if actions.isEmpty && found.isEmpty && files.isEmpty {
+                if actions.isEmpty && found.isEmpty && shown.isEmpty && files.isEmpty {
                     Text("No apps or files match \"\(query)\"").font(.system(size: 15)).foregroundStyle(.secondary).padding(.top, 60)
                 }
             }
@@ -530,6 +544,8 @@ struct LauncherView: View {
         let actions = LauncherActions.parse(query, close: close)
         if selected < actions.count { actions[selected].run(); return }
         let found = store.search(query)
+        let shown = places.search(query), i = selected - actions.count
+        if i >= found.count, !shown.isEmpty { places.open(shown[min(i - found.count, shown.count - 1)]); close(); return }
         if !found.isEmpty { store.open(found[min(selected - actions.count, found.count - 1)].path); close() }
         else if let f = files.first { NSWorkspace.shared.open(f); close() }
     }

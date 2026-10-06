@@ -125,7 +125,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let file = ProcessInfo.processInfo.environment["ONYX_AIEVAL"] {
             Task { @MainActor in
                 let quick = ProcessInfo.processInfo.environment["ONYX_AIEVAL_QUICK"] != nil
-                let r = await AIEval.run(quick ? AIEval.quick : AIEval.cases) { d, t in try? "running \(d)/\(t)".write(toFile: file, atomically: true, encoding: .utf8) }
+                // ONYX_AIEVAL_AREAS="Math,Word problems" runs just those areas; ONYX_AIEVAL_TIMES=3 runs them that many times.
+                let areas = ProcessInfo.processInfo.environment["ONYX_AIEVAL_AREAS"]?.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                let times = Int(ProcessInfo.processInfo.environment["ONYX_AIEVAL_TIMES"] ?? "") ?? 1
+                var list = quick ? AIEval.quick : AIEval.cases
+                if let areas { list = list.filter { areas.contains($0.area) } }
+                list = Array(repeating: list, count: max(1, times)).flatMap { $0 }
+                let r = await AIEval.run(list) { d, t in try? "running \(d)/\(t)".write(toFile: file, atomically: true, encoding: .utf8) }
                 try? AIEval.report(r).write(toFile: file, atomically: true, encoding: .utf8)
                 exit(0)
             }

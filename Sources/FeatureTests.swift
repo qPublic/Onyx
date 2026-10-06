@@ -924,6 +924,30 @@ enum ExtrasTest {
         check("knows what this Mac can do (Liquid Glass \(OS.hasLiquidGlass), Apple AI \(OS.mayHaveAppleAI), Apple silicon \(OS.appleSilicon))",
               OS.hasLiquidGlass == (ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26) && (!OS.mayHaveAppleAI || OS.appleSilicon))
 
+        // High and Max effort: think first only when there's something to work out.
+        let think = { (q: String) in Assistant.worthThinking(q, agent: true, shared: false) }
+        note("think first? " + ["A train goes 60 mph for 2.5 hours. How far does it go?", "Why is the sky blue?", "If 5 notebooks cost $12.50, how much do 8 notebooks cost?", "Turn on dark mode",
+                               "Remind me to call mom at 6pm", "What's on my calendar this week?", "Search my notes for anything about photosynthesis", "Start a 25 minute focus session",
+                               "What is the capital of Australia?"].map { "\(think($0) ? "yes" : "no") [\(AgentTools.relevant(to: $0).map(\.name).joined(separator: ","))]" }.joined(separator: " | "))
+        check("High and Max work out problems first, not actions or quick facts",
+              think("A train goes 60 mph for 2.5 hours. How far does it go?") && think("Why is the sky blue?") && think("If 5 notebooks cost $12.50, how much do 8 notebooks cost?")
+              && !think("Turn on dark mode") && !think("Remind me to call mom at 6pm") && !think("What's on my calendar this week?")
+              && !think("Search my notes for anything about photosynthesis") && !think("Start a 25 minute focus session") && !think("What is the capital of Australia?")
+              && !think("Please set a timer for 10 minutes") && !think("What's due on Canvas?") && think("Tom is twice as old as Ana. Ana is 7. How old will Tom be in 3 years?")
+              && think("Find the area of a rectangle that is 7 by 12") && !think("Name one planet with rings, in one word") && think("Help me plan a study schedule for finals")
+              && Assistant.worthThinking("What does this say?", agent: true, shared: true))
+        check("spells a word backwards exactly",
+              Assistant.quickBackwards("Spell the word cat backwards") == "tac" && Assistant.quickBackwards("Reverse the word 'onyx'.") == "xyno"
+              && Assistant.quickBackwards("What is racecar spelled backwards?") == "racecar" && Assistant.quickBackwards("Spell necessary") == nil)
+        check("one word means the answer, not the lead-in",
+              Assistant.enforceFormat("Name one planet with rings, in one word", "Correct: Saturn") == "Saturn"
+              && Assistant.enforceFormat("Answer in one word: which planet has rings?", "The answer is Saturn.") == "Saturn"
+              && Assistant.enforceFormat("Answer in one word: what color is the sky on a clear day?", "Blue") == "Blue")
+        check("Max keeps the result it worked out (a reply that only repeats a step doesn't count)",
+              !Assistant.carries("Calculate 60 times 2.5.", resultOf: "60 × 2.5 = 150\nAnswer: 150 miles") && Assistant.carries("It goes 150 miles.", resultOf: "Answer: 150 miles")
+              && !Assistant.carries("Each notebook costs $2.50.", resultOf: "8 × 2.50 = 20\n**Answer:** $20") && Assistant.carries("It's 1,024.", resultOf: "Answer: 1024")
+              && Assistant.carries("Canberra.", resultOf: "Answer: Canberra") && Assistant.carries("anything", resultOf: "no final line here"))
+
         // Quick Translate: which way it goes, and Apple's translation through the macOS 15 route (it works on 26 too).
         let pick = { (src: String) in QuickTranslate.target(for: src) }
         let mine = Locale.current.language.languageCode?.identifier ?? "en"
@@ -993,6 +1017,31 @@ enum ExtrasTest {
         check("Lid Awake: stays on at 55% or plugged in, and turning it off in Onyx ends it (\(fine.late.trimmingCharacters(in: .whitespacesAndNewlines)))",
               fine.early.isEmpty && fine.late.contains("-a disablesleep 0") && plugged.early.isEmpty && plugged.late.contains("-a disablesleep 0"))
         check("Lid Awake: nothing left running afterwards", await !LidAwake.watcherRunning())
+
+        // Places inside apps: System Settings' pages and the settings inside them, read from macOS itself.
+        let panes = LauncherPlaces.systemSettings(battery: true), pages = panes.filter { !$0.parent.contains("›") }
+        let wifi = LauncherPlaces.match("wifi", in: panes, limit: 5).first
+        check("launcher finds System Settings' pages (\(pages.count) pages, \(panes.count) places)", pages.count >= 20 && panes.count > 100)
+        check("\"wifi\", \"wi-fi\" and \"wi fi\" → Wi‑Fi's page (\(wifi?.target ?? "none"))", wifi?.target == "x-apple.systempreferences:com.apple.wifi-settings-extension"
+              && LauncherPlaces.match("wi-fi", in: panes, limit: 5).first == wifi && LauncherPlaces.match("wi fi", in: panes, limit: 5).first == wifi)
+        check("its link opens in System Settings", wifi.flatMap { URL(string: $0.target) }.flatMap { NSWorkspace.shared.urlForApplication(toOpen: $0) }?.lastPathComponent.contains("Settings") == true)
+        check("pages show the names the sidebar does, not code names", pages.contains { $0.title == "Battery" } && pages.contains { $0.title == "Bluetooth" }
+              && !pages.contains { ["PowerPreferences", "WiFiSettings", "FollowUps", "HeadphoneSettingsExtension"].contains($0.title) })
+        check("a desktop Mac gets Energy instead of Battery", LauncherPlaces.systemSettings(battery: false).contains { $0.title == "Energy" && $0.parent == "System Settings" })
+        check("\"blue\" → Bluetooth's page before the settings inside it", LauncherPlaces.match("blue", in: panes, limit: 5).first?.target == "x-apple.systempreferences:com.apple.BluetoothSettings")
+        let glow = tmp.appendingPathComponent("Panes/Glow.appex/Contents")
+        try? FileManager.default.createDirectory(at: glow.appendingPathComponent("Resources/en.lproj"), withIntermediateDirectories: true)
+        (["CFBundleIdentifier": "test.glow", "CFBundleDisplayName": "Glow", "EXAppExtensionAttributes": ["EXExtensionPointIdentifier": "com.apple.Settings.extension.ui",
+            "SettingsExtensionAttributes": ["searchTermsFileName": "Glow"]]] as NSDictionary).write(to: glow.appendingPathComponent("Info.plist"), atomically: true)
+        (["warmth": ["localizableStrings": [["title": "Warm Light", "index": "amber, evening, cozy"]]]] as NSDictionary)
+            .write(to: glow.appendingPathComponent("Resources/en.lproj/Glow.searchTerms"), atomically: true)
+        let made = LauncherPlaces.systemSettings(in: tmp.appendingPathComponent("Panes"), battery: true, legacy: [])
+        check("a setting inside a page is found by its search words and opens at its spot (\(made.map(\.target)))",
+              LauncherPlaces.match("cozy", in: made, limit: 5).first?.target == "x-apple.systempreferences:test.glow?warmth"
+              && LauncherPlaces.match("warm li", in: made, limit: 5).first?.title == "Warm Light" && LauncherPlaces.match("glo", in: made, limit: 5).first?.title == "Glow"
+              && LauncherPlaces.match("zzz", in: made, limit: 5).isEmpty)
+        check("Finder's folders are places too", LauncherPlaces.match("downl", in: LauncherPlaces.finder(), limit: 5).first?.parent == "Finder")
+        check("Onyx's own settings are places", LauncherPlaces.shared.search("reduce motion").contains { $0.target.hasPrefix("onyx:") })
         // Private windows: nothing captures or reads while one is open.
         PrivateGuard.shared.force(true)
         var looked = true
@@ -1078,6 +1127,10 @@ enum ViewShot {
                 shoot("appearance", AppearanceSettings(), CGSize(width: 560, height: 520))
                 shoot("ai-model", Form { AIModelSettings() }.formStyle(.grouped), CGSize(width: 560, height: 300))
                 shoot("shelf", ShelfTab().background(Color.black), CGSize(width: 680, height: 220))
+                let spots = LauncherPlaces.systemSettings(battery: true) + LauncherPlaces.finder()
+                let rows = ["wifi", "true tone", "battery", "downl"].compactMap { LauncherPlaces.match($0, in: spots, limit: 1).first } + LauncherPlaces.shared.search("reduce motion")
+                shoot("places", VStack(spacing: 4) { ForEach(Array(rows.enumerated()), id: \.element.id) { i, p in LauncherPlaceRow(place: p, highlighted: i == 0) {} } }
+                    .frame(width: 560).padding(12).background(Color(white: 0.22)), CGSize(width: 600, height: 300))
                 HomeLayout.shared.editing = true   // only in memory
                 shoot("home-edit", HomeTab().background(Color.black), CGSize(width: 680, height: 230))
                 HomeLayout.shared.editing = false

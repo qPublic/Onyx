@@ -391,6 +391,9 @@ final class Assistant: ObservableObject {
     @Published var document: AIDocument?      // a file or selected text to ask about (see AIExtras.swift)
     @Published var lastSources: [URL] = []    // web pages the last answer was based on
     var carryOver: String?                    // a summary of the chat so far, once it outgrew the on-device model
+    private(set) var lastWorked: String?      // High and Max: the result the working reached for the last request (the test report shows it)
+    private var userStopped = false           // you pressed Stop or started a new chat (macOS cancelling the model isn't that)
+    private var run = 0                       // goes up at every Stop or new chat, so a stopped question can't touch the next one
     var cloudHistory: [CloudMessage] = []
     private var heldSession: Any?             // the on-device model's session (macOS 26 and later)
     @available(macOS 26, *) private var session: LanguageModelSession? {
@@ -427,8 +430,13 @@ final class Assistant: ObservableObject {
         let spelled = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"]
         if ["only a number", "just the number", "only the number", "just a number", "number only"].contains(where: r.contains),
            let n = spelled.firstIndex(where: { a.lowercased().range(of: #"\b\#($0)\b"#, options: .regularExpression) != nil }) { return String(n) }   // "eight" → 8
-        if ["one word", "single word"].contains(where: r.contains), let w = a.split(whereSeparator: { $0.isWhitespace }).first {
-            return String(w).trimmingCharacters(in: .punctuationCharacters).capitalized
+        if ["one word", "single word"].contains(where: r.contains) {
+            // "Correct: Saturn", "The answer is Saturn." → Saturn (not the lead-in)
+            var t = a.split(separator: "\n").first.map(String.init) ?? a
+            if let c = t.lastIndex(of: ":"), c < t.index(before: t.endIndex) { t = String(t[t.index(after: c)...]) }
+            t = t.replacingOccurrences(of: #"^\s*(the answer is|the word is|it is|it's|that would be|that is|that's|correct|sure|answer|one word)\b[,.:!]?\s*"#,
+                                       with: "", options: [.regularExpression, .caseInsensitive])
+            if let w = t.split(whereSeparator: { $0.isWhitespace }).first { return String(w).trimmingCharacters(in: .punctuationCharacters).capitalized }
         }
         if r.contains("yes or no"), let w = a.lowercased().split(whereSeparator: { !$0.isLetter }).first(where: { $0 == "yes" || $0 == "no" }) { return w.capitalized }
         return answer
@@ -463,6 +471,19 @@ final class Assistant: ObservableObject {
         if has(#"^(?:what(?:'s| is) (?:the date|today's date)|what date is (?:it|today))(?: today)?$"#) { return "Today is \(now.formatted(date: .complete, time: .omitted))." }
         if has(#"^(?:what time is it|what(?:'s| is) the time)(?: now| right now)?$"#) { return "It's \(now.formatted(date: .omitted, time: .shortened))." }
         if has(#"^what year is it(?: now)?$"#) { return "It's \(now.formatted(.dateTime.year()))." }
+        return nil
+    }
+
+    /// "Spell the word cat backwards", "reverse the word onyx": done exactly (the small model works in pieces of words,
+    /// so it gets letters out of order).
+    static func quickBackwards(_ text: String) -> String? {
+        let q = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        for p in [#"^(?:spell|write|say|type) (?:the word )?["'“‘]?([a-z]{2,30})["'”’]? backwards?$"#, #"^reverse (?:the word )?["'“‘]?([a-z]{2,30})["'”’]?$"#,
+                  #"^what is (?:the word )?["'“‘]?([a-z]{2,30})["'”’]? (?:spelled |spelt |written )?backwards?$"#] {
+            guard let re = try? NSRegularExpression(pattern: p), let m = re.firstMatch(in: q, range: NSRange(q.startIndex..., in: q)),
+                  let w = Range(m.range(at: 1), in: q) else { continue }
+            return String(q[w].reversed())
+        }
         return nil
     }
 
@@ -534,11 +555,11 @@ final class Assistant: ObservableObject {
         return s
     }
 
-    func reset() { task?.cancel(); heldSession = nil; messages = []; busy = false; status = nil; attachment = nil; carryOver = nil; cloudHistory = []; lastSources = [] }
+    func reset() { userStopped = true; run += 1; task?.cancel(); heldSession = nil; messages = []; busy = false; status = nil; attachment = nil; carryOver = nil; cloudHistory = []; lastSources = [] }
     /// Free the on-device model session while idle to reclaim memory; the chat log stays.
     func releaseIfIdle() { if !busy { heldSession = nil } }
     static var needsNewerMac: String { "Onyx's free on-device AI \(OS.noAppleAIReason). On this Mac, pick a cloud model in Settings › Privacy › AI: Gemini gives you a free key with your Google account." }
-    func stop() { task?.cancel(); busy = false; status = nil }
+    func stop() { userStopped = true; run += 1; task?.cancel(); heldSession = nil; busy = false; status = nil }   // a fresh session: the stopped one may still be winding down
 
     func log(tool: String, result: String) {
         messages.append(Msg(role: .tool, text: "\(tool.replacingOccurrences(of: "_", with: " ")): \(result.prefix(140))"))
@@ -547,7 +568,8 @@ final class Assistant: ObservableObject {
     func send(_ text: String, context: String? = nil) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy else { return }
-        if context == nil, let answer = Self.quickMath(text) ?? Self.quickClock(text) {
+        lastWorked = nil; userStopped = false
+        if context == nil, let answer = Self.quickMath(text) ?? Self.quickClock(text) ?? Self.quickBackwards(text) {
             messages.append(Msg(role: .user, text: text))
             messages.append(Msg(role: .assistant, text: answer))
             return
@@ -572,8 +594,17 @@ final class Assistant: ObservableObject {
             }
             return
         }
+        runOnDevice(text, context: context, image: image, doc: doc, look: look, agent: agent, effort: effort, start: start, tries: 0)
+    }
+
+    /// The on-device answer, in a task of its own. When Apple's model is overloaded, macOS can cancel that task from its
+    /// side, which used to look like you pressing Stop and left a blank reply. If you didn't stop it, Onyx starts the
+    /// question again after a moment, up to twice, unless a tool has already done something (so nothing is done twice).
+    private func runOnDevice(_ text: String, context: String?, image: CGImage?, doc: AIDocument?, look: Bool, agent: Bool, effort: AIEffort, start: Int, tries: Int) {
+        let mine = run
         task = Task { @MainActor in
-            defer { self.busy = false; self.status = nil }
+            var again = false
+            defer { if !again, mine == self.run { self.busy = false; self.status = nil } }
             guard #available(macOS 26, *) else { messages.append(Msg(role: .error, text: Self.needsNewerMac)); return }
             do {
                 // 1. Turn what the user shared into text the model can read.
@@ -593,23 +624,44 @@ final class Assistant: ObservableObject {
 
                 // 2. High / Max: work it out first in a scratch session, then answer with those notes.
                 var notes: String?
-                if effort == .high || effort == .max {
+                if (effort == .high || effort == .max) && Self.worthThinking(text, agent: agent, shared: !shared.isEmpty) {
                     status = effort == .max ? "Thinking it through three ways…" : "Thinking…"
-                    do { notes = try await Self.think(request, effort: effort) }
+                    do {
+                        notes = try await Self.think(request, effort: effort)
+                        if notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { notes = nil }   // the model came back blank
+                        lastWorked = notes.flatMap(Self.answerLine)
+                    }
                     catch is CancellationError { throw CancellationError() }
                     catch { notes = nil }   // answer anyway, just without the extra thinking
                 }
                 status = "Writing…"
                 try await answer(request, notes: notes, agent: agent, effort: effort)
+                if let notes { try await keepWorkedAnswer(text, request: request, notes: notes, since: start, effort: effort) }
 
                 // 3. Check the work against what was asked, and finish anything missed (not on Low, which is for speed).
                 if effort != .low { try await review(text, since: start, agent: agent, effort: effort) }
+                guard mine == run else { return }
                 if let i = messages.lastIndex(where: { $0.role == .assistant }), i >= start { messages[i].text = Self.enforceFormat(text, messages[i].text) }
                 if !lastSources.isEmpty { messages.append(Msg(role: .tool, text: "Sources: " + lastSources.compactMap(\.host).joined(separator: ", "))) }
             } catch is CancellationError {
-                // Stopped by macOS rather than by you (Stop or a new chat): say so instead of leaving the question unanswered.
-                if !Task.isCancelled { messages.append(Msg(role: .error, text: "The on-device model stopped before answering. Try again in a moment.")) }
+                guard !userStopped, mine == run else { return }   // you pressed Stop or started a new chat
+                // Stopped by macOS, not by you: start again from the top, or say so.
+                let acted = (messages.count > start && messages[start...].contains { $0.role == .tool }) || !AgentTools.dryCalls.isEmpty
+                if tries < 2 && !acted {
+                    again = true
+                    if messages.count > start { messages.removeSubrange(start...) }
+                    heldSession = nil
+                    status = "The model paused. Trying again…"
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5 * Double(tries + 1)) { [weak self] in
+                        guard let self else { return }
+                        guard mine == self.run else { return }   // stopped, or a new chat, while it waited
+                        self.runOnDevice(text, context: context, image: image, doc: doc, look: look, agent: agent, effort: effort, start: start, tries: tries + 1)
+                    }
+                } else {
+                    messages.append(Msg(role: .error, text: "The on-device model stopped before answering. Try again in a moment."))
+                }
             } catch {
+                guard mine == run else { return }
                 if let l = messages.last, l.role == .assistant, l.text.isEmpty { messages.removeLast() }   // a reply that never got going
                 messages.append(Msg(role: .error, text: Self.describe(error)))
             }
@@ -653,10 +705,17 @@ final class Assistant: ObservableObject {
             do {
                 var idx: Int?, raw = ""
                 ToolBudget.reset()
+                let toolsBefore = messages.filter { $0.role == .tool }.count + AgentTools.dryCalls.count
                 for try await snap in session!.streamResponse(to: prompt(attempt == 0 ? 6000 : 2500), options: Self.options(effort)) {
                     if idx == nil { status = nil; messages.append(Msg(role: .assistant, text: "")); idx = messages.count - 1 }
                     raw = snap.content
                     messages[idx!].text = Self.plain(raw)
+                }
+                // A blank reply is no reply (the model does this when it's overloaded). If a tool already did something,
+                // say so instead of trying again, so nothing is done twice.
+                if let i = idx, messages[i].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if messages.filter({ $0.role == .tool }).count + AgentTools.dryCalls.count > toolsBefore { messages[i].text = "Done." }
+                    else { messages.remove(at: i); idx = nil }
                 }
                 if idx == nil {   // the stream ended without a word: try once more, then say so
                     guard attempt < 2 else { throw NoReply() }
@@ -728,7 +787,7 @@ final class Assistant: ObservableObject {
                     an action that no tool confirmed counts as incomplete.
                     """).respond(to: check, schema: schema, options: GenerationOptions(sampling: .greedy)).content
             }
-        } catch is CancellationError where Task.isCancelled { throw CancellationError() } catch { return }   // checking is a bonus; the reply stands
+        } catch is CancellationError where userStopped { throw CancellationError() } catch { return }   // checking is a bonus; the reply stands
         let missing = ((try? verdict.value(String.self, forProperty: "missing")) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         // Only act on a gap that's really about the request (the small model can imagine ones).
         let askedWords = Set(asked.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
@@ -793,11 +852,13 @@ final class Assistant: ObservableObject {
             if idx == nil { status = nil; messages.append(Msg(role: .assistant, text: "")); idx = messages.count - 1 }
             messages[idx!].text = Self.plain(snap.content)
         }
+        if let i = idx, messages[i].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { messages.remove(at: i); throw NoReply() }   // blank is no reply
+        if idx == nil { throw NoReply() }
     }
 
     /// High: one careful step-by-step pass. Max: three independent attempts, then a pass that compares them.
     @available(macOS 26, *)
-    private static func think(_ request: String, effort: AIEffort) async throws -> String {
+    private static func think(_ request: String, effort: AIEffort, temperature: Double = 0.2) async throws -> String {
         let instructions = "You work problems out carefully. Restate what is asked, list the facts given, then reason step by step. Use the calculate tool for arithmetic. Be concise, plain text, no LaTeX. End with a line starting 'Answer:'."
         func attempt(_ temperature: Double) async throws -> String {
             try await retrying {
@@ -806,7 +867,7 @@ final class Assistant: ObservableObject {
                 return try await s.respond(to: String(request.prefix(5000)), options: GenerationOptions(temperature: temperature, maximumResponseTokens: 600)).content
             }
         }
-        if effort != .max { return String(try await attempt(0.2).prefix(1600)) }
+        if effort != .max { return String(try await attempt(temperature).prefix(1600)) }
         // Max: three independent attempts (one at a time: the on-device model runs one request best).
         var drafts: [String] = []
         for t in [0.2, 0.4, 0.6] { drafts.append(try await attempt(t)) }
@@ -861,6 +922,84 @@ final class Assistant: ObservableObject {
         t = t.replacingOccurrences(of: #"\\frac\{([^{}]*)\}\{([^{}]*)\}"#, with: "($1)/($2)", options: .regularExpression)
         t = t.replacingOccurrences(of: #"\\text\{([^{}]*)\}"#, with: "$1", options: .regularExpression)
         return t
+    }
+
+    /// High and Max work a request out first in a scratch session. That helps with a problem to solve (math, reasoning, a
+    /// long question, something you shared), and hurts with a thing to do: the scratch session has no tools, so its notes
+    /// say "I can't turn on dark mode" and talk the real answer out of doing it. Quick facts don't need it either.
+    static func worthThinking(_ text: String, agent: Bool, shared: Bool) -> Bool {
+        if shared { return true }
+        let r = text.lowercased()
+        if agent, !questionOnly(text) {
+            let actions = AgentTools.relevant(to: text).filter { t in
+                t.name != "calculate" && (t.name != "onyx_help" || r.contains("onyx") || r.contains("setting"))
+            }
+            // The tools' own trigger words are loose ("hours" for a timer, "notebooks" for notes), so a word problem can look
+            // like an action. It only counts as one if it's worded as a command or is about your own things.
+            var lead = r.trimmingCharacters(in: .whitespacesAndNewlines)
+            for p in ["hey onyx, ", "hey onyx ", "onyx, ", "please ", "can you ", "could you ", "would you ", "i need you to ", "i want you to "] where lead.hasPrefix(p) {
+                lead = String(lead.dropFirst(p.count))
+            }
+            let commands = ["open", "launch", "start", "set", "turn", "remind", "add", "create", "make", "draft", "copy", "pause", "play", "skip", "resume", "search",
+                            "show", "keep", "remember", "brief", "translate", "switch", "stop", "enable", "disable", "schedule", "email", "send", "close", "mute",
+                            "unmute", "take", "record", "delete", "remove", "look up", "google", "find my", "find the file", "find file", "what's on my", "what is on my",
+                            "whats on my", "what's due", "whats due", "what is due", "where do i", "how do i", "do i have"]
+            let command = commands.contains { lead == $0 || lead.hasPrefix($0 + " ") }
+            let mine = ["my calendar", "my notes", "my files", "my schedule", "my reminders", "my clipboard", "my day", "my mac", "my workspace", "on canvas", "in onyx"]
+                .contains(where: r.contains)
+            if !actions.isEmpty && (command || mine) { return false }
+        }
+        let math = r.contains(where: \.isNumber) || ["average", "percent", "sum of", "squared", "square root", "convert", "divided", "times", "plus", "minus",
+                                                      "calculate", "half", "twice", "double", "fraction", "ratio", "how many", "how much", "how long", "how far", "how old"].contains(where: r.contains)
+        let reasoning = r.range(of: #"\b(why|explain|compare|prove|solve|plan|logic|puzzle|riddle|analy[sz]e|difference between|step by step|should i|which is better|pros and cons|figure out|work out|what if)\b"#,
+                                options: .regularExpression) != nil   // whole words: "planet" isn't "plan"
+        return math || reasoning || r.split(whereSeparator: { $0.isWhitespace }).count > 14
+    }
+
+    /// The text after "Answer:" on a worked attempt's last such line.
+    static func answerLine(_ s: String) -> String? {
+        guard let line = s.components(separatedBy: "\n").last(where: { $0.range(of: "answer:", options: .caseInsensitive) != nil }),
+              let r = line.range(of: "answer:", options: [.caseInsensitive, .backwards]) else { return nil }
+        let a = line[r.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "*_")))
+        return a.isEmpty ? nil : a
+    }
+
+    static func numbers(in s: String) -> [Double] {
+        let t = s.replacingOccurrences(of: #"(?<=\d),(?=\d{3})"#, with: "", options: .regularExpression)
+        return (try? NSRegularExpression(pattern: #"-?\d+(?:\.\d+)?"#))?.matches(in: t, range: NSRange(t.startIndex..., in: t))
+            .compactMap { Range($0.range, in: t).flatMap { Double(t[$0]) } } ?? []
+    }
+
+    /// True if the reply already states the result the working reached (or the working reached no number).
+    static func carries(_ reply: String, resultOf notes: String) -> Bool {
+        guard let line = answerLine(notes) else { return true }
+        let want = numbers(in: line)
+        guard !want.isEmpty else { return true }
+        let have = numbers(in: reply)
+        return want.contains { w in have.contains { abs($0 - w) <= max(0.011, abs(w) * 0.002) } }
+    }
+
+    /// The reply should carry the result the working reached. The small model sometimes repeats a step of the working
+    /// instead ("Calculate 60 times 2.5.") or redoes the sum wrong, so when the two disagree: at Max the three attempts'
+    /// result stands; at High it works the problem out once more and the majority wins. Then it states that result.
+    @available(macOS 26, *)
+    @MainActor private func keepWorkedAnswer(_ asked: String, request: String, notes: String, since start: Int, effort: AIEffort) async throws {
+        guard let i = messages.indices.last, i >= start, messages[i].role == .assistant, !Self.carries(messages[i].text, resultOf: notes),
+              let line = Self.answerLine(notes) else { return }
+        if effort != .max {
+            status = "Double-checking…"
+            guard let again = try? await Self.think(request, effort: .high, temperature: 0.5), let second = Self.answerLine(again),
+                  Self.carries(second, resultOf: notes) else { return }   // the second look didn't back the working: the reply stands
+        }
+        status = "Writing…"
+        let before = messages.count
+        try? await answerWithoutTools("My question: \(asked.prefix(1500))\n\nYou already worked it out carefully. The result: \(line)\n\nGive me the answer in one or two short sentences, stating that result.", effort: effort)
+        if messages.count > before, messages.last?.role == .assistant, Self.carries(messages.last?.text ?? "", resultOf: notes) {
+            messages.remove(at: i)                      // the restated answer takes the first one's place
+        } else {
+            if messages.count > before { messages.removeLast(messages.count - before) }
+            messages[i].text = line                     // the worked result itself, rather than a step of the working
+        }
     }
 
     /// The "Answer: …" line of a worked attempt, normalized so two attempts can be compared.

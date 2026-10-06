@@ -98,7 +98,7 @@ enum SettingsIndex {
         e(.behavior, "Live Wallpapers", "Live wallpapers", "wallpaper video live animated background desktop backdrop moving screensaver upscale enhance 4k 60fps"),
         e(.behavior, "Live Wallpapers", "Create a wallpaper with AI", "ai generate make create wallpaper loop game minecraft world picture screenshot bring to life image playground"),
         e(.behavior, "Live Wallpapers", "Game-style scenes", "synthwave neon retro 80s grid rain city cyberpunk pixel art sunset hyperspace warp stars matrix code rain"),
-        e(.behavior, "Shortcuts", "Open App Launcher", "launcher launchpad apps grid all apps folders open app"),
+        e(.behavior, "Shortcuts", "Open App Launcher", "launcher launchpad apps grid all apps folders open app system settings pages wifi bluetooth places"),
         e(.behavior, "Shortcuts", "⌘Space opens the App Launcher", "spotlight command space cmd space rebind spotlight replace spotlight launcher"),
         e(.widgets, "Notes", "Sync with Apple Notes", "apple notes icloud iphone ipad sync notes backup two way"),
         e(.behavior, "Updates", "Update automatically", "update updates upgrade new version check download install release github auto"),

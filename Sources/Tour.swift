@@ -62,7 +62,7 @@ enum TourStep: Int, CaseIterable {
         case .workspaces: "Save the apps and windows you use for school or work, then put them all back where they were in one click."
         case .markup: "Draw arrows and boxes on screenshots and blur private details. Press ⌃⌥T to copy the text out of anything on screen."
         case .livingWalls: "When it rains or snows where you are, so does your wallpaper. AI loops can switch to sunset and night versions with the real sun."
-        case .launcherPlus: "Type math, \"timer 10\", \"define\" a word or a question and get it right there. Matching files show up too."
+        case .launcherPlus: "Type math, \"timer 10\", \"define\" a word or a question and get it right there. Matching files show up too, and so do pages of System Settings, like Wi‑Fi."
         case .system: "See your battery's health and what's using energy, and flip Dark Mode, Do Not Disturb, Keep awake and more in one click."
         }
     }

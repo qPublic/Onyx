@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.1
+
+### New
+- **The App Launcher opens places inside apps, like Spotlight.** Type "wifi", "bluetooth", "battery" or "true tone" and the launcher shows that page of System Settings, or the setting inside a page, and opens straight to it. It reads the pages from macOS itself (their names, icons and search words), so the list fits your Mac and its language: about 45 pages and 600 settings. Onyx's own settings ("reduce motion") and Finder's folders (Downloads, Applications, iCloud Drive, Trash) show up the same way, under Settings & Places. ↑ and ↓ now move through the results. Other apps don't tell macOS about their windows, so only these can be listed.
+
+### Improved
+- Onyx AI is better and quicker at High and Max. They used to work every request out first in a scratch pass with no tools, which talked the answer out of doing things you asked for (dark mode, focus sessions, your calendar, searching your notes). Now they only think first when there's something to work out: math, reasoning, a long question, or something you shared. Actions and quick facts go straight to the answer.
+- At Max, the answer always includes the result the three attempts settled on, instead of sometimes stopping at a step of the working. At High, if the answer and the working disagree, Onyx works it out once more and goes with the majority.
+- "Spell cat backwards" and "reverse the word onyx" are done exactly. "Answer in one word" gives the answer, not the first word of a sentence.
+
+### Fixed
+- When Apple's on-device model is overloaded it can come back blank, or macOS can stop it part-way. Onyx used to show an empty reply. Now it starts the question again after a moment (never repeating an action that already ran), and says so if the model still doesn't answer.
+- Pressing Stop and asking something else right away could show an error about two requests at once, or let the stopped question carry on underneath the new one. A stopped question now ends for good.
+
 ## 2.0.0
 
 ### New

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.3
+
+### New
+- **Academy Sign-Up can sign you back up.** Set "If I'm taken off one Onyx signed me up for" to Sign me back up, and Onyx re-adds you to an academy it signed you up for when you're no longer in it. It waits 5 minutes after a sign-up, stops after three times for the same academy, and still never replaces an appointment a teacher assigned. It's off unless you turn it on.
+
 ## 2.0.2
 
 ### Fixed

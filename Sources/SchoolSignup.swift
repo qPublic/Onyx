@@ -46,6 +46,7 @@ struct SchoolRule: Equatable {
     var teacherID = "", teacherName = "", words = "", date = ""   // date: "yyyy-MM-dd", or "" for the first day it's offered
     var keepWatching = false, replace = true
     var offeringID = ""   // one academy you picked from the list
+    var rejoin = false    // sign you back up for one you were taken off
     var isSet: Bool { !offeringID.isEmpty || !teacherID.isEmpty || !wordList.isEmpty }
     var wordList: [String] { words.split(whereSeparator: { $0 == " " || $0 == "," }).map { SchoolSignup.fold(String($0)) } }
     var label: String {
@@ -106,7 +107,7 @@ struct SchoolSettings {
                        browser: SchoolBrowser(rawValue: Prefs.string(SchoolSignup.browserKey)) ?? .chrome,
                        rule: SchoolRule(teacherID: Prefs.string(SchoolSignup.teacherKey), teacherName: Prefs.string(SchoolSignup.teacherNameKey),
                                         words: Prefs.string(SchoolSignup.wordsKey), date: Prefs.string(SchoolSignup.dateKey),
-                                        keepWatching: Prefs.bool(SchoolSignup.repeatKey), replace: Prefs.bool(SchoolSignup.replaceKey)),
+                                        keepWatching: Prefs.bool(SchoolSignup.repeatKey), replace: Prefs.bool(SchoolSignup.replaceKey), rejoin: Prefs.bool(SchoolSignup.rejoinKey)),
                        google: Prefs.string(SchoolSignup.googleKey))
     }
 }
@@ -437,7 +438,7 @@ enum SchoolJS {
     static let shared = SchoolSignup()
     nonisolated static let onKey = "school.on", linkKey = "school.link", browserKey = "school.browser", teacherKey = "school.teacherID",
                            teacherNameKey = "school.teacherName", wordsKey = "school.words", dateKey = "school.date",
-                           repeatKey = "school.repeat", replaceKey = "school.replace", googleKey = "school.google"
+                           repeatKey = "school.repeat", replaceKey = "school.replace", googleKey = "school.google", rejoinKey = "school.rejoin"
     nonisolated static let passwordAccount = "school.googlePassword"   // Keychain
 
     @Published private(set) var status: String?
@@ -460,6 +461,8 @@ enum SchoolJS {
 
     private var done = Set<String>()      // offerings Onyx signed you up for: never again, even if you leave one
     private var failedAt: [String: Date] = [:]
+    private var rejoins: [String: Int] = [:], signedAt: [String: Date] = [:]   // times Onyx signed you back up for one; when it last signed you up
+    var rejoinGap = 300.0                 // seconds before signing you back up (TeachMore's list can lag); the self-test shortens it
     private var warned = Set<String>()    // notch warnings already shown; cleared once a check works
     private var lastOpened: Date?
     private var reauthTries = 0           // times Onyx sent the tab to "Sign in with Google" since the last check that worked
@@ -467,11 +470,11 @@ enum SchoolJS {
     private var timer: Timer?
     private var file: URL { Prefs.supportDir.appendingPathComponent("school-signups.json") }
 
-    private struct Saved: Codable { var history: [SchoolSignupRecord]; var done: [String]; var teachers: [SchoolTeacher]; var student: String?; var plans: [SchoolPlan]? }
+    private struct Saved: Codable { var history: [SchoolSignupRecord]; var done: [String]; var teachers: [SchoolTeacher]; var student: String?; var plans: [SchoolPlan]?; var rejoins: [String: Int]? }
 
     init() {
         if let d = try? Data(contentsOf: file), let s = try? JSONDecoder().decode(Saved.self, from: d) {
-            history = s.history; done = Set(s.done); teachers = s.teachers; student = s.student
+            history = s.history; done = Set(s.done); teachers = s.teachers; student = s.student; rejoins = s.rejoins ?? [:]
             let today = Self.dayKey(Date())
             plans = (s.plans ?? []).filter { $0.date >= today }   // days gone by drop off
         }
@@ -479,7 +482,7 @@ enum SchoolJS {
 
     private func save() {
         guard testSettings == nil else { return }
-        if let d = try? JSONEncoder().encode(Saved(history: history, done: Array(done), teachers: teachers, student: student, plans: plans)) {
+        if let d = try? JSONEncoder().encode(Saved(history: history, done: Array(done), teachers: teachers, student: student, plans: plans, rejoins: rejoins)) {
             try? d.write(to: file, options: .atomic)
         }
     }
@@ -613,11 +616,18 @@ enum SchoolJS {
         var over = !s.rule.isSet, note: String?   // over: nothing more to do for the teacher and words above
         if s.rule.isSet {
             let planned = Set(plans.map(\.date))   // a day you planned has its own academy
-            let c = Self.choose(list.filter { !planned.contains($0.date) }, rule: s.rule, done: done, today: today)
+            // "Sign me back up": one you were taken off is fair game again, but not within 5 minutes of signing up (TeachMore's
+            // list can lag) and three times at most each, so Onyx never keeps fighting whoever took you off.
+            let skip = s.rule.rejoin ? done.filter { id in (rejoins[id] ?? 0) >= 3 || signedAt[id].map { Date().timeIntervalSince($0) < rejoinGap } ?? false } : done
+            let c = Self.choose(list.filter { !planned.contains($0.date) }, rule: s.rule, done: skip, today: today)
             if c.satisfied, !s.rule.keepWatching { over = true; note = c.note }
             else if let pick = c.pick {
                 spoke = true
-                if !recent(pick), await signUp(pick, p, b, s) { if s.rule.keepWatching { next = 3 } else { over = true } }
+                let back = done.contains(pick.id)
+                if !recent(pick), await signUp(pick, p, b, s) {
+                    if back { rejoins[pick.id, default: 0] += 1; save() }
+                    if s.rule.keepWatching { next = 3 } else { over = true }
+                }
             } else { waiting.insert("\(s.rule.label): \(lower(c.note))", at: 0) }
         }
         if over && openPlans.isEmpty {
@@ -793,7 +803,7 @@ enum SchoolJS {
            let list = Self.object(again).flatMap({ Self.offerings($0["body"] as? String ?? "") }) {
             listed = list.contains { $0.id == o.id && $0.enrolled }
         }
-        done.insert(o.id)
+        done.insert(o.id); signedAt[o.id] = Date()
         history.insert(SchoolSignupRecord(id: o.id, title: o.title, teacher: o.teacher, date: o.date, at: Date(), confirmed: listed), at: 0)
         if history.count > 20 { history.removeLast(history.count - 20) }
         save()
@@ -877,7 +887,7 @@ enum SchoolJS {
         let signedDays = Set(matches.filter(\.enrolled).map(\.date))
         var why: [String] = [], left = false
         for o in matches where !o.enrolled && !signedDays.contains(o.date) {
-            // Onyx signed you up once; if you left it, it stays left until you choose that day in the calendar
+            // Onyx signed you up once; if you left it, it stays left until you choose that day in the calendar (or have it sign you back up)
             if done.contains(o.id) { why.append("you left \(o.day) after Onyx signed you up"); left = true; continue }
             if o.unavailable { why.append("\(o.day) is only for students on the teacher's list"); continue }
             if o.full { why.append("\(o.day) is full, waiting for a seat"); continue }
@@ -889,7 +899,7 @@ enum SchoolJS {
             return SchoolChoice(pick: o, note: "")
         }
         if why.isEmpty { return SchoolChoice(pick: nil, note: signedDays.isEmpty ? "Not posted yet" : "You're signed up for every date posted so far") }
-        return SchoolChoice(pick: nil, note: "Posted, but " + why.prefix(2).joined(separator: "; ") + (left ? " (choose a day in the calendar to go back)" : ""))
+        return SchoolChoice(pick: nil, note: "Posted, but " + why.prefix(2).joined(separator: "; ") + (left ? (rule.rejoin ? " (Onyx signs you back up after 5 minutes, up to three times each)" : " (choose Sign me back up in Academy Sign-Up settings, or that day in the calendar)") : ""))
     }
 
     nonisolated static func object(_ s: String) -> [String: Any]? {
@@ -973,6 +983,7 @@ struct SchoolSignupSection: View {
     @AppStorage(SchoolSignup.dateKey) private var date = ""
     @AppStorage(SchoolSignup.repeatKey) private var keep = false
     @AppStorage(SchoolSignup.replaceKey) private var replace = true
+    @AppStorage(SchoolSignup.rejoinKey) private var rejoin = false
     @State private var password = ""
 
     private var own: Bool { browser == SchoolBrowser.onyx.rawValue }
@@ -1040,6 +1051,10 @@ struct SchoolSignupSection: View {
                 Text("Stop watching").tag(false)
                 Text("Keep watching for new dates").tag(true)
             }
+            Picker("If I'm taken off one Onyx signed me up for", selection: $rejoin) {
+                Text("Leave it").tag(false)
+                Text("Sign me back up").tag(true)
+            }
             Toggle("Watch TeachMore and sign me up", isOn: $on).disabled(!ready && !on)
             if on || school.status != nil {
                 HStack(alignment: .firstTextBaseline) {
@@ -1062,8 +1077,8 @@ struct SchoolSignupSection: View {
                 }
             }
         } header: { Text("Academy sign-up (TeachMore)") } footer: {
-            Text(own ? "Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in its own browser, in the background, with its own sign-in (apart from your browsers). When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left unless you choose it in the calendar below. Your Mac needs to be awake. Make sure your school is fine with automatic sign-ups."
-                     : "Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in your own signed-in \(browserName) tab, so it never sees your password. When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left unless you choose it in the calendar below. First turn on View › Developer › Allow JavaScript from Apple Events in \(browserName); macOS asks once to let Onyx control it. Your Mac needs to be awake with \(browserName) open. Make sure your school is fine with automatic sign-ups.")
+            Text(own ? "Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in its own browser, in the background, with its own sign-in (apart from your browsers). When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left unless you set it to sign you back up or choose it in the calendar below. Your Mac needs to be awake. Make sure your school is fine with automatic sign-ups."
+                     : "Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in your own signed-in \(browserName) tab, so it never sees your password. When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left unless you set it to sign you back up or choose it in the calendar below. First turn on View › Developer › Allow JavaScript from Apple Events in \(browserName); macOS asks once to let Onyx control it. Your Mac needs to be awake with \(browserName) open. Make sure your school is fine with automatic sign-ups.")
         }
         .onChange(of: on) { _, _ in school.update() }
         .onChange(of: link) { _, _ in school.update() }

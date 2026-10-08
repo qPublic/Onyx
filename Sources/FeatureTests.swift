@@ -1715,6 +1715,23 @@ enum SchoolTest {
         check("one you left, chosen again in the calendar: signs you up (\(p.map { $0["offeringID"] as? String ?? "" }), \(school.status ?? ""))",
               p.count == 1 && p[0]["offeringID"] as? String == "6001" && p[0]["ok"] as? Bool == true && school.plans.first?.done == true)
 
+        // "Sign me back up": re-adds you by itself, but not right after a sign-up, and three times at most for the same academy.
+        for x in school.plans { school.unplan(x.date) }
+        _ = await mock("set?name=days&reset=1")
+        school.testSettings?.rule.rejoin = true
+        await school.check(force: true)
+        p = await posts()
+        check("sign me back up: waits 5 minutes after a sign-up (\(school.status ?? ""))", p.isEmpty && school.status?.contains("after 5 minutes") == true)
+        school.rejoinGap = 0
+        var back: [String] = []
+        for _ in 0..<4 {
+            _ = await mock("set?name=days&reset=1")
+            await school.check(force: true)
+            back += await posts().compactMap { $0["offeringID"] as? String }
+        }
+        school.rejoinGap = 300
+        check("sign me back up: re-adds you, three times at most for the same academy (\(back))", back == ["6001", "6001", "6001", "6003"])
+
         // Onyx's own browser (cookies thrown away after the test): signs in to Google by itself, with the saved password.
         let own = OnyxBrowser(test: true)
         own.googleOrigin = "http://127.0.0.1:8767"; own.googlePath = "/__mock/google"

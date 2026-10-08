@@ -71,6 +71,7 @@ enum SettingsIndex {
         e(.school, "Academy sign-up (TeachMore)", "School Google account", "google account sign in signed out login email choose account teachmore"),
         e(.school, "Academy sign-up (TeachMore)", "Teacher", "teachmore academy teacher offering which class"),
         e(.school, "Academy sign-up (TeachMore)", "If I already have a sign-up that day", "teachmore academy replace switch conflict existing appointment"),
+        e(.school, "Academy sign-up (TeachMore)", "If I'm taken off one Onyx signed me up for", "teachmore academy sign me back up again rejoin resign re-sign dropped removed left automatically"),
         e(.school, "Academy sign-up (TeachMore)", "Onyx's own browser", "teachmore browser background chrome not needed google password sign in automatic login keychain"),
         e(.school, "Plan days in the calendar", "Plan days in the calendar", "teachmore academy calendar day date friday different academy each day plan schedule choose pick week"),
         e(.lock, "Proton VPN", "Proton VPN", "vpn proton connect disconnect privacy secure core wifi trusted network kill switch shield"),

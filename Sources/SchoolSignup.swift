@@ -602,7 +602,8 @@ enum SchoolJS {
         func recent(_ o: SchoolOffering) -> Bool { failedAt[o.id].map { Date().timeIntervalSince($0) < 300 } ?? false }   // it said no a moment ago
         var waiting: [String] = [], spoke = false, next: Double?
         for plan in openPlans {
-            let c = Self.choose(list, rule: plan.rule(replace: s.rule.replace), done: done, today: today)
+            // A day you chose yourself: signs you up even for one you left before (a plan is only ever acted on once).
+            let c = Self.choose(list, rule: plan.rule(replace: s.rule.replace), done: [], today: today)
             if c.satisfied { finish(plan.date); continue }
             guard let pick = c.pick else { waiting.append("\(plan.label) on \(Self.dayText(plan.date)): \(lower(c.note))"); continue }
             if recent(pick) { spoke = true; continue }
@@ -874,9 +875,10 @@ enum SchoolJS {
             return SchoolChoice(pick: nil, note: "You're signed up for “\(e.title)” on \(e.day)", satisfied: true)
         }
         let signedDays = Set(matches.filter(\.enrolled).map(\.date))
-        var why: [String] = []
+        var why: [String] = [], left = false
         for o in matches where !o.enrolled && !signedDays.contains(o.date) {
-            if done.contains(o.id) { continue }   // Onyx signed you up once; if you left it, it stays left
+            // Onyx signed you up once; if you left it, it stays left until you choose that day in the calendar
+            if done.contains(o.id) { why.append("you left \(o.day) after Onyx signed you up"); left = true; continue }
             if o.unavailable { why.append("\(o.day) is only for students on the teacher's list"); continue }
             if o.full { why.append("\(o.day) is full, waiting for a seat"); continue }
             if o.hasAppt && o.apptType == 1 { why.append("a teacher assigned you somewhere else on \(o.day)"); continue }
@@ -887,7 +889,7 @@ enum SchoolJS {
             return SchoolChoice(pick: o, note: "")
         }
         if why.isEmpty { return SchoolChoice(pick: nil, note: signedDays.isEmpty ? "Not posted yet" : "You're signed up for every date posted so far") }
-        return SchoolChoice(pick: nil, note: "Posted, but " + why.prefix(2).joined(separator: "; "))
+        return SchoolChoice(pick: nil, note: "Posted, but " + why.prefix(2).joined(separator: "; ") + (left ? " (choose a day in the calendar to go back)" : ""))
     }
 
     nonisolated static func object(_ s: String) -> [String: Any]? {
@@ -1060,8 +1062,8 @@ struct SchoolSignupSection: View {
                 }
             }
         } header: { Text("Academy sign-up (TeachMore)") } footer: {
-            Text(own ? "Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in its own browser, in the background, with its own sign-in (apart from your browsers). When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left. Your Mac needs to be awake. Make sure your school is fine with automatic sign-ups."
-                     : "Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in your own signed-in \(browserName) tab, so it never sees your password. When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left. First turn on View › Developer › Allow JavaScript from Apple Events in \(browserName); macOS asks once to let Onyx control it. Your Mac needs to be awake with \(browserName) open. Make sure your school is fine with automatic sign-ups.")
+            Text(own ? "Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in its own browser, in the background, with its own sign-in (apart from your browsers). When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left unless you choose it in the calendar below. Your Mac needs to be awake. Make sure your school is fine with automatic sign-ups."
+                     : "Onyx checks your offerings list every 30 seconds (every 3 minutes overnight) in your own signed-in \(browserName) tab, so it never sees your password. When the academy you chose is posted with a free seat, it signs you up, checks TeachMore lists you, and tells you in the notch. It never replaces an appointment a teacher assigned, and never signs you up again for one you left unless you choose it in the calendar below. First turn on View › Developer › Allow JavaScript from Apple Events in \(browserName); macOS asks once to let Onyx control it. Your Mac needs to be awake with \(browserName) open. Make sure your school is fine with automatic sign-ups.")
         }
         .onChange(of: on) { _, _ in school.update() }
         .onChange(of: link) { _, _ in school.update() }

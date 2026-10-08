@@ -1537,7 +1537,8 @@ enum SchoolTest {
         check("switches from your own sign-up, or keeps it if you'd rather", pick([o("2", "R", "2026-10-07", appt: 3)], rule) == "2" && pick([o("2", "R", "2026-10-07", appt: 3)], keep) == "none")
         check("a sign-up that can't change on the day stays; an automatic one can switch",
               pick([o("2", "R", today, appt: 3, locked: true)], rule) == "none" && pick([o("2", "R", today, appt: 5)], rule) == "2")
-        check("never signs you up again for one you left", pick([o("2", "R", "2026-10-07")], rule, done: ["2"]) == "none")
+        check("never signs you up again for one you left, and says that instead of \"not posted\"", pick([o("2", "R", "2026-10-07")], rule, done: ["2"]) == "none"
+              && SchoolSignup.choose([o("2", "R", "2026-10-07")], rule: rule, done: ["2"], today: today).note.hasPrefix("Posted, but you left"))
         check("title words, any teacher, accents don't matter",
               pick([o("2", "Robotics", "2026-10-07", tid: "1"), o("3", "Robotics Club & Build Night", "2026-10-08", tid: "2")], SchoolRule(words: "robotics build")) == "3"
               && pick([o("2", "Ayuda de Español", "2026-10-07", tid: "1")], SchoolRule(words: "espanol")) == "2" && !SchoolRule().isSet)
@@ -1699,6 +1700,20 @@ enum SchoolTest {
         p = await posts()
         check("only planned days: stops watching once every one is signed up (\(school.status ?? ""))",
               p.count == 2 && p[1]["offeringID"] as? String == "6003" && school.testSettings?.on == false)
+
+        // You left ones Onyx signed you up for: it says so (not "not posted"), and choosing one in the calendar signs you up again.
+        _ = await mock("set?name=days&reset=1")
+        for x in school.plans { school.unplan(x.date) }
+        school.testSettings?.on = true; school.testSettings?.rule = rule
+        await school.check(force: true)
+        p = await posts()
+        check("one you left: says it's posted and that you left it, and sends nothing (\(school.status ?? ""))",
+              p.isEmpty && school.status?.contains("you left") == true && school.status?.contains("not posted") == false)
+        school.plan(SchoolPlan(date: ahead(2), teacherID: "305", teacherName: "Julia Park", offeringID: "6001", title: "Robotics"))
+        await school.check(force: true)
+        p = await posts()
+        check("one you left, chosen again in the calendar: signs you up (\(p.map { $0["offeringID"] as? String ?? "" }), \(school.status ?? ""))",
+              p.count == 1 && p[0]["offeringID"] as? String == "6001" && p[0]["ok"] as? Bool == true && school.plans.first?.done == true)
 
         // Onyx's own browser (cookies thrown away after the test): signs in to Google by itself, with the saved password.
         let own = OnyxBrowser(test: true)

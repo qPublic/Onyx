@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.2
+
+### Fixed
+- Academy Sign-Up no longer says an academy is "not posted yet" when it is posted but you left it after Onyx signed you up. It now says that, and choosing that academy (or its teacher) for a day in the calendar signs you up for it again.
+
 ## 2.0.1
 
 ### New

@@ -76,7 +76,7 @@ struct SchoolPlan: Codable, Identifiable, Equatable {
     }
 }
 
-struct SchoolChoice { var pick: SchoolOffering?; var note: String; var satisfied = false }
+struct SchoolChoice { var pick: SchoolOffering?; var note: String; var satisfied = false; var left: [SchoolOffering] = [] }   // left: ones you're no longer in
 
 struct SchoolTeacher: Codable, Identifiable, Hashable { var id: String; var name: String; var mine: Bool }
 
@@ -451,6 +451,7 @@ enum SchoolJS {
     @Published private(set) var student: String?
     @Published private(set) var plans: [SchoolPlan] = []           // days you planned in the calendar
     @Published private(set) var offerings: [SchoolOffering] = []   // what's posted, for the calendar
+    @Published private(set) var reach = ""                         // the last day TeachMore's list of every teacher covers
     @Published private(set) var loadingOfferings = false
     @Published private(set) var hasPassword = false
 
@@ -464,6 +465,7 @@ enum SchoolJS {
     private var rejoins: [String: Int] = [:], signedAt: [String: Date] = [:]   // times Onyx signed you back up for one; when it last signed you up
     var rejoinGap = 300.0                 // seconds before signing you back up (TeachMore's list can lag); the self-test shortens it
     private var warned = Set<String>()    // notch warnings already shown; cleared once a check works
+    private var told = Set<String>()      // sign-ups you've been told you're no longer in
     private var lastOpened: Date?
     private var reauthTries = 0           // times Onyx sent the tab to "Sign in with Google" since the last check that worked
     private var badPassword = false       // Google turned the saved password down: never typed again until you save it again
@@ -547,6 +549,12 @@ enum SchoolJS {
         NotchModel.shared.flash(.message(icon: "exclamationmark.triangle.fill", text: text, tint: .orange), for: 5)
     }
 
+    /// Says once, in the notch, that a sign-up Onyx made is gone.
+    private func tell(_ key: String, _ text: String) {
+        guard told.insert(key).inserted, testSettings == nil else { return }
+        NotchModel.shared.flash(.message(icon: "exclamationmark.triangle.fill", text: text, tint: .orange), for: 6)
+    }
+
     /// Checks the list once and signs you up if the academy you want is there with a free seat.
     func check(force: Bool = false) async {
         while loadingOfferings { try? await Task.sleep(for: .milliseconds(200)) }   // one script in the tab at a time
@@ -554,7 +562,8 @@ enum SchoolJS {
         guard !checking, force || s.on else { return }
         guard let b = Self.base(s.link) else { report("Paste your school's TeachMore link first.", problem: true); return }
         guard s.rule.isSet || !openPlans.isEmpty else { report("Choose a teacher or words to watch for, or plan a day in the calendar.", problem: true); return }
-        // With days planned, look at every teacher's offerings; otherwise just the one teacher's, as the page shows them.
+        // With days planned, look at every teacher's offerings (and further ahead in the lists of the teachers you named);
+        // otherwise just the one teacher's, as the page shows them.
         let teacher = openPlans.isEmpty ? s.rule.teacherID : ""
         checking = true
         var next = interval
@@ -590,7 +599,8 @@ enum SchoolJS {
             }
             warned.removeAll(); reauthTries = 0
             remember(list, teacher: teacher)
-            if let n = await act(list, p, b, s) { next = n }
+            let all = teacher.isEmpty ? await further(list, p, b, s) : list
+            if let n = await act(all, p, b, s) { next = n }
             // Signing in lands on TeachMore's home page (the calendar); put the tab back on Offerings.
             if signedBackIn { _ = await p.navigate(b.url + "offerings") }
             return
@@ -604,6 +614,19 @@ enum SchoolJS {
         func lower(_ n: String) -> String { n.prefix(1).lowercased() + n.dropFirst() }
         func recent(_ o: SchoolOffering) -> Bool { failedAt[o.id].map { Date().timeIntervalSince($0) < 300 } ?? false }   // it said no a moment ago
         var waiting: [String] = [], spoke = false, next: Double?
+        told.subtract(list.filter(\.enrolled).map(\.id))
+        // Days Onyx already signed you up for from the calendar: every check makes sure you're still in them.
+        for plan in plans where plan.done && plan.date >= today {
+            let m = list.filter { plan.rule(replace: true).matches($0) }, key = "day " + plan.date
+            if m.isEmpty || m.contains(where: \.enrolled) { told.remove(key); continue }   // that day isn't in the list, or all is well
+            if m.contains(where: { o in signedAt[o.id].map { Date().timeIntervalSince($0) < rejoinGap } ?? false }) { continue }   // just signed up: the list can lag
+            if s.rule.rejoin, (rejoins[key] ?? 0) < 3, let i = plans.firstIndex(where: { $0.date == plan.date }) {
+                rejoins[key, default: 0] += 1; plans[i].done = false; save()   // open again: signed up just below
+            } else {
+                waiting.append("\(plan.label) on \(Self.dayText(plan.date)): you're no longer signed up")
+                tell(key, "No longer signed up: \(Self.short(plan.label)) · \(Self.dayText(plan.date))")
+            }
+        }
         for plan in openPlans {
             // A day you chose yourself: signs you up even for one you left before (a plan is only ever acted on once).
             let c = Self.choose(list, rule: plan.rule(replace: s.rule.replace), done: [], today: today)
@@ -628,7 +651,11 @@ enum SchoolJS {
                     if back { rejoins[pick.id, default: 0] += 1; save() }
                     if s.rule.keepWatching { next = 3 } else { over = true }
                 }
-            } else { waiting.insert("\(s.rule.label): \(lower(c.note))", at: 0) }
+            } else {
+                waiting.insert("\(s.rule.label): \(lower(c.note))", at: 0)
+                // Gone, and Onyx won't put it back by itself: say so once.
+                for o in c.left where !s.rule.rejoin || (rejoins[o.id] ?? 0) >= 3 { tell(o.id, "No longer signed up: \(Self.short(o.title)) · \(o.day)") }
+            }
         }
         if over && openPlans.isEmpty {
             if !spoke { report("\(note ?? "You're signed up for every day you planned"), so Onyx stopped watching.", problem: false) }
@@ -642,8 +669,26 @@ enum SchoolJS {
 
     /// What's posted, for the calendar in Settings (one teacher's list only replaces that teacher's offerings).
     private func remember(_ list: [SchoolOffering], teacher: String) {
-        let new = (teacher.isEmpty ? [] : offerings.filter { $0.teacherID != teacher }) + list
+        // The list of every teacher stops short (about two weeks out): what a teacher's own list showed past its last day is kept.
+        let last = list.map(\.date).max() ?? ""
+        if teacher.isEmpty, reach != last { reach = last }
+        let new = (teacher.isEmpty ? (list.isEmpty ? [] : offerings.filter { $0.date > last }) : offerings.filter { $0.teacherID != teacher }) + list
         if new != offerings { offerings = new }
+    }
+
+    /// TeachMore's list of every teacher stops short (about two weeks out), so the teachers you named (above and on planned
+    /// days) are also looked up in their own lists, which go further. Returns everything found.
+    private func further(_ list: [SchoolOffering], _ p: SchoolPage, _ b: Base, _ s: SchoolSettings) async -> [SchoolOffering] {
+        var all = list, seen = Set<String>()
+        let today = Self.dayKey(Date())   // finished planned days too: Onyx keeps checking you're still in them
+        for t in ([s.rule.teacherID] + plans.filter { $0.date >= today }.map(\.teacherID)).filter({ !$0.isEmpty && seen.insert($0).inserted }).prefix(6) {
+            guard case .value(let raw) = await p.run(SchoolJS.search(b.path, teacher: t), poll: SchoolJS.poll, openURL: ""),
+                  let more = Self.object(raw).flatMap({ Self.offerings($0["body"] as? String ?? "") }) else { continue }
+            remember(more, teacher: t)
+            let known = Set(all.map(\.id))
+            all += more.filter { !known.contains($0.id) }
+        }
+        return all
     }
 
     /// Everything posted, for the calendar in Settings. Never opens a tab.
@@ -654,6 +699,7 @@ enum SchoolJS {
         if case .value(let raw) = await page(s, b).run(SchoolJS.search(b.path, teacher: ""), poll: SchoolJS.poll, openURL: s.browser == .onyx ? b.url + "offerings" : ""),
            let res = Self.object(raw), !Self.signedOut(res, path: b.path), let list = Self.offerings(res["body"] as? String ?? "") {
             remember(list, teacher: "")
+            _ = await further(list, page(s, b), b, s)
         }
     }
 
@@ -885,10 +931,10 @@ enum SchoolJS {
             return SchoolChoice(pick: nil, note: "You're signed up for “\(e.title)” on \(e.day)", satisfied: true)
         }
         let signedDays = Set(matches.filter(\.enrolled).map(\.date))
-        var why: [String] = [], left = false
+        var why: [String] = [], left: [SchoolOffering] = []
         for o in matches where !o.enrolled && !signedDays.contains(o.date) {
             // Onyx signed you up once; if you left it, it stays left until you choose that day in the calendar (or have it sign you back up)
-            if done.contains(o.id) { why.append("you left \(o.day) after Onyx signed you up"); left = true; continue }
+            if done.contains(o.id) { why.append("you left \(o.day) after Onyx signed you up"); left.append(o); continue }
             if o.unavailable { why.append("\(o.day) is only for students on the teacher's list"); continue }
             if o.full { why.append("\(o.day) is full, waiting for a seat"); continue }
             if o.hasAppt && o.apptType == 1 { why.append("a teacher assigned you somewhere else on \(o.day)"); continue }
@@ -899,7 +945,7 @@ enum SchoolJS {
             return SchoolChoice(pick: o, note: "")
         }
         if why.isEmpty { return SchoolChoice(pick: nil, note: signedDays.isEmpty ? "Not posted yet" : "You're signed up for every date posted so far") }
-        return SchoolChoice(pick: nil, note: "Posted, but " + why.prefix(2).joined(separator: "; ") + (left ? (rule.rejoin ? " (Onyx signs you back up after 5 minutes, up to three times each)" : " (choose Sign me back up in Academy Sign-Up settings, or that day in the calendar)") : ""))
+        return SchoolChoice(pick: nil, note: "Posted, but " + why.prefix(2).joined(separator: "; ") + (left.isEmpty ? "" : (rule.rejoin ? " (Onyx signs you back up after 5 minutes, up to three times each)" : " (choose Sign me back up in Academy Sign-Up settings, or that day in the calendar)")), left: left)
     }
 
     nonisolated static func object(_ s: String) -> [String: Any]? {
@@ -1202,7 +1248,9 @@ struct SchoolCalendarSection: View {
                     .foregroundStyle(plan.done ? .green : .orange)
             }
             if posted.isEmpty {
-                Text(school.offerings.isEmpty ? "Press ↻ above to load what's posted." : "Nothing's posted for this day yet.").font(.caption).foregroundStyle(.secondary)
+                Text(school.offerings.isEmpty ? "Press ↻ above to load what's posted."
+                     : !school.reach.isEmpty && key > school.reach ? "TeachMore's list of every teacher has nothing after \(SchoolSignup.dayText(school.reach)). Plan a teacher below and Onyx looks in that teacher's own list for this day."
+                     : "Nothing's posted for this day yet.").font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(posted, id: \.id) { o in row(o, key, plan) }
             }

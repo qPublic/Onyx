@@ -1732,6 +1732,39 @@ enum SchoolTest {
         school.rejoinGap = 300
         check("sign me back up: re-adds you, three times at most for the same academy (\(back))", back == ["6001", "6001", "6001", "6003"])
 
+        // A day planned further ahead than TeachMore's list of every teacher reaches: found in the teacher's own list.
+        _ = await mock("set?name=far&reset=1")
+        school.testSettings?.on = true; school.testSettings?.rule = SchoolRule()
+        school.plan(SchoolPlan(date: ahead(20), teacherID: "305", teacherName: "Park, Julia"))
+        await school.loadOfferings()
+        check("a day past the every-teacher list: the calendar shows the planned teacher's academy there (reaches \(school.reach))",
+              school.offerings.contains { $0.id == "7002" } && school.reach < ahead(14))
+        await school.check(force: true)
+        p = await posts()
+        check("a day past the every-teacher list: found in the teacher's own list and signed up (\(p.map { $0["offeringID"] as? String ?? "" }), \(school.status ?? ""))",
+              p.count == 1 && p[0]["offeringID"] as? String == "7002" && p[0]["ok"] as? Bool == true)
+
+        // A finished planned day is looked at again on every check: taken off it, you're told, or signed back up when that's on.
+        _ = await mock("set?name=days&reset=1")
+        for x in school.plans { school.unplan(x.date) }
+        school.testSettings?.on = true
+        school.plan(SchoolPlan(date: ahead(2), teacherID: "200103", teacherName: "Elena Moreau", offeringID: "6002", title: "Chess Club"))
+        school.plan(SchoolPlan(date: ahead(8), teacherID: "305", teacherName: "Park, Julia"))   // not posted: keeps Onyx watching
+        await school.check(force: true)
+        let planned = await posts().count == 1 && school.plans.first?.done == true
+        _ = await mock("set?name=days&reset=1")   // you're taken off it
+        school.rejoinGap = 0
+        await school.check(force: true)
+        p = await posts()
+        check("a finished planned day you were taken off: says so and sends nothing (\(school.status ?? ""))",
+              planned && p.isEmpty && school.status?.contains("you're no longer signed up") == true && school.plans.first?.done == true)
+        school.testSettings?.rule.rejoin = true
+        await school.check(force: true)
+        p = await posts()
+        check("a finished planned day you were taken off, with Sign me back up: signs you up again (\(p.map { $0["offeringID"] as? String ?? "" }))",
+              p.count == 1 && p[0]["offeringID"] as? String == "6002" && p[0]["ok"] as? Bool == true && school.plans.first?.done == true)
+        school.rejoinGap = 300
+
         // Onyx's own browser (cookies thrown away after the test): signs in to Google by itself, with the saved password.
         let own = OnyxBrowser(test: true)
         own.googleOrigin = "http://127.0.0.1:8767"; own.googlePath = "/__mock/google"

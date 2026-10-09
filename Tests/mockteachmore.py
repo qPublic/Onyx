@@ -34,6 +34,7 @@ SCENARIOS = {
     "conflict": [off("5006", "Robotics Club", "305", "Park", "Julia", d(11), "10", 4, appt=3, existing="Castillo-Reyes, Ana")],
     "days": [off("6001", "Robotics Club", "305", "Park", "Julia", d(2), "20", 5), off("6002", "Chess Club", "200103", "Moreau", "Elena", d(2), "20", 5),
              off("6003", "Robotics Club", "305", "Park", "Julia", d(4), "20", 5), off("6004", "Chess Club", "200103", "Moreau", "Elena", d(4), "20", 5)],
+    "far": [off("7001", "Robotics Club", "305", "Park", "Julia", d(2), "20", 5), off("7002", "Robotics Club", "305", "Park", "Julia", d(20), "20", 5)],
     "signedout": [],
     "chooser": [],
     "password": [],
@@ -130,6 +131,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == B + "offerings/search":
             state["searches"] += 1
             rows = [o for o in offerings() if not q.get("teacherID") or str(o["teacherID"]) == q["teacherID"]]
+            if not q.get("teacherID"): rows = [o for o in rows if o["offeringDate"] < d(14)]   # every teacher's: only two weeks out
             return self.send(200, json.dumps(rows))
         self.send(404, "not found", "text/plain")
 

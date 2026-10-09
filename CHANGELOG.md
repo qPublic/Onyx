@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.4
+
+### Improved
+- Academy Sign-Up keeps making sure you're still signed up. Each check (every 30 seconds while it's watching) now also looks at the days it already signed you up for from the calendar. If you're no longer in one, Onyx tells you in the notch, or signs you back up when "Sign me back up" is on (three times at most for the same day). It also tells you in the notch when a sign-up for the teacher above is gone and it won't put it back itself.
+
+### Fixed
+- Academy Sign-Up finds academies posted further ahead. TeachMore's list of every teacher can stop about two weeks out, so a day planned beyond that said "not posted yet" and the calendar said nothing was posted. Onyx now also reads the own list of each teacher you named (above or on a planned day), which goes further, and the calendar says when a day is past what the full list covers.
+
 ## 2.0.3
 
 ### New

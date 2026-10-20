@@ -28,8 +28,8 @@ run battery    "$T/battery.log"  --env ONYX_LOWBATTERYTEST="$T/battery.log"
 run autoclose  "$T/close.log"    --env ONYX_AUTOCLOSETEST="$T/close.log" --args -autoCloseDelay 5
 run tour       "$T/tour.log"     --env ONYX_TOURTEST="$T/tour.log"
 python3 Tests/mockai.py "$T/mock.log" >/dev/null 2>&1 & MOCK=$!; sleep 1
-for p in anthropic openai; do
-  run cloud-$p "$T/cloud-$p.log" --env ONYX_CLOUDTEST="$T/cloud-$p.log" --env ONYX_AI_BASE=http://127.0.0.1:8765/v1 --env ONYX_AI_TEST_KEY=mock-key --args -ai.provider $p
+for p in anthropic openai gemini; do
+  run cloud-$p "$T/cloud-$p.log" --env ONYX_CLOUDTEST="$T/cloud-$p.log" --env ONYX_AI_BASE=http://127.0.0.1:8765/v1 --env ONYX_AI_TEST_KEY=mock-key --args -ai.provider $p $([ $p = gemini ] && echo -ai.model.gemini busy-model)
 done
 kill $MOCK 2>/dev/null
 python3 Tests/mockimap.py "$T/imap.log" >/dev/null 2>&1 & IMAP=$!; sleep 1

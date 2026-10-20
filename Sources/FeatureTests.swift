@@ -936,6 +936,10 @@ enum ExtrasTest {
               && !think("Please set a timer for 10 minutes") && !think("What's due on Canvas?") && think("Tom is twice as old as Ana. Ana is 7. How old will Tom be in 3 years?")
               && think("Find the area of a rectangle that is 7 by 12") && !think("Name one planet with rings, in one word") && think("Help me plan a study schedule for finals")
               && Assistant.worthThinking("What does this say?", agent: true, shared: true))
+        check("Medium thinks a word problem through, not a fact, a bare sum's wording or a short question",
+              Assistant.wordProblem("If 5 notebooks cost $12.50, how much do 8 notebooks cost?") && Assistant.wordProblem("A pizza is cut into 8 slices and 3 are eaten. What fraction is left?")
+              && Assistant.wordProblem("In triangle ABC, angle A is 50 degrees and angle B is 60 degrees. What is angle C?")
+              && !Assistant.wordProblem("What year did World War 2 end and who won it?") && !Assistant.wordProblem("What is 15% of 80?") && !Assistant.wordProblem("Why is the sky blue?"))
         check("spells a word backwards exactly",
               Assistant.quickBackwards("Spell the word cat backwards") == "tac" && Assistant.quickBackwards("Reverse the word 'onyx'.") == "xyno"
               && Assistant.quickBackwards("What is racecar spelled backwards?") == "racecar" && Assistant.quickBackwards("Spell necessary") == nil)
@@ -1182,6 +1186,31 @@ enum CloudTest {
         if let img = AISelfTest.render(["Invoice 4417"]), let jpg = CloudAI.jpeg(img) {
             do { let r = try await CloudAI.complete(system: "Describe it.", prompt: "What does this say?", images: [jpg]); check("sends a picture: \(r)", r.contains("4417")) }
             catch { check("sends a picture: \(error.localizedDescription)", false) }
+        }
+        // A provider that's overloaded for a moment: Onyx waits and asks again.
+        do { let r = try await CloudAI.complete(system: "Be brief.", prompt: "overloaded"); check("an overloaded provider: asks again (\(r))", r.contains("recovered")) }
+        catch { check("an overloaded provider: \(error.localizedDescription)", false) }
+        if CloudAI.provider == .gemini {
+            // The Gemini model you picked is swamped every time: a steadier one answers, and the busy one is skipped after that.
+            let r = (try? await CloudAI.complete(system: "Be brief.", prompt: "which model")) ?? ""
+            check("a model that's always busy: a steadier one answers (\(r))", r == "model=gemini-3.6-flash")
+            let t = Date(); let again = (try? await CloudAI.complete(system: "Be brief.", prompt: "which model")) ?? ""
+            check("then skips the busy one (\(again), \(Int(Date().timeIntervalSince(t) * 1000)) ms)", again == "model=gemini-3.6-flash" && Date().timeIntervalSince(t) < 1)
+        }
+        if CloudAI.provider == .anthropic {
+            // Claude's current models: your effort setting, room to think on top of the answer, and a fallback for declined requests.
+            let r = (try? await CloudAI.complete(system: "Be brief.", prompt: "echo request", maxTokens: 200)) ?? ""
+            let hard = (try? await CloudAI.complete(system: "Be brief.", prompt: "echo request", maxTokens: 200, effort: .max)) ?? ""
+            check("Claude: sends the effort, room to think and a fallback (\(r) / \(hard))", r.contains("effort=low max_tokens=1700 fallbacks=default beta=server-side-fallback-2026-07-01")
+                  && hard.contains("effort=max max_tokens=16200 "))
+            let old = (try? await CloudAI.complete(system: "Be brief.", prompt: "old model", maxTokens: 200)) ?? ""
+            check("Claude: an older model gets the plain request (\(old))", old.contains("plain request worked max_tokens=200"))
+            var said = ""
+            do { _ = try await CloudAI.complete(system: "Be brief.", prompt: "refuse this") } catch { said = error.localizedDescription }
+            check("Claude: a declined request says so (\(said))", said.contains("declined"))
+            said = ""
+            do { _ = try await CloudAI.complete(system: "Be brief.", prompt: "run out of room") } catch { said = error.localizedDescription }
+            check("Claude: no room left to answer says so (\(said))", said.contains("ran out of room"))
         }
         let ai = Assistant.shared
         ai.reset(); ai.agentMode = true
@@ -1792,6 +1821,14 @@ enum SchoolTest {
         let there = try? await own.web.evaluateJavaScript(SchoolJS.signIn("sam@school.org", password: "correct-horse", origin: own.googleOrigin, path: own.googlePath)) as? String
         let field = try? await own.web.evaluateJavaScript("document.querySelector('input[type=password]').value") as? String
         check("never types the password anywhere but Google's sign-in page (\(there ?? "nil"))", there == "none" && field == "")
+        // Google's real chooser ignores a scripted click: Onyx names your account up front, so Google doesn't ask.
+        _ = await mock("set?name=start&reset=1")
+        await school.connect()
+        _ = await mock("set?name=stubborn&reset=1")
+        await school.check(force: true)
+        mlog = await mock("log")
+        check("its own browser, Google asking which account: names your school account up front and signs in (\(school.status ?? ""), \(mlog["picked"] ?? ""))",
+              mlog["picked"] as? String == "school" && school.status?.contains("Watching") == true)
         finish()
     }
 }

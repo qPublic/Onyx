@@ -474,6 +474,8 @@ enum ArtStyle: String, CaseIterable, Identifiable {
             painter = (try? out.value(String.self, forProperty: "painter")) ?? ""; look = (try? out.value(String.self, forProperty: "look")) ?? ""
         }
         let art = options.first { $0.rawValue == painter.lowercased().trimmingCharacters(in: .whitespaces) } ?? (here.first { $0.diffusion != nil } ?? .painted)
+        // The model was busy or came back empty: for a world Onyx already knows, use that world's look.
+        if look.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let known = Self.look(for: idea) { look = known }
         if let c = look.lastIndex(of: ":") { look = String(look[look.index(after: c)...]) }   // "Elden Ring castle: dark fantasy…" → the style part
         // Keep it short: the painter reads 75 tokens, and the scene needs most of them.
         let words = look.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\".")) ).split(separator: " ").prefix(18)

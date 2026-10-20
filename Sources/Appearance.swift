@@ -17,9 +17,15 @@ enum NotchStyle: String, CaseIterable, Identifiable {
 }
 
 enum Placement: String, CaseIterable, Identifiable {
-    case attached, floating
+    case attached, floating, pill
     var id: String { rawValue }
-    var title: String { self == .attached ? "Attached to top" : "Floating island" }
+    var title: String {
+        switch self {
+        case .attached: "Attached to top"
+        case .floating: "Floating island"
+        case .pill: "Pill, like iPhone"
+        }
+    }
 }
 
 enum AnimationStyle: String, CaseIterable, Identifiable {

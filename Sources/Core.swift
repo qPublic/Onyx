@@ -172,6 +172,7 @@ struct NotchGeometry: Equatable {
     var screenFrame: NSRect = .zero
     var expandedSize = CGSize(width: 680, height: 270)
     var floating = false
+    var pill = false                       // a rounded pill like iPhone's Dynamic Island
     var topGap: CGFloat = 0
     var centerX: CGFloat = 0               // screen coordinates
     var earScale: CGFloat = 1
@@ -227,7 +228,8 @@ struct NotchGeometry: Equatable {
         notchHeight = max(18, baseH + d.double(forKey: AP.collH))
         // A built-in notch can't shrink: the pill always covers the whole camera housing.
         if hasNotch { notchWidth = max(notchWidth, hardwareNotchWidth); notchHeight = max(notchHeight, hardwareNotchHeight) }
-        floating = AP.placementValue == .floating
+        floating = AP.placementValue != .attached
+        pill = AP.placementValue == .pill
         topGap = floating ? d.double(forKey: AP.topGap) : 0
         let w = min(max(d.double(forKey: AP.expW), 520), screen.frame.width - 20)
         expandedSize = CGSize(width: w, height: min(max(d.double(forKey: AP.expH), 220), screen.frame.height * 0.8))

@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.0.5
+
+### New
+- **Pill mode.** Settings › Size & Position › Placement › "Pill, like iPhone" turns the notch into a rounded black pill that floats just below the top of the screen, like the Dynamic Island on iPhone. It grows into a rounded panel when it opens. "Gap from top" sets how far down it floats.
+
+### Improved
+- **Onyx AI at Medium thinks word problems through.** A question with two or more numbers in it ("If 5 notebooks cost $12.50, how much do 8 cost?") gets one careful working-out pass first, the kind Medium used to slip on. Everything else is as quick as before. On the 100-question test, Medium and High now both score 100.
+- **Claude answers better.** The default Claude model is now Claude Sonnet 5.5 (same price as Sonnet 5). Onyx sends Claude your effort setting and leaves room for Claude's thinking, so a short reply no longer comes back empty. A request Claude's safety check declines goes to the model Anthropic recommends instead. Small jobs like a translation, a wallpaper plan or the daily briefing run at low effort, whatever the chat is set to.
+- When a cloud AI provider is briefly overloaded, Onyx waits and asks again (twice) instead of showing an error.
+- When your Mac is short on memory and macOS won't run the on-device model for a moment, Onyx waits and tries again. If it still can't, it says why.
+- macOS no longer slows Onyx down while it's answering in the background (for example with the display off), which made answers at High and Max stall for minutes.
+- AI's Choice for live wallpapers uses the look Onyx already knows for a game or film when the model is busy, instead of no look at all.
+
+### Fixed
+- Onyx could crash when Onyx AI used a tool just as the next question started.
+- Onyx could crash when you started a new chat (or Stop and then a new question) while an answer was still being written.
+- **Gemini works when its newest model is swamped.** Google's newest Flash (Gemini 3.8 Flash) often answers "high demand" (error 503) on the free tier, so every question failed. Onyx now answers with Gemini 3.6 Flash (or 3.5 Flash-Lite) when the model you picked is too busy or out of free uses, and skips the busy one for ten minutes. New Gemini setups start on Gemini 3.6 Flash, since Google no longer gives new keys Gemini 2.5 Flash. A wrong Gemini key now says so instead of showing Google's raw error.
+- **Academy Sign-Up signs itself back in to TeachMore again.** Google's "Choose an account" page ignores a click made by a script, so Onyx's browser said "Google keeps asking which account to use" even with your school account and password saved. Onyx now tells Google your school account before it asks, so Google signs straight in with it (or asks for its password, which Onyx types). And when signing back in doesn't work twice in a row, Onyx's own browser now tries again every hour instead of waiting for you.
+- The Floating island placement now actually floats: "Gap from top" moved its hover area but not the island itself.
+- A Claude answer that was declined or ran out of room now says so instead of showing an empty reply.
+
 ## 2.0.4
 
 ### Improved

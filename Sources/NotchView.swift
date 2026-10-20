@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct NotchShape: Shape {
     var top: CGFloat
     var bottom: CGFloat
+    var pill = false   // all corners rounded by `bottom` (a capsule when it's half the height)
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(top, bottom) }
@@ -11,6 +12,7 @@ struct NotchShape: Shape {
     }
 
     func path(in r: CGRect) -> Path {
+        if pill { return RoundedRectangle(cornerRadius: min(bottom, r.height / 2, r.width / 2), style: .continuous).path(in: r) }
         var p = Path()
         p.move(to: CGPoint(x: r.minX, y: r.minY))
         p.addQuadCurve(to: CGPoint(x: r.minX + top, y: r.minY + top), control: CGPoint(x: r.minX + top, y: r.minY))
@@ -126,10 +128,11 @@ struct NotchRootView: View {
 
     var body: some View {
         let s = size
-        let top: CGFloat = model.expanded ? 12 : 6
-        let bottom: CGFloat = model.expanded ? 26 : (popup != nil ? 18 : hangsBelow ? 14 : 10)
+        let pill = model.geometry.pill
+        let top: CGFloat = pill ? 0 : model.expanded ? 12 : 6
+        let bottom: CGFloat = pill ? (model.expanded ? 34 : min(s.height / 2, 28)) : model.expanded ? 26 : (popup != nil ? 18 : hangsBelow ? 14 : 10)
         ZStack(alignment: .top) {
-            NotchBackground(shape: NotchShape(top: top, bottom: bottom), expanded: model.expanded)
+            NotchBackground(shape: NotchShape(top: top, bottom: bottom, pill: pill), expanded: model.expanded)
                 .frame(width: s.width, height: s.height)
             ZStack(alignment: .top) {
                 if model.expanded {
@@ -147,9 +150,9 @@ struct NotchRootView: View {
                 }
             }
             .frame(width: s.width, height: s.height, alignment: .top)
-            .clipShape(NotchShape(top: top, bottom: bottom))
+            .clipShape(NotchShape(top: top, bottom: bottom, pill: pill))
         }
-        .padding(.top, NotchGeometry.menuBarLift(model.geometry, expanded: model.expanded))
+        .padding(.top, NotchGeometry.menuBarLift(model.geometry, expanded: model.expanded) + model.geometry.topGap)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: model.expanded)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: activity.key)

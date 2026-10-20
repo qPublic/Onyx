@@ -75,9 +75,9 @@ enum AIProvider: String, CaseIterable, Identifiable {
     /// Used until you pick one from the provider's list (which Onyx fetches once your key is in).
     var defaultModel: String {
         switch self {
-        case .anthropic: "claude-sonnet-5"
+        case .anthropic: "claude-sonnet-5-5"
         case .openai: "gpt-5"
-        case .gemini: "gemini-2.5-flash"
+        case .gemini: "gemini-3.6-flash"
         case .xai: "grok-4"
         case .mistral: "mistral-large-latest"
         case .deepseek: "deepseek-chat"
@@ -85,6 +85,13 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .openrouter: "anthropic/claude-sonnet-5"
         case .ollama: "llama3.2"
         default: ""
+        }
+    }
+    /// Steadier models Onyx answers with when the one you picked is too busy (Google's newest Flash often is on the free tier).
+    var backups: [String] {
+        switch self {
+        case .gemini: ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
+        default: []
         }
     }
 }
@@ -138,14 +145,26 @@ enum CloudAI {
         return r
     }
 
+    /// Tries again (twice, after a short wait) when the provider is overloaded or having trouble.
     private static func send(_ r: URLRequest) async throws -> [String: Any] {
+        for attempt in 0..<2 {
+            do { return try await sendOnce(r) }
+            catch let e as CloudError where ["error 500", "error 502", "error 503", "error 504", "error 529"].contains(where: e.message.contains) {
+                try await Task.sleep(for: .seconds(1.5 * Double(attempt + 1)))
+            }
+        }
+        return try await sendOnce(r)
+    }
+
+    private static func sendOnce(_ r: URLRequest) async throws -> [String: Any] {
         let (data, resp) = try await URLSession.shared.data(for: r)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        let any = try? JSONSerialization.jsonObject(with: data)
+        let json = (any as? [String: Any]) ?? ((any as? [Any])?.first as? [String: Any]) ?? [:]   // Gemini wraps its errors in a list
         guard (200..<300).contains(code) else {
             let msg = ((json["error"] as? [String: Any])?["message"] as? String) ?? (json["error"] as? String) ?? String(decoding: data.prefix(300), as: UTF8.self)
             switch code {
-            case 401, 403: throw CloudError(message: "\(provider.short) didn't accept the API key. Check it in Settings › Privacy › AI.")
+            case 401, 403, 400 where msg.contains("API key not valid"): throw CloudError(message: "\(provider.short) didn't accept the API key. Check it in Settings › Privacy › AI.")
             case 429: throw CloudError(message: "\(provider.short) says you're over your rate or spending limit: \(msg)")
             default: throw CloudError(message: "\(provider.short) error \(code): \(msg)")
             }
@@ -161,24 +180,47 @@ enum CloudAI {
         return chatty.sorted()
     }
 
-    /// One answer, no tools.
-    static func complete(system: String, prompt: String, maxTokens: Int = 800, images: [Data] = []) async throws -> String {
-        try await chat(system: system, history: [CloudMessage(role: .user, text: prompt, images: images)], tools: [], maxTokens: maxTokens, onTool: { _, _ in })
+    /// One answer, no tools. Small jobs (a translation, a wallpaper plan) run at low effort whatever the chat is set to.
+    static func complete(system: String, prompt: String, maxTokens: Int = 800, images: [Data] = [], effort: AIEffort = .low) async throws -> String {
+        try await chat(system: system, history: [CloudMessage(role: .user, text: prompt, images: images)], tools: [], maxTokens: maxTokens, effort: effort, onTool: { _, _ in })
     }
 
     /// A conversation turn with tools: calls the model, runs any tools it asks for, and repeats until it answers.
-    static func chat(system: String, history: [CloudMessage], tools: [AgentTool], maxTokens: Int = 1500,
+    static func chat(system: String, history: [CloudMessage], tools: [AgentTool], maxTokens: Int = 1500, effort: AIEffort = .current,
                      onTool: @escaping (String, String) -> Void) async throws -> String {
-        let p = provider, m = model(p)
+        let p = provider
+        var backups = p.backups.filter { $0 != model(p) }, m = resting(model(p)) && !backups.isEmpty ? backups.removeFirst() : model(p)
         var msgs: [[String: Any]] = history.map { encode($0, anthropic: p.anthropicAPI) }
         var useTools = !tools.isEmpty
+        // Claude's current models think before they answer. Onyx's effort sets how hard (output_config.effort), the reply
+        // limit gets room for that thinking on top of the answer, and a request Claude's safety check declines is passed
+        // to the model Anthropic recommends instead (fallbacks). A model too old for these gets the plain request.
+        var extras = p.anthropicAPI
         for _ in 0..<8 {
             try Task.checkCancellation()
             var body: [String: Any] = ["model": m, "messages": p.anthropicAPI ? msgs : [["role": "system", "content": system]] + msgs]
             if p.anthropicAPI { body["system"] = system; body["max_tokens"] = maxTokens }
+            if extras {
+                body["output_config"] = ["effort": effort.rawValue]   // low, medium, high, max: the API's own names
+                body["max_tokens"] = maxTokens + [AIEffort.low: 1500, .medium: 3000, .high: 8000, .max: 16000][effort, default: 3000]
+                body["fallbacks"] = "default"
+            }
             if useTools { body["tools"] = tools.map { schema($0, anthropic: p.anthropicAPI) } }
             let j: [String: Any]
-            do { j = try await send(try request(p, path: p.anthropicAPI ? "/messages" : "/chat/completions", body: body)) }
+            do {
+                var r = try request(p, path: p.anthropicAPI ? "/messages" : "/chat/completions", body: body)
+                if extras {
+                    r.setValue("server-side-fallback-2026-07-01", forHTTPHeaderField: "anthropic-beta")
+                    if effort == .high || effort == .max { r.timeoutInterval = 300 }   // deep thinking takes a while
+                }
+                j = try await send(r)
+            }
+            catch let e as CloudError where !backups.isEmpty && ["error 503", "error 529", "over your rate"].contains(where: e.message.contains) {
+                rest(m); m = backups.removeFirst(); continue   // too busy, or out of its free quota: a steadier model answers
+            }
+            catch let e as CloudError where extras && e.message.contains("error 400") {
+                extras = false; continue   // an older model that doesn't take these: ask again the plain way
+            }
             catch let e as CloudError where useTools && e.message.lowercased().contains("tool") {
                 useTools = false; continue   // a model that can't use tools: ask again without them
             }
@@ -186,6 +228,9 @@ enum CloudAI {
                 let blocks = j["content"] as? [[String: Any]] ?? []
                 let text = blocks.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
                 let uses = blocks.filter { $0["type"] as? String == "tool_use" }
+                let stop = j["stop_reason"] as? String
+                if stop == "refusal" { throw CloudError(message: "Claude declined to answer that.") }
+                if stop == "max_tokens", uses.isEmpty, text.isEmpty { throw CloudError(message: "Claude ran out of room before it answered. Try a shorter question or a lower effort.") }
                 guard !uses.isEmpty else { return text }
                 msgs.append(["role": "assistant", "content": blocks])
                 var results: [[String: Any]] = []
@@ -213,6 +258,12 @@ enum CloudAI {
         }
         throw CloudError(message: "\(p.short) kept calling tools without answering.")
     }
+
+    /// A model that was too busy is skipped for ten minutes, so each answer doesn't wait on it first.
+    private static let restLock = NSLock()
+    nonisolated(unsafe) private static var restingUntil: [String: Date] = [:]
+    private static func rest(_ m: String) { restLock.withLock { restingUntil[m] = Date().addingTimeInterval(600) } }
+    private static func resting(_ m: String) -> Bool { restLock.withLock { (restingUntil[m] ?? .distantPast) > Date() } }
 
     private static func run(_ name: String, _ input: [String: Any], tools: [AgentTool]) async -> String {
         guard let t = tools.first(where: { $0.name == name }) else { return "No tool called \(name)" }
@@ -293,7 +344,7 @@ struct AIModelSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if p == .gemini {
-                Text("Free: sign in to Google AI Studio with your Google account, press Create API key and paste it here. The free tier has daily limits, and Google may use what you send it to improve its models.")
+                Text("Free: sign in to Google AI Studio with your Google account, press Create API key and paste it here. The free tier has daily limits, and Google may use what you send it to improve its models. When the model you pick is too busy or out of free uses, a steadier Gemini model answers instead.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             HStack {

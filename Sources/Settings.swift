@@ -370,8 +370,12 @@ struct LayoutSettings: View {
                 Picker("Placement", selection: $placement) {
                     ForEach(Placement.allCases) { Text($0.title).tag($0.rawValue) }
                 }
-                if placement == Placement.floating.rawValue {
+                if placement != Placement.attached.rawValue {
                     slider("Gap from top", $topGap, 0...60, "pt")
+                }
+                if placement == Placement.pill.rawValue {
+                    Text("A rounded black pill that floats below the top of the screen, like the Dynamic Island on iPhone. It grows into a rounded panel when it opens.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 if hw.builtIn {
                     Text("Onyx stays centered on your Mac's built-in notch, and opens around the camera.")

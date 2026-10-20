@@ -469,6 +469,7 @@ enum SchoolJS {
     private var lastOpened: Date?
     private var reauthTries = 0           // times Onyx sent the tab to "Sign in with Google" since the last check that worked
     private var badPassword = false       // Google turned the saved password down: never typed again until you save it again
+    private var lastReauth = Date.distantPast
     private var timer: Timer?
     private var file: URL { Prefs.supportDir.appendingPathComponent("school-signups.json") }
 
@@ -574,6 +575,8 @@ enum SchoolJS {
         if PrivateGuard.active && s.browser != .onyx { report("Waiting while a private window is open.", problem: false); next = 60; return }
         let p = page(s, b)
         var signedBackIn = false
+        // Onyx's own browser is out of sight, so after two tries that didn't work it tries again each hour.
+        if s.browser == .onyx, reauthTries >= 2, Date().timeIntervalSince(lastReauth) > 3600 { reauthTries = 0 }
         for _ in 0..<2 {
             // At most one new tab every half hour, and none while a Google sign-in is under way.
             let openURL = s.browser == .onyx || reauthTries == 0 && (lastOpened.map { Date().timeIntervalSince($0) > 1800 } ?? true) ? b.url + "offerings" : ""
@@ -726,13 +729,14 @@ enum SchoolJS {
     /// Takes the tab through "Sign in with Google" in one go: picks your school account if Google asks, and comes back
     /// as soon as the tab is on TeachMore again. nil when you're signed in; otherwise what's in the way.
     private func reSignIn(_ p: SchoolPage, _ b: Base, _ s: SchoolSettings) async -> String? {
+        (p as? OnyxBrowser)?.account = s.google   // before the tab goes to Google, so Google is told which account
         guard case .value = await p.navigate(b.url + "auth/google") else { return "Onyx couldn't reach your TeachMore tab." }
-        reauthTries += 1
+        reauthTries += 1; lastReauth = Date()
         report("TeachMore signed you out, so Onyx is signing you back in with Google…", problem: false)
         // Onyx's own browser types your saved password on Google's sign-in page; your own browser is never typed into.
         let own = p as? OnyxBrowser
         if let own { own.password = badPassword ? "" : s.password ?? Keychain.get(Self.passwordAccount) ?? "" }
-        defer { own?.password = "" }
+        defer { own?.password = ""; own?.account = "" }
         let yourself = " Or press Sign In… in Settings › Academy Sign-Up and sign in once yourself."
         var moved = false, clicks = 0, stuck = 0, lost = 0, out = 0, emails = 0, typed = 0, turnedDown = 0
         for poll in 1...60 {   // half a second apart: about 30 seconds in all

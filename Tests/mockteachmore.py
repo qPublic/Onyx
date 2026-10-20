@@ -37,6 +37,7 @@ SCENARIOS = {
     "far": [off("7001", "Robotics Club", "305", "Park", "Julia", d(2), "20", 5), off("7002", "Robotics Club", "305", "Park", "Julia", d(20), "20", 5)],
     "signedout": [],
     "chooser": [],
+    "stubborn": [],
     "password": [],
 }
 state = {"name": "start", "enrolled": set(), "taken": {}, "posts": [], "searches": 0, "token": "tok-1", "out": False, "chooser": False, "auth": 0, "pwflow": False, "typed": "", "pwtries": 0}
@@ -81,9 +82,9 @@ class H(BaseHTTPRequestHandler):
         log("GET " + self.path)
         if u.path == "/__mock/set":
             state["name"] = q["name"]
-            if q.get("reset"): state.update(enrolled=set(), taken={}, posts=[], token="tok-1", out=False, chooser=False, auth=0, picked="", pwflow=False, typed="", pwtries=0)
+            if q.get("reset"): state.update(enrolled=set(), taken={}, posts=[], token="tok-1", out=False, chooser=False, auth=0, picked="", pwflow=False, typed="", pwtries=0, stubborn=False)
             if q["name"] == "stale": state["token"] = "tok-2"      # the page still holds tok-1
-            if q["name"] in ("signedout", "chooser", "password"): state.update(out=True, chooser=q["name"] == "chooser", pwflow=q["name"] == "password")
+            if q["name"] in ("signedout", "chooser", "password", "stubborn"): state.update(out=True, chooser=q["name"] == "chooser", pwflow=q["name"] == "password", stubborn=q["name"] == "stubborn")
             return self.send(200, json.dumps({"ok": True}))
         if u.path == "/__mock/log":
             return self.send(200, json.dumps({"posts": state["posts"], "searches": state["searches"], "auth": state["auth"], "picked": state.get("picked", ""), "typed": state["typed"], "pwtries": state["pwtries"]}))
@@ -111,12 +112,18 @@ class H(BaseHTTPRequestHandler):
                 return self.send(302, "", "text/html", [("Location", "/__mock/google/pwd?wrong=1&email=" + urllib.parse.quote(q.get("email", "")))])
             state.update(out=False, pwflow=False, typed=q.get("email", ""))
             return self.send(302, "", "text/html", [("Location", B + "dashboard")])
+        if u.path == "/__mock/google/o/oauth2/v2/auth":   # Google's real sign-in link: it asks which account unless it's told
+            if q.get("login_hint", "").lower() == "sam@school.org" and q.get("prompt") != "select_account":
+                return self.send(302, "", "text/html", [("Location", B + "auth/google/callback?as=school")])
+            return self.send(200, "<html><body><h1>Choose an account</h1>"   # and, like Google's, it ignores a click made by a script
+                "<div data-identifier=\"sam@school.org\" onclick=\"if(event.isTrusted)location='%sauth/google/callback?as=school'\">Sam</div></body></html>" % B, "text/html")
         if u.path == B + "auth/google/callback":
             state.update(out=False, chooser=False, picked=q.get("as", ""))
             return self.send(302, "", "text/html", [("Location", B + "dashboard")])   # like TeachMore: its home page (the calendar)
         if u.path == B + "auth/google":      # Sign in with Google: straight back in, unless Google wants you to pick an account
             state["auth"] += 1
             if state["chooser"]: return self.send(302, "", "text/html", [("Location", "/__mock/google")])
+            if state.get("stubborn"): return self.send(302, "", "text/html", [("Location", "/__mock/google/o/oauth2/v2/auth?client_id=tm&prompt=select_account&redirect_uri=x")])
             if state["pwflow"]: return self.send(302, "", "text/html", [("Location", "/__mock/google/signin")])
             state["out"] = False
             return self.send(302, "", "text/html", [("Location", B + "dashboard")])

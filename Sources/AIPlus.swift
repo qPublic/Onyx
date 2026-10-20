@@ -281,7 +281,14 @@ enum OnDeviceTranslate {
 extension AgentTools {
     /// Evaluation runs set this: tools that would change something only record what they'd have done.
     nonisolated(unsafe) static var dryRun = false
-    nonisolated(unsafe) static var dryCalls: [String] = []
+    /// What those tools would have done. Tools can run side by side, so it's kept under a lock.
+    static var dryCalls: [String] {
+        get { dryLock.withLock { heldDry } }
+        set { dryLock.withLock { heldDry = newValue } }
+    }
+    static func noteDry(_ call: String) { dryLock.withLock { heldDry.append(call) } }
+    private static let dryLock = NSLock()
+    nonisolated(unsafe) private static var heldDry: [String] = []
     static let readOnly: Set<String> = ["calculate", "find_files", "list_reminders", "get_schedule", "read_screen", "search_web", "search_my_stuff",
                                         "translate", "canvas_due", "onyx_help", "daily_briefing"]
 
@@ -399,6 +406,7 @@ struct AIMemorySettings: View {
 
 extension Assistant {
     @MainActor func cloudAnswer(_ text: String, image: CGImage?, doc: AIDocument?, context: String?, look: Bool, agent: Bool, effort: AIEffort) async throws {
+        let mine = run
         var prompt = text, images: [Data] = []
         if let context { prompt = "Selected content:\n\"\"\"\n\(context.prefix(100_000))\n\"\"\"\n\nMy request: " + text }
         if let doc { prompt = "\(doc.selection ? "Selected text" : "The file \"\(doc.name)\""):\n\"\"\"\n\(doc.text.prefix(150_000))\n\"\"\"\n\nMy request: " + text }
@@ -416,6 +424,7 @@ extension Assistant {
         do {
             reply = try await CloudAI.chat(system: instructions(agent: agent, effort: .high), history: cloudHistory, tools: agent ? AgentTools.all : [], onTool: { _, _ in })
         } catch { cloudHistory.removeLast(); throw error }
+        try alive(mine)   // stopped, or a new chat, while the model was answering
         cloudHistory.append(CloudMessage(role: .assistant, text: reply))
         status = nil
         // Show it a few words at a time, like the on-device model's streaming.
@@ -424,7 +433,7 @@ extension Assistant {
         var shown = ""
         for (n, w) in words.enumerated() {
             shown += (n == 0 ? "" : " ") + w
-            if n % 4 == 3 { messages[i].text = shown; try? await Task.sleep(for: .milliseconds(10)) }
+            if n % 4 == 3 { messages[i].text = shown; try? await Task.sleep(for: .milliseconds(10)); try alive(mine) }
         }
         messages[i].text = clean
         if !lastSources.isEmpty { messages.append(Msg(role: .tool, text: "Sources: " + lastSources.compactMap(\.host).joined(separator: ", "))) }

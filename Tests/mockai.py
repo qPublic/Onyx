@@ -18,6 +18,7 @@ def text_of(msgs):
             for p in c:
                 if p.get("type") == "text": out.append(p.get("text", ""))
     return " ".join(out)
+seen = {}
 class H(http.server.BaseHTTPRequestHandler):
     def reply(self, code, obj):
         b = json.dumps(obj).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
@@ -34,7 +35,24 @@ class H(http.server.BaseHTTPRequestHandler):
         log(entry)
         if not ok: return self.reply(401, {"error": {"message": "invalid key"}})
         t = text_of(msgs)
+        if body.get("model") == "busy-model":   # Gemini's newest Flash when it's swamped (Gemini wraps errors in a list)
+            return self.reply(503, [{"error": {"code": 503, "message": "This model is currently experiencing high demand.", "status": "UNAVAILABLE"}}])
+        if "which model" in t:
+            return self.reply(200, {"choices": [{"message": {"role": "assistant", "content": "model=%s" % body.get("model")}}]})
+        if "overloaded" in t and not seen.get("overloaded"):   # busy the first time it's asked
+            seen["overloaded"] = True
+            return self.reply(529 if anth else 503, {"error": {"message": "Overloaded"}})
+        if "overloaded" in t:
+            return self.reply(200, {"content": [{"type": "text", "text": "recovered"}]} if anth else {"choices": [{"message": {"role": "assistant", "content": "recovered"}}]})
         if anth:
+            if "old model" in t:   # a model from before effort and fallbacks
+                if "output_config" in body or "fallbacks" in body: return self.reply(400, {"error": {"message": "output_config: Extra inputs are not permitted"}})
+                return self.reply(200, {"content": [{"type": "text", "text": "plain request worked max_tokens=%s" % body.get("max_tokens")}]})
+            if "echo request" in t:
+                return self.reply(200, {"content": [{"type": "text", "text": "effort=%s max_tokens=%s fallbacks=%s beta=%s" % (
+                    body.get("output_config", {}).get("effort"), body.get("max_tokens"), body.get("fallbacks"), self.headers.get("anthropic-beta"))}]})
+            if "refuse this" in t: return self.reply(200, {"content": [], "stop_reason": "refusal", "stop_details": {"type": "refusal", "category": None}})
+            if "run out of room" in t: return self.reply(200, {"content": [], "stop_reason": "max_tokens"})
             tool_done = any(isinstance(m.get("content"), list) and any(p.get("type") == "tool_result" for p in m["content"]) for m in msgs)
             if tool_done: return self.reply(200, {"content": [{"type": "text", "text": "17 × 23 = 391."}], "stop_reason": "end_turn"})
             if body.get("tools") and "17 times 23" in t:

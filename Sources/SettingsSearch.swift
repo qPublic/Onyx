@@ -31,7 +31,7 @@ enum SettingsIndex {
         // Size & Position
         e(.layout, "Expanded size", "Expanded width & height", "size big wide tall dimensions open expanded bigger smaller"),
         e(.layout, "Collapsed size", "Collapsed width & height", "size pill small collapsed idle dimensions"),
-        e(.layout, "Position", "Placement", "floating attached island top gap position"),
+        e(.layout, "Position", "Placement", "floating attached island top gap position pill iphone dynamic island capsule rounded"),
         e(.layout, "Position", "Horizontal offset", "offset move left right center position side"),
         e(.layout, "Position", "Show on display", "monitor screen display external builtin"),
         e(.layout, "Reset", "Reset size & position", "reset default"),

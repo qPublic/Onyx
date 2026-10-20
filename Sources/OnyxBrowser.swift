@@ -12,6 +12,8 @@ import WebKit
     var googleOrigin = "https://accounts.google.com", googlePath = "/"
     /// Your saved password, only while a sign-in is under way (cleared once typed, so a wrong one is never typed twice).
     var password = ""
+    /// Your school Google account, while a sign-in is under way: Google is told it up front, so it doesn't ask which account.
+    var account = ""
     private var waiting: [CheckedContinuation<Void, Never>] = []
     private var window: NSWindow?
 
@@ -43,6 +45,18 @@ import WebKit
     func webView(_ w: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let u = action.request.url { w.load(URLRequest(url: u)) }
         return nil
+    }
+
+    /// Google's "Choose an account" ignores a click made by a script, so Onyx names your account before Google asks
+    /// (login_hint, and no prompt to pick one): Google then signs in with it, or asks for its password.
+    func webView(_ w: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
+        guard !account.isEmpty, action.targetFrame?.isMainFrame == true, let u = action.request.url, isGoogle(u), u.path.contains("/o/oauth2/"),
+              var c = URLComponents(url: u, resolvingAgainstBaseURL: false), !(c.queryItems ?? []).contains(where: { $0.name == "login_hint" }),
+              (c.queryItems ?? []).contains(where: { $0.name == "client_id" }) else { return .allow }
+        c.queryItems = (c.queryItems ?? []).filter { !($0.name == "prompt" && $0.value == "select_account") } + [URLQueryItem(name: "login_hint", value: account)]
+        guard let hinted = c.url else { return .allow }
+        w.load(URLRequest(url: hinted))
+        return .cancel
     }
 
     func isGoogle(_ u: URL) -> Bool {

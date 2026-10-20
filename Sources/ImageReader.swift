@@ -22,7 +22,7 @@ enum AIEffort: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .low: "Fastest. Short answers, quick text reading."
-        case .medium: "Balanced. Reads images carefully."
+        case .medium: "Balanced. Reads images carefully, thinks word problems through."
         case .high: "Thinks problems through first, reads tables. Slower, smarter."
         case .max: "Thinks problems through three ways and picks the best. Slowest, smartest."
         }

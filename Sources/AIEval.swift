@@ -129,7 +129,9 @@ enum AIEval {
     @MainActor static func run(_ list: [Case], progress: @escaping (Int, Int) -> Void = { _, _ in }) async -> [Result] {
         let ai = Assistant.shared
         AgentTools.dryRun = true
-        defer { AgentTools.dryRun = false; ai.reset() }
+        // The test runs in the background, often with the display off: without this macOS naps it and questions stall for minutes.
+        let awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Onyx AI test")
+        defer { AgentTools.dryRun = false; ai.reset(); ProcessInfo.processInfo.endActivity(awake) }
         var out: [Result] = []
         for (i, c) in list.enumerated() {
             progress(i, list.count)

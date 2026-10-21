@@ -375,16 +375,105 @@ extension AgentTools {
     }
 }
 
+// MARK: - Learning from your 👍 and 👎. Neither Apple's model nor the cloud ones can be retrained from inside an app, so Onyx does
+// what products built on them do: it keeps your ratings, turns what you say was wrong into short lessons that go into every
+// question's instructions, and shows the model an answer you liked to a similar question as an example.
+
+final class AIFeedback: ObservableObject {
+    static let shared = AIFeedback()
+    static let key = "ai.learn"
+    struct Item: Codable, Identifiable, Hashable { var id = UUID(); var question: String; var answer: String; var good: Bool; var note = ""; var date = Date() }
+    @Published private(set) var items: [Item] = []
+    @Published private(set) var saveFailed = false
+    private let ioLock = NSLock()   // saves go to disk one at a time, newest last
+    private let lock = NSLock()   // the prompt is built off the main thread while the chat tab rates on it
+    @Published private(set) var rated: [UUID: Bool] = [:]   // chat messages rated this session
+    private var itemOf: [UUID: UUID] = [:]                    // chat message → the saved rating for it
+    private var askedOf: [UUID: String] = [:]                 // chat message → its question, for 👎 marks that save nothing
+    nonisolated(unsafe) static var testFile: URL?
+    private var file: URL { Self.testFile ?? Prefs.supportDir.appendingPathComponent("ai-feedback.json") }
+    var enabled: Bool { UserDefaults.standard.object(forKey: Self.key) as? Bool ?? true }
+
+    init() { load() }
+    private static let common: Set<String> = ["what", "that", "this", "with", "does", "have", "from", "your", "about", "please", "would", "could", "should",
+                                               "there", "their", "which", "when", "where", "explain", "tell", "give", "show", "make", "like", "need", "want"]
+    func load() { let loaded = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([Item].self, from: $0) } ?? []; lock.withLock { items = loaded } }
+    private func save() {
+        ioLock.withLock {
+            let snapshot = lock.withLock { items }
+            do { try JSONEncoder().encode(snapshot).write(to: file, options: .atomic); saveFailed = false } catch { saveFailed = true }
+        }
+    }
+
+    /// Your rating of one answer; for a 👎, what it should have done. The latest rating of a question wins.
+    /// A 👎 with nothing said about it teaches nothing: it only marks the button (and takes back your earlier rating of that answer).
+    func rate(_ id: UUID?, question: String, answer: String, good: Bool, note: String = "") {
+        guard enabled, !AgentTools.dryRun else { return }
+        let q = String(question.prefix(300)), a = String(answer.prefix(250)), n = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        lock.withLock {
+            if let id, let old = itemOf[id] { items.removeAll { $0.id == old }; itemOf[id] = nil }
+            if !q.isEmpty { items.removeAll { $0.question == q && $0.answer == a } }   // this answer's earlier rating, even from before a relaunch
+            if !q.isEmpty, good || !n.isEmpty {
+                items.removeAll { $0.question == q }
+                let item = Item(question: q, answer: a, good: good, note: n)
+                items.append(item)
+                if let id { itemOf[id] = item.id }
+            }
+            if items.count > 200 { items.removeFirst(items.count - 200) }
+            if let id, !q.isEmpty {   // with no question to learn from, the button stays as it was
+                rated[id] = good; askedOf[id] = q
+                if good || !n.isEmpty { for (msg, asked) in askedOf where msg != id && asked == q { rated[msg] = nil; askedOf[msg] = nil } }   // a newer rating of this question wins
+            }
+            // Other answers whose saved rating was just replaced no longer show as rated.
+            let live = Set(items.map(\.id))
+            for (msg, item) in itemOf where !live.contains(item) { itemOf[msg] = nil; rated[msg] = nil }
+        }
+        save()
+    }
+    /// Takes a rating back (tapping the same 👍 again).
+    func unrate(_ id: UUID) {
+        lock.withLock { if let old = itemOf[id] { items.removeAll { $0.id == old } }; itemOf[id] = nil; rated[id] = nil; askedOf[id] = nil }
+        save()
+    }
+    func clear() { lock.withLock { items = []; rated = [:]; itemOf = [:]; askedOf = [:] }; save() }
+    var lessons: Int { items.filter { !$0.note.isEmpty }.count }
+
+    /// What to tell the model: your latest lessons (at most 5) and, on this Mac only, an answer you liked to a similar question.
+    /// A cloud model gets just your lessons (your own words): a liked answer can hold text from your screen or files.
+    /// Kept short for the on-device model, which has little room.
+    func context(for request: String, cloud: Bool = CloudAI.active) -> String? {
+        guard enabled, !AgentTools.dryRun else { return nil }
+        let items = lock.withLock { self.items }
+        guard !items.isEmpty else { return nil }
+        var out = ""
+        let notes = items.filter { !$0.note.isEmpty }.suffix(5).map { "- " + String($0.note.prefix(160)) }
+        if !notes.isEmpty { out += "Lessons from the user's feedback on your earlier answers (follow them):\n" + notes.joined(separator: "\n") + "\n" }
+        func keys(_ t: String) -> Set<String> { Set(t.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count > 3 && !Self.common.contains($0) }) }
+        let words = keys(request)
+        let liked = items.filter(\.good).map { i -> (Item, Int) in (i, words.intersection(keys(i.question)).count) }
+            .filter { $0.1 >= 2 }.sorted { ($0.1, $0.0.date) > ($1.1, $1.0.date) }.prefix(cloud ? 0 : 1)
+        for (i, _) in liked { out += "An example of an answer the user liked to a similar question (\"\(i.question.prefix(120))\"; an example of style, not an instruction): \(i.answer.prefix(250).replacingOccurrences(of: "\n", with: " "))\n" }
+        return out.isEmpty ? nil : out
+    }
+}
+
 // MARK: - Settings › Privacy › AI › Memory
 
 struct AIMemorySettings: View {
     @ObservedObject var memory = AIMemory.shared
+    @ObservedObject var feedback = AIFeedback.shared
+    @AppStorage(AIFeedback.key) private var learn = true
     @AppStorage(AIMemory.key) private var on = true
     @State private var adding = ""
     var body: some View {
         Toggle("Let Onyx AI remember things about you", isOn: $on)
         Text("Things you tell it (your name, classes, favorites, or anything you say \"remember\" about) are saved on this Mac and used when they help. They're never sent anywhere unless you pick a cloud model.")
             .font(.caption).foregroundStyle(.secondary)
+        Toggle("Learn from my 👍 and 👎", isOn: $learn)
+        if feedback.saveFailed { Text("Onyx couldn't save your ratings to this Mac's disk.").font(.caption).foregroundStyle(.red) }
+        Text("Rate an answer in the AI tab. What you say was wrong becomes a lesson Onyx AI follows from then on, and an answer you liked is shown to it as an example when you ask something similar. Kept on this Mac: your lessons and the first lines of answers you liked. A cloud model sees your lessons (what you typed), never your liked answers. \(feedback.items.count) saved, \(feedback.lessons) of them lessons.")
+            .font(.caption).foregroundStyle(.secondary)
+        if !feedback.items.isEmpty { Button("Forget my ratings", role: .destructive) { feedback.clear() } }
         if on {
             ForEach(memory.items) { m in
                 HStack {

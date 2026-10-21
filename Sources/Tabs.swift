@@ -513,6 +513,10 @@ struct AITab: View {
 
     @AppStorage(AIEffort.key) private var effortRaw = AIEffort.medium.rawValue
     @State private var dropping = false
+    @State private var correcting: UUID?   // the answer a 👎 note is being written for
+    @State private var correction = ""
+    @ObservedObject private var feedback = AIFeedback.shared
+    @AppStorage(AIFeedback.key) private var learns = true
 
     let suggestions = [
         "Brief me on my day",
@@ -665,6 +669,13 @@ struct AITab: View {
         ai.send(t)
     }
 
+    /// Saves a rating with the question this answer was for (looked up only now, not on every redraw).
+    private func rate(_ m: Assistant.Msg, good: Bool, note: String = "") {
+        let asked = ai.messages.prefix(while: { $0.id != m.id }).last(where: { $0.role == .user })?.text ?? ""
+        feedback.rate(m.id, question: asked, answer: m.text, good: good, note: note)
+        correcting = nil
+    }
+
     @ViewBuilder private func bubble(_ m: Assistant.Msg) -> some View {
         switch m.role {
         case .user:
@@ -688,6 +699,23 @@ struct AITab: View {
                         Image(systemName: speaker.speakingID == m.id ? "stop.fill" : "speaker.wave.2").font(.system(size: 10))
                     }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help(speaker.speakingID == m.id ? "Stop" : "Read aloud")
+                    if learns {
+                        Button { feedback.rated[m.id] == true ? feedback.unrate(m.id) : rate(m, good: true) } label: {
+                            Image(systemName: feedback.rated[m.id] == true ? "hand.thumbsup.fill" : "hand.thumbsup").font(.system(size: 10))
+                        }.buttonStyle(.plain).foregroundStyle(feedback.rated[m.id] == true ? .green : .secondary).help("Good answer: Onyx AI learns from it")
+                        Button { if feedback.rated[m.id] == false { feedback.unrate(m.id) } else { correcting = m.id; correction = "" } } label: {
+                            Image(systemName: feedback.rated[m.id] == false ? "hand.thumbsdown.fill" : "hand.thumbsdown").font(.system(size: 10))
+                        }.buttonStyle(.plain).foregroundStyle(feedback.rated[m.id] == false ? .red : .secondary).help("Bad answer: tell Onyx AI what to do instead")
+                        .popover(isPresented: Binding(get: { correcting == m.id }, set: { if !$0 { correcting = nil } })) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("What should it have done?").font(.system(size: 12, weight: .medium))
+                                TextField("Optional, like \"keep it shorter\"", text: $correction).frame(width: 240)
+                                    .onSubmit { rate(m, good: false, note: correction) }
+                                Button("Send") { rate(m, good: false, note: correction) }
+                                    .buttonStyle(.borderedProminent)
+                            }.padding(12)
+                        }
+                    }
                 }
             }
         case .tool:

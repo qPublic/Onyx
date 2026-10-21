@@ -563,6 +563,7 @@ final class Assistant: ObservableObject {
         else { s += " For math, work step by step and double-check the arithmetic." }
         s += " When the user shares an image or their screen, you get a description made by image recognition and OCR; answer about it directly."
         if let m = AIMemory.shared.context(for: Self.currentRequest) { s += "\n" + m + "\n" }
+        if let f = AIFeedback.shared.context(for: Self.currentRequest) { s += "\n" + f }
         if let carryOver { s += "\nEarlier in this conversation (summary): " + carryOver + "\n" }
         if agent {
             if has("search_web") { s += " To answer questions about current events or facts you're unsure of, use search_web and cite the sources." }

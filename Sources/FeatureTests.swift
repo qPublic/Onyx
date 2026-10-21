@@ -1265,6 +1265,33 @@ enum AIPlusTest {
         check("\"that address I copied\" finds the address", PersonalSearch.rank(docs, query: "what was that address I copied", limit: 1).first?.source == "Copied")
         check("\"what's on my shopping list\" finds groceries", PersonalSearch.rank(docs, query: "shopping list milk", limit: 1).first?.title == "Groceries")
 
+        do {   // its own scope, so the cleanups below run before the checks that follow
+        // Learning from ratings (its own file, never your real one).
+        let fbFile = FileManager.default.temporaryDirectory.appendingPathComponent("onyx-feedback-\(UUID().uuidString).json")
+        AIFeedback.testFile = fbFile; defer { AIFeedback.testFile = nil; try? FileManager.default.removeItem(at: fbFile) }
+        let fb = AIFeedback()   // its own, not the shared one that holds your real ratings
+        let wasLearning = UserDefaults.standard.object(forKey: AIFeedback.key), wasDry = AgentTools.dryRun
+        AgentTools.dryRun = false
+        defer { AgentTools.dryRun = wasDry; if let wasLearning { UserDefaults.standard.set(wasLearning, forKey: AIFeedback.key) } else { UserDefaults.standard.removeObject(forKey: AIFeedback.key) } }
+        fb.rate(nil, question: "explain how photosynthesis works in plants", answer: "Plants turn light, water and CO2 into sugar.", good: true)
+        fb.rate(nil, question: "what is the capital of France", answer: "Paris, the capital city of France, which sits on the Seine river and has been the capital for centuries.", good: false, note: "Answer in one word when I ask a quick fact")
+        let ctx = fb.context(for: "explain photosynthesis in plants please", cloud: false) ?? ""
+        check("feedback: your lesson and a liked similar answer go to the model", ctx.contains("one word") && ctx.contains("sugar") && !ctx.contains("Seine"))
+        check("feedback: a question that isn't similar gets only the lessons", !(fb.context(for: "how tall is mount everest", cloud: false) ?? "").contains("sugar"))
+        for n in 0..<8 { fb.rate(nil, question: "q\(n)", answer: "a\(n)", good: false, note: "lesson number \(n) " + String(repeating: "x", count: 400)) }
+        check("feedback: at most 5 lessons, each cut short (\((fb.context(for: "q") ?? "").count) characters)", (fb.context(for: "q") ?? "").count < 1100 && (fb.context(for: "q") ?? "").components(separatedBy: "\n- ").count == 6)
+        let reload = AIFeedback(); check("feedback: kept on disk", reload.items.count == fb.items.count)
+        let n0 = fb.items.count; fb.rate(nil, question: "a bare thumbs down", answer: "x", good: false)
+        check("feedback: a 👎 with no lesson isn't kept", fb.items.count == n0)
+        fb.rate(nil, question: "what is two plus two", answer: "Four.", good: true); fb.rate(nil, question: "what is two plus two", answer: "It is 4.", good: false, note: "show working")
+        check("feedback: the latest rating of a question wins", fb.items.filter { $0.question == "what is two plus two" }.count == 1)
+        let keep = fb.items.count; fb.rate(nil, question: "what is two plus two", answer: "?", good: false); fb.rate(nil, question: "", answer: "orphan", good: true)
+        check("feedback: a bare 👎 or an answer with no question changes nothing saved", fb.items.count == keep && fb.items.contains { $0.note == "show working" })
+        check("feedback: common words alone don't match a liked answer", (fb.context(for: "what does that mean with your tell", cloud: false) ?? "").contains("sugar") == false)
+        UserDefaults.standard.set(false, forKey: AIFeedback.key); check("feedback: off means nothing is sent", fb.context(for: "explain photosynthesis in plants") == nil)
+        UserDefaults.standard.set(true, forKey: AIFeedback.key)
+        AgentTools.dryRun = true; check("feedback: test runs ignore it", fb.context(for: "explain photosynthesis in plants") == nil); AgentTools.dryRun = false
+        }
         check("memory: same-subject facts replace each other", AIMemory.subject("Their favorite color is teal") == AIMemory.subject("their favorite color is blue"))
         if let t = await OnDeviceTranslate.translate("Good morning, how are you?", to: "Spanish") { note("on-device translation: \(t)"); check("translates with Apple's models", t.lowercased().contains("buen")) }
         else { note("on-device translation: Spanish isn't downloaded on this Mac, so the chat model translates instead") }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.6
+
+### New
+- **Onyx AI learns from your 👍 and 👎.** Rate an answer in the AI tab. Tell it what it should have done after a 👎 and that becomes a lesson it follows from then on (up to your latest five), and, with Apple's on-device model, an answer you liked is shown to it as an example when you ask something similar. Cloud models get your lessons only, never your liked answers. (Neither can be retrained from inside an app, so this is how it learns.) It's on by default; turn it off or forget your ratings in Settings › Privacy › AI › Memory. Kept on this Mac.
+
+### Improved
+- Smaller and faster: the app is under half the size (8.7 MB instead of 21 MB for each chip), and builds take 3 minutes instead of 10.
+
 ## 2.0.5
 
 ### New

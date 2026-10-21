@@ -13,12 +13,16 @@ mkdir -p build "$APP/Contents/MacOS" "$APP/Contents/Resources"
 ARCHS=(arm64 x86_64); [ -n "$ONYX_ARM_ONLY" ] && ARCHS=(arm64)
 PIDS=(); BINS=()
 for A in $ARCHS; do
-  swiftc -sdk "$SDK" -target $A-apple-macosx15.4 -swift-version 5 -O -Xlinker -weak_framework -Xlinker FoundationModels \
+  # Whole-module: optimized across files (faster, smaller), compiled on several threads; unused code dropped when linking.
+  swiftc -sdk "$SDK" -target $A-apple-macosx15.4 -swift-version 5 -O -wmo -num-threads 6 -Xlinker -dead_strip -Xlinker -weak_framework -Xlinker FoundationModels \
     -o "$WORK/Onyx-$A" Sources/*.swift &
   PIDS+=($!); BINS+=("$WORK/Onyx-$A")
 done
 for P in $PIDS; do wait $P; done
 lipo -create $BINS -output "$APP/Contents/MacOS/Onyx"
+# (Signing happens below, after this, so the stripped binary is the one that gets signed.)
+# The app ships without its symbol names (less than half the size); this copy keeps them, to read crash reports with atos.
+cp "$APP/Contents/MacOS/Onyx" "build/Onyx-$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist).symbols" && strip -x "$APP/Contents/MacOS/Onyx" || { echo "strip failed"; exit 1; }
 cp Resources/Info.plist "$APP/Contents/"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cp Resources/*.gif "$APP/Contents/Resources/" 2>/dev/null || true

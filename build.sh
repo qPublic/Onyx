@@ -3,7 +3,7 @@
 # Notarized builds (see docs/Notarizing.md): ONYX_SIGN_ID="Developer ID Application: Name (TEAMID)" ./build.sh dmg notarize
 set -e
 cd "$(dirname "$0")"
-SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
+SDK=${ONYX_SDK:-/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk}   # ONYX_SDK: another SDK (the cloud test machines)
 # Put together and signed in a temporary folder, then swapped in at the end, so build/Onyx.app is never half-built
 # (an Onyx that starts while it's building would run unsigned, with none of its settings).
 OUT=build/Onyx.app; WORK=$(mktemp -d); APP="$WORK/Onyx.app"

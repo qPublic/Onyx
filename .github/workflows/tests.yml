@@ -1,0 +1,31 @@
+# Builds Onyx and runs the self-tests that don't need Apple's on-device AI, on GitHub's Mac machines.
+# The full suite (including the AI tests) still runs on a Mac with Apple Intelligence: ./test.sh
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (Apple silicon half)
+        run: |
+          export ONYX_SDK="$(xcrun --show-sdk-path)" ONYX_ARM_ONLY=1
+          ./build.sh
+
+      - name: Run the tests
+        run: ./test.sh --no-build --no-apple-ai
+
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: /tmp/onyx-tests.*/*.log

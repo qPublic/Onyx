@@ -1,6 +1,7 @@
 #!/bin/zsh
 # Runs every Onyx self-test that only writes logs: no screenshots, nothing of yours is changed.
 # Usage: ./test.sh [--no-build] [--full-ai] [--intel]   (the full 100-question AI suite takes about 4 minutes; by default 20 of them run)
+# --no-apple-ai skips the checks that need Apple's on-device AI (GitHub's test machines don't have it).
 # --intel runs the Intel half of the app under Rosetta, skipping the checks of Apple's on-device AI (Intel Macs don't have it).
 cd "$(dirname "$0")"
 [[ "$*" == *--no-build* ]] || ./build.sh >/dev/null || { echo "Build failed"; exit 1; }
@@ -22,7 +23,7 @@ run() {   # name, log file, then env and args for the app
   grep -E "^FAIL|^✗" "$log" | head -8
 }
 run features   "$T/extras.log"   --env ONYX_EXTRASTEST="$T/extras.log"
-[[ -z "$ARCH" ]] && run ai-parts   "$T/aiplus.log"   --env ONYX_AIPLUSTEST="$T/aiplus.log"
+[[ -z "$ARCH" && "$*" != *--no-apple-ai* ]] && run ai-parts   "$T/aiplus.log"   --env ONYX_AIPLUSTEST="$T/aiplus.log"
 run safety     "$T/safety.log"   --env ONYX_SAFETYTEST="$T/safety.log" --args -ai.provider anthropic
 run battery    "$T/battery.log"  --env ONYX_LOWBATTERYTEST="$T/battery.log"
 run autoclose  "$T/close.log"    --env ONYX_AUTOCLOSETEST="$T/close.log" --args -autoCloseDelay 5
@@ -39,7 +40,7 @@ python3 Tests/mockteachmore.py "$T/teachmore.log" >/dev/null 2>&1 & TM=$!; sleep
 run school     "$T/school.log"   --env ONYX_SCHOOLTEST="$T/school.log"
 kill $TM 2>/dev/null
 run energy     "$T/energy.log"   --env ONYX_ENERGYTEST="$T/energy.log"
-if [[ -n "$ARCH" ]]; then echo "── ai-suite: skipped on Intel (no Apple on-device AI)"
+if [[ -n "$ARCH" || "$*" == *--no-apple-ai* ]]; then echo "── ai-suite: skipped (no Apple on-device AI here)"
 elif [[ "$*" == *--full-ai* ]]; then run ai-suite "$T/eval.log" --env ONYX_AIEVAL="$T/eval.log" --args -ai.effort medium -ai.provider apple
 else run ai-suite "$T/eval.log" --env ONYX_AIEVAL="$T/eval.log" --env ONYX_AIEVAL_QUICK=1 --args -ai.effort medium -ai.provider apple; fi
 echo; echo "Logs: $T"

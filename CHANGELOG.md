@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.7
+
+### New
+- **Change the AI model from the AI tab.** The model menu next to the effort icon in the AI tab now lists every model provider (Apple on-device, Claude, ChatGPT, Gemini and the rest, with "needs a key" marked) and the versions your account offers for it, so you don't have to open Settings. Keys still go in Settings.
+
 ## 2.0.6
 
 ### New

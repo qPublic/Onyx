@@ -512,6 +512,9 @@ struct AITab: View {
     @FocusState private var focused: Bool
 
     @AppStorage(AIEffort.key) private var effortRaw = AIEffort.medium.rawValue
+    @AppStorage(CloudAI.providerKey) private var providerRaw = AIProvider.apple.rawValue
+    @State private var versions: [String] = []   // the chosen provider's models, fetched when you switch to it
+    @State private var versionTick = 0
     @State private var dropping = false
     @State private var correcting: UUID?   // the answer a 👎 note is being written for
     @State private var correction = ""
@@ -612,7 +615,21 @@ struct AITab: View {
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Ask about an image, a file or selected text").accessibilityLabel("Attach")
                 Menu {
                     Section("Model: \(CloudAI.label)") {
-                        Button("Change model in Settings…") { (NSApp.delegate as? AppDelegate)?.openSettings() }
+                        Picker("Model", selection: $providerRaw) {
+                            ForEach(AIProvider.allCases) { p in
+                                Text(p.needsKey && Keychain.get(CloudAI.keyAccount(p))?.isEmpty != false ? "\(p.title) (needs a key)" : p.title).tag(p.rawValue)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                        if !versions.isEmpty {
+                            Menu("Version: \(CloudAI.model())") {
+                                Picker("Version", selection: Binding(get: { CloudAI.model() }, set: { UserDefaults.standard.set($0, forKey: CloudAI.modelKey(CloudAI.provider)); versionTick += 1 })) {
+                                    ForEach(versions, id: \.self) { Text($0).tag($0) }
+                                }
+                                .pickerStyle(.inline)
+                            }
+                        }
+                        Button("Keys and more in Settings…") { (NSApp.delegate as? AppDelegate)?.openSettings() }
                     }
                     Picker("Effort", selection: $effortRaw) {
                         ForEach(AIEffort.allCases) { e in
@@ -620,9 +637,13 @@ struct AITab: View {
                         }
                     }
                     .pickerStyle(.inline)
-                } label: { Image(systemName: (AIEffort(rawValue: effortRaw) ?? .medium).icon) }
+                } label: { Image(systemName: (AIEffort(rawValue: effortRaw) ?? .medium).icon).id(versionTick) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .help("Effort: \((AIEffort(rawValue: effortRaw) ?? .medium).title). Higher is slower but smarter.")
+                    .task(id: providerRaw) {
+                        let p = CloudAI.provider
+                        versions = p == .apple || (p.needsKey && Keychain.get(CloudAI.keyAccount(p))?.isEmpty != false) ? [] : ((try? await CloudAI.models(p)) ?? [])
+                    }
+                    .help("Model: \(CloudAI.label). Effort: \((AIEffort(rawValue: effortRaw) ?? .medium).title). Higher is slower but smarter.")
                 TextField(ai.agentMode ? "Tell Onyx what to do…" : "Ask Onyx…", text: $input)
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 10).padding(.vertical, 6)

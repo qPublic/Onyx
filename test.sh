@@ -46,3 +46,4 @@ else run ai-suite "$T/eval.log" --env ONYX_AIEVAL="$T/eval.log" --env ONYX_AIEVA
 echo; echo "Logs: $T"
 fails=0; for k v in ${(kv)RESULT}; do [[ "$v" == *FAIL* || -z "$v" ]] && fails=$((fails + 1)); done
 echo $([ $fails -eq 0 ] && echo "Everything passed" || echo "$fails test group(s) need a look")
+[ $fails -eq 0 ]   # the exit status says it too (the cloud tests go by it)

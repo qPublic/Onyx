@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.0.8
 
 ### New
 - **Four across snap layout.** Drag a window to the notch and pick four equal columns, each running the full height of the screen.

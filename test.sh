@@ -33,6 +33,7 @@ for p in anthropic openai gemini; do
   run cloud-$p "$T/cloud-$p.log" --env ONYX_CLOUDTEST="$T/cloud-$p.log" --env ONYX_AI_BASE=http://127.0.0.1:8765/v1 --env ONYX_AI_TEST_KEY=mock-key --args -ai.provider $p $([ $p = gemini ] && echo -ai.model.gemini busy-model)
 done
 kill $MOCK 2>/dev/null
+run cloud-claudecode "$T/cloud-claudecode.log" --env ONYX_CLOUDTEST="$T/cloud-claudecode.log" --env ONYX_CLAUDE_BIN="$PWD/Tests/mockclaude.sh" --args -ai.provider claudeCode
 python3 Tests/mockimap.py "$T/imap.log" >/dev/null 2>&1 & IMAP=$!; sleep 1
 run mail       "$T/mail.log"     --env ONYX_MAILTEST="$T/mail.log" --env ONYX_MAIL_MOCKLOG="$T/imap.log" --args -mail.skipBulk 1 -mail.cloud 0
 kill $IMAP 2>/dev/null

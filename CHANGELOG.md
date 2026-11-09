@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Four across snap layout.** Drag a window to the notch and pick four equal columns, each running the full height of the screen.
+- **Use your Claude subscription in Onyx AI.** A new "Claude (your Claude Code login, no API key)" model runs the Claude Code on your Mac, so no API key is needed. Answers take a few seconds longer.
+
 ## 2.0.7
 
 ### New

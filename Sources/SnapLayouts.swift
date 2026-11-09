@@ -17,6 +17,7 @@ struct SnapLayout: Identifiable {
         SnapLayout(id: "topBottom", zones: [z("t", 0, 0, 1, 0.5), z("b", 0, 0.5, 1, 0.5)]),
         SnapLayout(id: "twoThirds", zones: [z("l", 0, 0, 2.0 / 3, 1), z("r", 2.0 / 3, 0, 1.0 / 3, 1)]),
         SnapLayout(id: "thirds", zones: [z("l", 0, 0, 1.0 / 3, 1), z("c", 1.0 / 3, 0, 1.0 / 3, 1), z("r", 2.0 / 3, 0, 1.0 / 3, 1)]),
+        SnapLayout(id: "fourColumns", zones: (0..<4).map { z("c\($0)", CGFloat($0) / 4, 0, 0.25, 1) }),
         SnapLayout(id: "quarters", zones: [z("tl", 0, 0, 0.5, 0.5), z("tr", 0.5, 0, 0.5, 0.5), z("bl", 0, 0.5, 0.5, 0.5), z("br", 0.5, 0.5, 0.5, 0.5)]),
         SnapLayout(id: "mainSide", zones: [z("l", 0, 0, 0.5, 1), z("tr", 0.5, 0, 0.5, 0.5), z("br", 0.5, 0.5, 0.5, 0.5)]),
         SnapLayout(id: "full", zones: [z("f", 0, 0, 1, 1)]),

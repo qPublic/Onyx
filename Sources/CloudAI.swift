@@ -7,12 +7,13 @@ import FoundationModels
 // a cloud model is actually used.
 
 enum AIProvider: String, CaseIterable, Identifiable {
-    case apple, anthropic, openai, gemini, xai, mistral, deepseek, groq, openrouter, ollama, custom
+    case apple, claudeCode, anthropic, openai, gemini, xai, mistral, deepseek, groq, openrouter, ollama, custom
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .apple: OS.mayHaveAppleAI ? "Apple on-device (free, private)" : "Apple on-device (\(OS.noAppleAIReason))"
+        case .claudeCode: "Claude (your Claude Code login, no API key)"
         case .anthropic: "Claude (Anthropic)"
         case .openai: "ChatGPT (OpenAI)"
         case .gemini: "Gemini (Google, free with your Google account)"
@@ -28,6 +29,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
     var short: String {
         switch self {
         case .apple: "Apple"
+        case .claudeCode: "Claude Code"
         case .anthropic: "Claude"
         case .openai: "ChatGPT"
         case .gemini: "Gemini"
@@ -41,7 +43,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         }
     }
     var anthropicAPI: Bool { self == .anthropic }
-    var needsKey: Bool { self != .apple && self != .ollama }
+    var needsKey: Bool { self != .apple && self != .ollama && self != .claudeCode }
     var baseURL: String {
         if let test = ProcessInfo.processInfo.environment["ONYX_AI_BASE"] { return test }   // tests: a local stand-in server
         return switch self {
@@ -55,7 +57,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .openrouter: "https://openrouter.ai/api/v1"
         case .ollama: "http://localhost:11434/v1"
         case .custom: UserDefaults.standard.string(forKey: "ai.custom.url") ?? ""
-        case .apple: ""
+        case .apple, .claudeCode: ""
         }
     }
     var keyPage: URL? {
@@ -75,6 +77,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
     /// Used until you pick one from the provider's list (which Onyx fetches once your key is in).
     var defaultModel: String {
         switch self {
+        case .claudeCode: "sonnet"
         case .anthropic: "claude-sonnet-5-5"
         case .openai: "gpt-5"
         case .gemini: "gemini-3.6-flash"
@@ -174,6 +177,7 @@ enum CloudAI {
 
     /// The provider's model list (for the picker in Settings).
     static func models(_ p: AIProvider) async throws -> [String] {
+        if p == .claudeCode { return ["opus", "sonnet", "haiku"] }
         let j = try await send(try request(p, path: "/models", body: nil))
         let ids = ((j["data"] as? [[String: Any]]) ?? []).compactMap { $0["id"] as? String }.map { $0.replacingOccurrences(of: "models/", with: "") }
         let chatty = ids.filter { id in !["embed", "whisper", "tts", "dall-e", "image", "moderation", "audio", "transcribe", "realtime", "search"].contains { id.lowercased().contains($0) } }
@@ -189,6 +193,7 @@ enum CloudAI {
     static func chat(system: String, history: [CloudMessage], tools: [AgentTool], maxTokens: Int = 1500, effort: AIEffort = .current,
                      onTool: @escaping (String, String) -> Void) async throws -> String {
         let p = provider
+        if p == .claudeCode { return try await viaClaudeCode(system: system, history: history, tools: tools, effort: effort, onTool: onTool) }
         var backups = p.backups.filter { $0 != model(p) }, m = resting(model(p)) && !backups.isEmpty ? backups.removeFirst() : model(p)
         var msgs: [[String: Any]] = history.map { encode($0, anthropic: p.anthropicAPI) }
         var useTools = !tools.isEmpty
@@ -257,6 +262,75 @@ enum CloudAI {
             }
         }
         throw CloudError(message: "\(p.short) kept calling tools without answering.")
+    }
+
+    // MARK: Claude Code login
+
+    /// Asks the `claude` command (Claude Code) on this Mac, which is already signed in with your Claude account, so no API key
+    /// is needed. It has no Onyx tools of its own, so they're described in the prompt and it answers `TOOL {json}` to use one.
+    private static func viaClaudeCode(system: String, history: [CloudMessage], tools: [AgentTool], effort: AIEffort,
+                                      onTool: @escaping (String, String) -> Void) async throws -> String {
+        guard let bin = claudeBinary else { throw CloudError(message: "Claude Code isn't installed on this Mac. Install it from claude.com/claude-code, run `claude` once in Terminal to sign in, then try again.") }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("onyx-claude-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var files: [String] = []
+        if history.contains(where: { !$0.images.isEmpty }) {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            for (i, d) in history.flatMap(\.images).enumerated() { let f = dir.appendingPathComponent("image\(i + 1).jpg"); try d.write(to: f); files.append(f.path) }
+        }
+        var sys = system
+        if !tools.isEmpty {
+            sys += "\n\nYou can use these tools. To use one, reply with exactly one line and nothing else: TOOL {\"name\": \"<tool>\", \"args\": {\"<param>\": \"<value>\"}}. You then get the result and continue. When you have what you need, answer normally.\n"
+            sys += tools.map { t in "- \(t.name)(\(t.params.map { $0.name + ($0.optional ? "?" : "") }.joined(separator: ", "))): \(t.description)" }.joined(separator: "\n")
+        }
+        var talk = history.map { ($0.role == .user ? "User: " : "Assistant: ") + $0.text }.joined(separator: "\n\n")
+        if !files.isEmpty { talk += "\n\n(Pictures the user attached, open them with the Read tool: \(files.joined(separator: ", ")))" }
+        for _ in 0..<8 {
+            try Task.checkCancellation()
+            var args = ["-p", "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}",
+                        "--system-prompt", sys, "--model", model(.claudeCode), "--effort", effort.rawValue, "--tools", files.isEmpty ? "" : "Read"]
+            if !files.isEmpty { args += ["--allowedTools", "Read", "--add-dir", dir.path] }
+            let out = try await runClaude(bin, args, input: talk + "\n\nAssistant:").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard out.hasPrefix("TOOL "), !tools.isEmpty,
+                  let call = try? JSONSerialization.jsonObject(with: Data(out.dropFirst(5).utf8)) as? [String: Any], let name = call["name"] as? String else { return out }
+            let result = await run(name, call["args"] as? [String: Any] ?? [:], tools: tools)
+            onTool(name, result)
+            talk += " \(out)\n\nTool result (\(name)): \(result)\n\nAssistant:"
+        }
+        throw CloudError(message: "Claude Code kept calling tools without answering.")
+    }
+
+    static var claudeBinary: String? {
+        if let t = ProcessInfo.processInfo.environment["ONYX_CLAUDE_BIN"] { return t }   // tests: a stand-in
+        let h = NSHomeDirectory()
+        return ["\(h)/.local/bin/claude", "\(h)/.claude/local/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"].first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    private static func runClaude(_ bin: String, _ args: [String], input: String) async throws -> String {
+        let p = Process(), inp = Pipe(), outp = Pipe(), errp = Pipe()
+        p.executableURL = URL(fileURLWithPath: bin); p.arguments = args
+        p.standardInput = inp; p.standardOutput = outp; p.standardError = errp
+        p.currentDirectoryURL = FileManager.default.temporaryDirectory
+        p.environment = ProcessInfo.processInfo.environment.merging(["PATH": "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"]) { _, new in new }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<String, Error>) in
+                DispatchQueue.global().async {
+                    do { try p.run() } catch { c.resume(throwing: CloudError(message: "Couldn't start Claude Code: \(error.localizedDescription)")); return }
+                    inp.fileHandleForWriting.write(Data(input.utf8)); try? inp.fileHandleForWriting.close()
+                    nonisolated(unsafe) var err = Data()
+                    let drained = DispatchGroup()   // both pipes are read at once, so a full one can't stall the command
+                    DispatchQueue.global().async(group: drained) { err = errp.fileHandleForReading.readDataToEndOfFile() }
+                    let data = outp.fileHandleForReading.readDataToEndOfFile()
+                    drained.wait()
+                    p.waitUntilExit()
+                    let text = String(decoding: data, as: UTF8.self)
+                    if p.terminationStatus == 0 { c.resume(returning: text); return }
+                    let msg = (String(decoding: err, as: UTF8.self) + text).trimmingCharacters(in: .whitespacesAndNewlines)
+                    c.resume(throwing: CloudError(message: msg.localizedCaseInsensitiveContains("login") || msg.localizedCaseInsensitiveContains("auth")
+                        ? "Claude Code isn't signed in. Run `claude` in Terminal and sign in, then try again." : "Claude Code error: \(msg.prefix(300))"))
+                }
+            }
+        } onCancel: { if p.isRunning { p.terminate() } }
     }
 
     /// A model that was too busy is skipped for ten minutes, so each answer doesn't wait on it first.
@@ -339,8 +413,13 @@ struct AIModelSettings: View {
                 }
             }
             if let page = p.keyPage { Link(p == .ollama ? "Get Ollama" : p == .gemini ? "Get a free Gemini key with your Google account" : "Get a \(p.short) API key", destination: page).font(.caption) }
+            if p == .claudeCode {
+                Text(CloudAI.claudeBinary == nil ? "Claude Code isn't installed on this Mac. Install it from claude.com/claude-code and run `claude` once in Terminal to sign in."
+                     : "Uses the Claude Code on this Mac, so your Claude subscription pays and you need no API key. Each answer takes a few seconds longer. Models: opus, sonnet or haiku.")
+                    .font(.caption).foregroundStyle(CloudAI.claudeBinary == nil ? .orange : .secondary)
+            }
             if p == .anthropic {
-                Text("Claude needs an API key, and Anthropic charges for it. Signing in with your Claude or Google account only works in Anthropic's own apps, not in other apps like Onyx. For a big model that's free, pick Gemini and get a free key with your Google account.")
+                Text("This one needs an API key, and Anthropic charges for it. To use your Claude subscription instead, pick \"Claude (your Claude Code login)\" above. For a big model that's free, pick Gemini and get a free key with your Google account.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if p == .gemini {

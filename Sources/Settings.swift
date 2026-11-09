@@ -518,7 +518,7 @@ struct BehaviorSettings: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Toggle("Snap layouts", isOn: $snapLayouts)
-                    Text("Drag a window up to the notch to pick a layout: halves, top/bottom, thirds, quarters and more. Needs Accessibility.")
+                    Text("Drag a window up to the notch to pick a layout: halves, top/bottom, thirds, four across, quarters and more. Needs Accessibility.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 2) {

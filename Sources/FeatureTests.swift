@@ -1179,6 +1179,22 @@ enum CloudTest {
         func note(_ s: String) { log.append(s); try? log.joined(separator: "\n").write(toFile: file, atomically: true, encoding: .utf8) }
         func check(_ name: String, _ ok: Bool) { note((ok ? "PASS " : "FAIL ") + name); if !ok { fails += 1 } }
         note("provider \(CloudAI.provider.rawValue), model \(CloudAI.model()), active \(CloudAI.active)")
+        if CloudAI.provider == .claudeCode {
+            // The stand-in `claude` (ONYX_CLAUDE_BIN) answers like Claude Code: plain text, or one TOOL line before the final answer.
+            let r = (try? await CloudAI.complete(system: "Be brief.", prompt: "Say hello.")) ?? ""
+            check("Claude Code: plain answer (\(r))", r == "hello from stand-in model=sonnet effort=low tools=")
+            let m = (try? await CloudAI.models(.claudeCode)) ?? []
+            check("Claude Code: lists opus, sonnet, haiku", m == ["opus", "sonnet", "haiku"])
+            let ai = Assistant.shared
+            ai.reset(); ai.agentMode = true
+            ai.send("Please work out 17 times 23 for my homework")
+            let t0 = Date()
+            while ai.busy && Date().timeIntervalSince(t0) < 30 { try? await Task.sleep(for: .milliseconds(100)) }
+            check("Claude Code: used the calculator tool", ai.messages.contains { $0.role == .tool && $0.text.hasPrefix("calculate") })
+            check("Claude Code: answer came back", (ai.messages.last { $0.role == .assistant }?.text ?? "").contains("391"))
+            note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED")
+            exit(0)
+        }
         let models = (try? await CloudAI.models(CloudAI.provider)) ?? []
         check("lists models, without embedding ones: \(models)", models.contains("mock-large") && !models.contains { $0.contains("embedding") })
         do { let r = try await CloudAI.complete(system: "Be brief.", prompt: "Say hello."); check("plain answer: \(r)", r.contains("Hello from mock")) }

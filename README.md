@@ -69,7 +69,7 @@ Some features need a little setup in Settings first:
 
 - **Calendar & Mail:** add your Google accounts and email so every calendar shows in one place and events from your email land on it.
 - **Academy Sign-Up (TeachMore):** in Settings › Academy Sign-Up, paste your school's TeachMore link, choose a teacher, and Onyx signs you up the moment they post the academy. Turn on **View › Developer › Allow JavaScript from Apple Events** in Chrome first (Safari: **Develop › Allow JavaScript from Apple Events**).
-- **Onyx AI with a cloud model:** Settings › Privacy › AI model, where you can paste a key for Claude, ChatGPT, Gemini or another provider.
+- **Onyx AI with a cloud model:** Settings › Privacy › AI model, where you can paste a key for Claude, ChatGPT, Gemini or another provider. If you use Claude Code, pick "Claude (your Claude Code login, no API key)" there and your Claude subscription is used instead of a key.
 - **Canvas:** Settings › Live › Canvas connects your school's Canvas so you can see what's due.
 - **Live Wallpapers:** menu bar icon › **Live Wallpapers…**, or create your own with AI.
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.9
+
+### New
+- **Fable in the Claude Code model list.** With "Claude (your Claude Code login, no API key)" you can now pick fable, as well as opus, sonnet and haiku.
+
+### Fixed
+- **Claude Code only sees the picture you attach.** When you sent a picture with the Claude Code model, it was allowed to read any file on your Mac. Now it can read only the picture.
+- **Onyx AI opens websites only.** Its "open a link" action no longer opens other kinds of links, which could run things on your Mac.
+- **Onyx AI no longer gets stuck finding files.** A search with a very long list of results could leave it waiting forever.
+- **Events from "Read carefully" senders no longer go missing.** When an email named a weekday ("practice is moved to Thursday"), Onyx's second check could throw the event away. It now works out the date itself first.
+- **Claude Code can't hang forever.** If it takes more than 5 minutes, Onyx stops it and tells you.
+
 ## 2.0.8
 
 ### New

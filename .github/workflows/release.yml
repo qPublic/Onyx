@@ -22,7 +22,12 @@ jobs:
       - name: Get the DMG built on the Mac
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          git fetch --depth=1 origin release-assets:release-assets
+          # The DMG should be pushed before the tag. If the tag got here first, wait up to 10 minutes for it.
+          for i in $(seq 1 40); do
+            git fetch --depth=1 origin +release-assets:release-assets
+            git cat-file -e "release-assets:Onyx-${VERSION}.dmg" 2>/dev/null && break
+            echo "Onyx-${VERSION}.dmg isn't on release-assets yet, waiting…"; sleep 15
+          done
           git show "release-assets:Onyx-${VERSION}.dmg" > "Onyx-${VERSION}.dmg"
           ls -l "Onyx-${VERSION}.dmg"
 

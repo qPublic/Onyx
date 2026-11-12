@@ -266,7 +266,8 @@ enum AgentTools {
             AgentTool(name: "open_url", description: "Open a website in the default browser", params: [("url", "Full URL", false)], requires: ["open", "go to", "website", "site", "http", ".com", "visit", "link"]) { a in
                 guard var s = arg(a, "url") else { return "Missing URL" }
                 if !s.contains("://") { s = "https://" + s }
-                guard let u = URL(string: s) else { return "Invalid URL" }
+                // Websites only: other link types (file:, shortcuts:, ssh: …) can run things on the Mac.
+                guard let u = URL(string: s), ["http", "https"].contains(u.scheme?.lowercased() ?? "") else { return "Invalid URL (only websites can be opened)" }
                 await MainActor.run { _ = NSWorkspace.shared.open(u) }
                 return "Opened \(s)"
             },
@@ -283,8 +284,10 @@ enum AgentTools {
                 p.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
                 p.arguments = ["-onlyin", NSHomeDirectory(), "-name", q]
                 p.standardOutput = pipe
-                try p.run(); p.waitUntilExit()
-                let lines = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                try p.run()
+                let found = pipe.fileHandleForReading.readDataToEndOfFile()   // read first: a long list fills the pipe and mdfind would never finish
+                p.waitUntilExit()
+                let lines = String(decoding: found, as: UTF8.self)
                     .split(separator: "\n").filter { !$0.contains("/Library/") }.prefix(8)
                 return lines.isEmpty ? "No files found for \(q)" : lines.joined(separator: "\n")
             },

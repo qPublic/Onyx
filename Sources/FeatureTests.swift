@@ -11,6 +11,12 @@ import PDFKit
 import Translation
 import UniformTypeIdentifiers
 
+/// Apple's on-device model is ready on this Mac. GitHub's test Macs don't have it, so the few checks that need it are skipped there.
+var appleAIReady: Bool {
+    if #available(macOS 26, *), OS.mayHaveAppleAI { return SystemLanguageModel.default.availability == .available }
+    return false
+}
+
 // MARK: - Self-test (debug): ONYX_FEATURES_TEST=<dir> checks AirPods, rain, weather stations, voice and settings sync,
 // writing features.log (and a screenshot of the AirPods pop-up) there, then quits. Never touches your real settings.
 
@@ -909,7 +915,7 @@ enum ExtrasTest {
         let long = (1...14).map { i in "Section \(i). " + String(repeating: "The committee reviewed routine budget items and approved minor changes. ", count: 8) + (i == 9 ? "The launch date was moved to March 14 because the supplier was late. " : "") }.joined(separator: "\n")
         let doc = AIDocument(name: "minutes.txt", text: long)
         let t0 = Date()
-        if #available(macOS 26, *), let notes = try? await Assistant.shared.read(doc, for: "When is the launch, and why did it change?", effort: .medium) {
+        if #available(macOS 26, *), appleAIReady, let notes = try? await Assistant.shared.read(doc, for: "When is the launch, and why did it change?", effort: .medium) {
             note(String(format: "long document (%d chars) read in %.0f s:\n", long.count, Date().timeIntervalSince(t0)) + notes.prefix(700))
             check("notes found the launch date", notes.contains("March 14") || notes.lowercased().contains("march"))
         }
@@ -1184,7 +1190,12 @@ enum CloudTest {
             let r = (try? await CloudAI.complete(system: "Be brief.", prompt: "Say hello.")) ?? ""
             check("Claude Code: plain answer (\(r))", r == "hello from stand-in model=sonnet effort=low tools=")
             let m = (try? await CloudAI.models(.claudeCode)) ?? []
-            check("Claude Code: lists opus, sonnet, haiku", m == ["opus", "sonnet", "haiku"])
+            check("Claude Code: lists fable, opus, sonnet, haiku", m == ["fable", "opus", "sonnet", "haiku"])
+            if let img = AISelfTest.render(["Invoice 4417"]), let jpg = CloudAI.jpeg(img) {
+                // A picture goes in its own folder, and Claude Code may read only that folder (no blanket permission to read files).
+                let p = (try? await CloudAI.complete(system: "Be brief.", prompt: "What is this?", images: [jpg])) ?? ""
+                check("Claude Code: a picture is readable, the rest of the Mac isn't (\(p))", p.hasPrefix("picture tools=Read allowed=none folder=onyx-claude-") && p.hasSuffix("files=image1.jpg"))
+            }
             let ai = Assistant.shared
             ai.reset(); ai.agentMode = true
             ai.send("Please work out 17 times 23 for my homework")
@@ -1406,6 +1417,13 @@ enum SafetyTest {
         check("an instruction hidden in a web page is refused", (await call("Summarize this web page", untrusted: true)).hasPrefix("Not done"))
         check("the user's own request still works on a page", await call("Copy the phone number from this page", untrusted: true) == "Done.")
         check("with no outside text, a cloud model can act", await call("Summarize this web page", untrusted: false) == "Done.")
+        // open_url is for websites: a link that runs something on the Mac is refused (nothing opens in this check).
+        AgentTools.dryRun = false; Assistant.currentRequest = "open the link"; Assistant.untrusted = false; ToolBudget.reset()
+        if let open = AgentTools.all.first(where: { $0.name == "open_url" }), let args = try? ToolArgs(json: #"{"url": "shortcuts://run-shortcut?name=x"}"#) {
+            let r = (try? await open.call(arguments: args)) ?? "error"
+            check("open_url refuses links that aren't websites (\(r))", r.hasPrefix("Invalid URL"))
+        }
+        AgentTools.dryRun = true
 
         for (u, want) in [("onyx://focus?minutes=45", "focus 45"), ("onyx://timer", "timer 10"), ("onyx://ask?q=hello", "ask hello"),
                           ("onyx://copy-text", "copy text"), ("onyx://screenshot?mode=screen", "screenshot screen"), ("onyx://nope", "unknown link nope")] {
@@ -1521,9 +1539,12 @@ enum MailTest {
         check("merges an event that's on two accounts", merged.count == 3 && merged[0].copies.count == 1)
 
         // The stand-in mail server: sign in, read, find events (on-device model), never change anything.
-        let bad = await MailAccounts.signIn(address: "test@example.com", password: "wrong", host: "127.0.0.1", port: 8766)
-        guard case .success(var acct) = await MailAccounts.signIn(address: "test@example.com", password: "mock-pass", host: "127.0.0.1", port: 8766) else {
-            note("(no stand-in mail server on 127.0.0.1:8766, so sign-in and reading were skipped; ./test.sh starts one)")
+        let env = ProcessInfo.processInfo.environment, port = env["ONYX_MAIL_MOCKPORT"].flatMap { Int($0) } ?? 8766
+        let bad = await MailAccounts.signIn(address: "test@example.com", password: "wrong", host: "127.0.0.1", port: port)
+        guard case .success(var acct) = await MailAccounts.signIn(address: "test@example.com", password: "mock-pass", host: "127.0.0.1", port: port) else {
+            // ./test.sh starts the stand-in itself, so there a missing one is a failure, not a quiet skip.
+            if env["ONYX_MAIL_MOCKLOG"] != nil { check("the stand-in mail server answered on port \(port)", false) }
+            note("(no stand-in mail server on 127.0.0.1:\(port), so sign-in and reading were skipped; ./test.sh starts one)")
             note(fails == 0 ? "ALL PASSED" : "\(fails) FAILED"); exit(0)
         }
         if case .failure = bad { check("a wrong password is refused", true) } else { check("a wrong password is refused", false) }
@@ -1539,14 +1560,16 @@ enum MailTest {
             let today = cal.startOfDay(for: Date())
             func at(_ days: Int, _ h: Int, _ m: Int) -> Date { cal.date(bySettingHour: h, minute: m, second: 0, of: cal.date(byAdding: .day, value: days, to: today)!)! }
             func has(_ word: String, _ start: Date) -> Bool { got.contains { $0.title.lowercased().contains(word) && $0.start == start && !$0.allDay } }
-            check("dinner on the day and time in the email", has("dinner", at(4, 19, 30)))
+            let ai = appleAIReady   // without the on-device model only the invitation is found
+            if !ai { note("SKIP the four checks that need Apple's on-device AI (not on this Mac)") }
+            if ai { check("dinner on the day and time in the email", has("dinner", at(4, 19, 30))) }
             let d6 = cal.dateComponents([.year, .month, .day], from: cal.date(byAdding: .day, value: 6, to: today)!)
             var nyc = DateComponents(year: d6.year, month: d6.month, day: d6.day, hour: 15); nyc.timeZone = ny
             check("the invitation, at 3 PM New York time", got.contains { $0.title == "Parent-teacher conference" && $0.location == "Room 204" && $0.start == cal.date(from: nyc) })
             let thursday = (1...7).map { cal.date(byAdding: .day, value: $0, to: today)! }.first { cal.component(.weekday, from: $0) == 5 }!
-            check("the coach's practice, read carefully", got.contains { $0.title.lowercased().contains("practice") && $0.careful && $0.start == cal.date(bySettingHour: 16, minute: 0, second: 0, of: thursday)! })
-            check("coffee tomorrow at 9", has("coffee", at(1, 9, 0)))
-            check("nothing from the newsletter, the past game or the thank-you note (\(got.count) events)", got.count == 4)
+            if ai { check("the coach's practice, read carefully", got.contains { $0.title.lowercased().contains("practice") && $0.careful && $0.start == cal.date(bySettingHour: 16, minute: 0, second: 0, of: thursday)! }) }
+            if ai { check("coffee tomorrow at 9", has("coffee", at(1, 9, 0))) }
+            if ai { check("nothing from the newsletter, the past game or the thank-you note (\(got.count) events)", got.count == 4) }
             check("never opened the blocked sender's email, the newsletter or the dateless one",
                   !MailWatch.shared.readLog.contains { ["Meeting Monday", "Fall sale ends Sunday!", "Thanks!"].contains($0) })
             if let p = ProcessInfo.processInfo.environment["ONYX_MAIL_MOCKLOG"], let l = try? String(contentsOfFile: p, encoding: .utf8) {

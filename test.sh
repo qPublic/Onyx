@@ -28,16 +28,20 @@ run safety     "$T/safety.log"   --env ONYX_SAFETYTEST="$T/safety.log" --args -a
 run battery    "$T/battery.log"  --env ONYX_LOWBATTERYTEST="$T/battery.log"
 run autoclose  "$T/close.log"    --env ONYX_AUTOCLOSETEST="$T/close.log" --args -autoCloseDelay 5
 run tour       "$T/tour.log"     --env ONYX_TOURTEST="$T/tour.log"
-python3 Tests/mockai.py "$T/mock.log" >/dev/null 2>&1 & MOCK=$!; sleep 1
+# The stand-in servers: AI and mail take any free port; a server that didn't start counts as a failed group (never a silent skip).
+freeport() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+up() { kill -0 $1 2>/dev/null || { RESULT[$2-server]="FAILED to start (is port $3 busy? lsof -i :$3)"; echo "── $2-server: ${RESULT[$2-server]}"; }; }
+trap 'kill $MOCK $IMAP $TM 2>/dev/null' EXIT INT TERM   # no stand-in is left running if the run is stopped halfway
+AIPORT=$(freeport); python3 Tests/mockai.py "$T/mock.log" $AIPORT >/dev/null 2>&1 & MOCK=$!; sleep 1; up $MOCK ai $AIPORT
 for p in anthropic openai gemini; do
-  run cloud-$p "$T/cloud-$p.log" --env ONYX_CLOUDTEST="$T/cloud-$p.log" --env ONYX_AI_BASE=http://127.0.0.1:8765/v1 --env ONYX_AI_TEST_KEY=mock-key --args -ai.provider $p $([ $p = gemini ] && echo -ai.model.gemini busy-model)
+  run cloud-$p "$T/cloud-$p.log" --env ONYX_CLOUDTEST="$T/cloud-$p.log" --env ONYX_AI_BASE=http://127.0.0.1:$AIPORT/v1 --env ONYX_AI_TEST_KEY=mock-key --args -ai.provider $p $([ $p = gemini ] && echo -ai.model.gemini busy-model)
 done
 kill $MOCK 2>/dev/null
 run cloud-claudecode "$T/cloud-claudecode.log" --env ONYX_CLOUDTEST="$T/cloud-claudecode.log" --env ONYX_CLAUDE_BIN="$PWD/Tests/mockclaude.sh" --args -ai.provider claudeCode
-python3 Tests/mockimap.py "$T/imap.log" >/dev/null 2>&1 & IMAP=$!; sleep 1
-run mail       "$T/mail.log"     --env ONYX_MAILTEST="$T/mail.log" --env ONYX_MAIL_MOCKLOG="$T/imap.log" --args -mail.skipBulk 1 -mail.cloud 0
+MAILPORT=$(freeport); python3 Tests/mockimap.py "$T/imap.log" $MAILPORT >/dev/null 2>&1 & IMAP=$!; sleep 1; up $IMAP mail $MAILPORT
+run mail       "$T/mail.log"     --env ONYX_MAILTEST="$T/mail.log" --env ONYX_MAIL_MOCKLOG="$T/imap.log" --env ONYX_MAIL_MOCKPORT=$MAILPORT --args -mail.skipBulk 1 -mail.cloud 0
 kill $IMAP 2>/dev/null
-python3 Tests/mockteachmore.py "$T/teachmore.log" >/dev/null 2>&1 & TM=$!; sleep 1
+python3 Tests/mockteachmore.py "$T/teachmore.log" >/dev/null 2>&1 & TM=$!; sleep 1; up $TM school 8767
 run school     "$T/school.log"   --env ONYX_SCHOOLTEST="$T/school.log"
 kill $TM 2>/dev/null
 run energy     "$T/energy.log"   --env ONYX_ENERGYTEST="$T/energy.log"

@@ -177,7 +177,7 @@ enum CloudAI {
 
     /// The provider's model list (for the picker in Settings).
     static func models(_ p: AIProvider) async throws -> [String] {
-        if p == .claudeCode { return ["opus", "sonnet", "haiku"] }
+        if p == .claudeCode { return ["fable", "opus", "sonnet", "haiku"] }
         let j = try await send(try request(p, path: "/models", body: nil))
         let ids = ((j["data"] as? [[String: Any]]) ?? []).compactMap { $0["id"] as? String }.map { $0.replacingOccurrences(of: "models/", with: "") }
         let chatty = ids.filter { id in !["embed", "whisper", "tts", "dall-e", "image", "moderation", "audio", "transcribe", "realtime", "search"].contains { id.lowercased().contains($0) } }
@@ -285,14 +285,16 @@ enum CloudAI {
         }
         var talk = history.map { ($0.role == .user ? "User: " : "Assistant: ") + $0.text }.joined(separator: "\n\n")
         if !files.isEmpty { talk += "\n\n(Pictures the user attached, open them with the Read tool: \(files.joined(separator: ", ")))" }
+        talk += "\n\nAssistant:"
         for _ in 0..<8 {
             try Task.checkCancellation()
             var args = ["-p", "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}",
                         "--system-prompt", sys, "--model", model(.claudeCode), "--effort", effort.rawValue, "--tools", files.isEmpty ? "" : "Read"]
-            if !files.isEmpty { args += ["--allowedTools", "Read", "--add-dir", dir.path] }
-            let out = try await runClaude(bin, args, input: talk + "\n\nAssistant:").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard out.hasPrefix("TOOL "), !tools.isEmpty,
-                  let call = try? JSONSerialization.jsonObject(with: Data(out.dropFirst(5).utf8)) as? [String: Any], let name = call["name"] as? String else { return out }
+            // Read is allowed only inside the folder it runs in (the pictures), never the rest of the Mac: no --allowedTools.
+            let out = try await runClaude(bin, args, input: talk, in: files.isEmpty ? nil : dir).trimmingCharacters(in: .whitespacesAndNewlines)
+            // The tool line may come after a few words ("Let me check.") or inside a code block.
+            guard !tools.isEmpty, let line = out.split(separator: "\n").map({ $0.trimmingCharacters(in: CharacterSet(charactersIn: " `")) }).first(where: { $0.hasPrefix("TOOL {") }),
+                  let call = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(5).utf8)) as? [String: Any], let name = call["name"] as? String else { return out }
             let result = await run(name, call["args"] as? [String: Any] ?? [:], tools: tools)
             onTool(name, result)
             talk += " \(out)\n\nTool result (\(name)): \(result)\n\nAssistant:"
@@ -300,22 +302,31 @@ enum CloudAI {
         throw CloudError(message: "Claude Code kept calling tools without answering.")
     }
 
+    /// Where `claude` runs when there are no pictures: an empty folder, so it has nothing of yours in reach.
+    private static let emptyFolder: URL = {
+        let u = FileManager.default.temporaryDirectory.appendingPathComponent("onyx-claude-empty")
+        try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        return u
+    }()
+
     static var claudeBinary: String? {
         if let t = ProcessInfo.processInfo.environment["ONYX_CLAUDE_BIN"] { return t }   // tests: a stand-in
         let h = NSHomeDirectory()
         return ["\(h)/.local/bin/claude", "\(h)/.claude/local/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"].first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    private static func runClaude(_ bin: String, _ args: [String], input: String) async throws -> String {
+    private static func runClaude(_ bin: String, _ args: [String], input: String, in folder: URL? = nil) async throws -> String {
         let p = Process(), inp = Pipe(), outp = Pipe(), errp = Pipe()
         p.executableURL = URL(fileURLWithPath: bin); p.arguments = args
         p.standardInput = inp; p.standardOutput = outp; p.standardError = errp
-        p.currentDirectoryURL = FileManager.default.temporaryDirectory
+        p.currentDirectoryURL = folder ?? emptyFolder
         p.environment = ProcessInfo.processInfo.environment.merging(["PATH": "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"]) { _, new in new }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (c: CheckedContinuation<String, Error>) in
                 DispatchQueue.global().async {
                     do { try p.run() } catch { c.resume(throwing: CloudError(message: "Couldn't start Claude Code: \(error.localizedDescription)")); return }
+                    nonisolated(unsafe) var slow = false   // a stuck command (say, waiting for a sign-in) is stopped, not waited on forever
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 300) { if p.isRunning { slow = true; p.terminate() } }
                     inp.fileHandleForWriting.write(Data(input.utf8)); try? inp.fileHandleForWriting.close()
                     nonisolated(unsafe) var err = Data()
                     let drained = DispatchGroup()   // both pipes are read at once, so a full one can't stall the command
@@ -325,6 +336,7 @@ enum CloudAI {
                     p.waitUntilExit()
                     let text = String(decoding: data, as: UTF8.self)
                     if p.terminationStatus == 0 { c.resume(returning: text); return }
+                    if slow { c.resume(throwing: CloudError(message: "Claude Code took more than 5 minutes, so Onyx stopped it. Try again, or pick a faster model.")); return }
                     let msg = (String(decoding: err, as: UTF8.self) + text).trimmingCharacters(in: .whitespacesAndNewlines)
                     c.resume(throwing: CloudError(message: msg.localizedCaseInsensitiveContains("login") || msg.localizedCaseInsensitiveContains("auth")
                         ? "Claude Code isn't signed in. Run `claude` in Terminal and sign in, then try again." : "Claude Code error: \(msg.prefix(300))"))
@@ -415,7 +427,7 @@ struct AIModelSettings: View {
             if let page = p.keyPage { Link(p == .ollama ? "Get Ollama" : p == .gemini ? "Get a free Gemini key with your Google account" : "Get a \(p.short) API key", destination: page).font(.caption) }
             if p == .claudeCode {
                 Text(CloudAI.claudeBinary == nil ? "Claude Code isn't installed on this Mac. Install it from claude.com/claude-code and run `claude` once in Terminal to sign in."
-                     : "Uses the Claude Code on this Mac, so your Claude subscription pays and you need no API key. Each answer takes a few seconds longer. Models: opus, sonnet or haiku.")
+                     : "Uses the Claude Code on this Mac, so your Claude subscription pays and you need no API key. Each answer takes a few seconds longer. Models: fable, opus, sonnet or haiku.")
                     .font(.caption).foregroundStyle(CloudAI.claudeBinary == nil ? .orange : .secondary)
             }
             if p == .anthropic {

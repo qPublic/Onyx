@@ -110,7 +110,14 @@ enum MailEventFinder {
                 try await s.respond(to: prompt(m, limit: careful ? 7000 : 3000), schema: schema, options: GenerationOptions(sampling: .greedy)).content
             }
             list = candidates(out)
-            if careful { for i in list.indices { list[i] = try await review(list[i], m) } }
+            if careful {
+                for i in list.indices {
+                    // The small model often puts a weekday on the wrong date. The second look gets the day worked out in code,
+                    // or it calls a real event wrong because of that date and the event is lost.
+                    if let d = resolvedDay(list[i].evidence, sent: m.date, model: day(list[i].date)) { list[i].date = dayText(d) }
+                    list[i] = try await review(list[i], m)
+                }
+            }
         }
         return list.compactMap { c in
             guard !c.title.isEmpty, let t = check(c, in: m) else { return nil }
@@ -147,6 +154,10 @@ enum MailEventFinder {
     static func day(_ s: String) -> Date? {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
         return f.date(from: s.trimmingCharacters(in: .whitespaces))
+    }
+    static func dayText(_ d: Date) -> String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: d)
     }
 
     static func words(_ s: String) -> [String] { s.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init) }

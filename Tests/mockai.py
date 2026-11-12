@@ -66,4 +66,4 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.reply(200, {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "calculate", "arguments": "{\"expression\": \"17*23\"}"}}]}}]})
             if has_image(msgs): return self.reply(200, {"choices": [{"message": {"role": "assistant", "content": "The picture says Invoice 4417."}}]})
             return self.reply(200, {"choices": [{"message": {"role": "assistant", "content": "Hello from mock GPT."}}]})
-http.server.HTTPServer(("127.0.0.1", 8765), H).serve_forever()
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[2]) if len(sys.argv) > 2 else 8765), H).serve_forever()

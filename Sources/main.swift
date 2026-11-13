@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var onboardingWindow: NSWindow?
     var tourWindow: NSWindow?
     private var bag = Set<AnyCancellable>()
+    private var schoolAlert: NSStatusItem?   // in the menu bar only while Onyx can't sign in to TeachMore
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Prefs.registerDefaults()
@@ -187,7 +188,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         MainActor.assumeIsolated { LidAwake.shared.start() }    // Lid Awake: whether it's on, and the battery while it is
         PrivateGuard.shared.start()             // private or incognito windows: record and read nothing (always on)
         LinkedCalendars.shared.start()          // calendars pasted as a link, updated every 30 minutes
-        MainActor.assumeIsolated { SchoolSignup.shared.start() }   // TeachMore academy sign-up (once it's set up)
+        MainActor.assumeIsolated {
+            SchoolSignup.shared.start()   // TeachMore academy sign-up (once it's set up)
+            SchoolSignup.shared.$signedOut.removeDuplicates().receive(on: DispatchQueue.main)
+                .sink { [weak self] out in MainActor.assumeIsolated { self?.showSchoolAlert(out) } }.store(in: &bag)
+        }
         MeetingWatch.shared.start()             // video calls: countdown + Join in the notch
         Updater.shared.start()                  // new GitHub releases download in the background
         NotesSync.shared.start()                // optional two-way sync with Apple Notes
@@ -585,6 +590,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menuTitles[a.rawValue] = title
         return i
     }
+
+    /// An orange warning in the menu bar while TeachMore has signed you out; click it for Settings › Academy Sign-Up.
+    @MainActor private func showSchoolAlert(_ on: Bool) {
+        guard on else { schoolAlert.map { NSStatusBar.system.removeStatusItem($0) }; schoolAlert = nil; return }
+        guard schoolAlert == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Can't sign in to TeachMore")
+        item.button?.contentTintColor = .systemOrange
+        item.button?.title = " TeachMore"; item.button?.imagePosition = .imageLeading
+        item.button?.toolTip = "Onyx can't sign in to TeachMore. Click to fix it in Settings › Academy Sign-Up."
+        item.button?.target = self; item.button?.action = #selector(openSchoolSettings)
+        schoolAlert = item
+    }
+    @objc func openSchoolSettings() { MainActor.assumeIsolated { SettingsView.open(.school) } }
 
     @objc func captureRegion() { QuickCapture.shared.screenshot(.region) }
     private let services = OnyxServices()

@@ -454,6 +454,7 @@ enum SchoolJS {
     @Published private(set) var reach = ""                         // the last day TeachMore's list of every teacher covers
     @Published private(set) var loadingOfferings = false
     @Published private(set) var hasPassword = false
+    @Published private(set) var signedOut = false   // TeachMore signed you out and Onyx couldn't sign back in: a menu bar alert shows
 
     /// Self-test: a web view instead of your browser, settings that aren't saved, and no notch messages.
     var testPage: SchoolPage?
@@ -521,7 +522,7 @@ enum SchoolJS {
     func update() {
         timer?.invalidate(); timer = nil
         let s = settings
-        guard s.on else { if !checking { status = nil; problem = false }; return }
+        guard s.on else { if !checking { status = nil; problem = false }; signedOut = false; return }
         schedule(after: 2)
     }
 
@@ -546,6 +547,7 @@ enum SchoolJS {
     private func report(_ text: String, problem p: Bool) { status = text; problem = p }
 
     private func warn(_ key: String, _ text: String) {
+        if key == "signedOut" || key == "google" { signedOut = true }   // the self-test checks this too (it shows no menu bar item)
         guard testSettings == nil, warned.insert(key).inserted else { return }
         NotchModel.shared.flash(.message(icon: "exclamationmark.triangle.fill", text: text, tint: .orange), for: 5)
     }
@@ -600,7 +602,7 @@ enum SchoolJS {
                 } else { report("TeachMore sent something Onyx didn't understand. It tries again soon.", problem: true); next = 120 }
                 return
             }
-            warned.removeAll(); reauthTries = 0
+            warned.removeAll(); reauthTries = 0; signedOut = false
             remember(list, teacher: teacher)
             let all = teacher.isEmpty ? await further(list, p, b, s) : list
             if let n = await act(all, p, b, s) { next = n }

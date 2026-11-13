@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.10
+
+### New
+- **A warning in the menu bar when Onyx can't sign in to TeachMore.** If TeachMore signs you out and Onyx can't sign you back in, an orange "TeachMore" warning stays in the menu bar until it works again. Click it to open Settings › Academy Sign-Up.
+
+### Fixed
+- **Events from "Read carefully" senders go missing less often.** Onyx's second check of an email could throw away a real event when it got the weekday wrong. It now only checks that the event is really in the email, and Onyx works out the day itself.
+- **The tour self-test no longer shows a window on your screen.**
+
 ## 2.0.9
 
 ### New

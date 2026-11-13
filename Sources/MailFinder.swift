@@ -79,7 +79,6 @@ enum MailEventFinder {
     @available(macOS 26, *)
     static var reviewSchema: GenerationSchema? { try? GenerationSchema(root: DynamicGenerationSchema(name: "EventCheck", properties: [
         .init(name: "real", description: "True if the email really describes this event for the reader", schema: DynamicGenerationSchema(type: Bool.self)),
-        .init(name: "date", description: "The correct day, yyyy-MM-dd", schema: DynamicGenerationSchema(type: String.self)),
         .init(name: "start", description: "The correct start time, HH:mm in 24-hour time, or empty if none is given", schema: DynamicGenerationSchema(type: String.self)),
     ]), dependencies: []) }
 
@@ -126,16 +125,17 @@ enum MailEventFinder {
         }
     }
 
-    /// Careful senders: a second, separate look at each event against the email.
+    /// Careful senders: a second, separate look at each event against the email. The day is worked out in code, not here:
+    /// asked about the day, the small model gets the weekday wrong and then calls a real event wrong.
     @available(macOS 26, *)
     static func review(_ c: Candidate, _ m: MailMessage) async throws -> Candidate {
         guard let reviewSchema else { return c }
-        let s = LanguageModelSession(instructions: "You check an event someone took from an email. Compare it with the email word by word, and work out weekdays from the day the email was sent.")
-        let ask = prompt(m, limit: 7000) + "\n\nThe event taken from it: \(c.title), on \(c.date)\(c.start.isEmpty ? "" : " at \(c.start)"). Is it right? Give the correct day and start time."
+        let s = LanguageModelSession(instructions: "You check an event someone took from an email. Compare it with the email word by word.")
+        let when = day(c.date).map { ", on " + $0.formatted(.dateTime.weekday(.wide).month(.wide).day().year()) } ?? ""
+        let ask = prompt(m, limit: 7000) + "\n\nThe event taken from it: \(c.title)\(when)\(c.start.isEmpty ? "" : " at \(c.start)"). Is it really in the email, for the reader? Give the correct start time."
         let v = try await Assistant.retrying { try await s.respond(to: ask, schema: reviewSchema, options: GenerationOptions(sampling: .greedy)).content }
         if (try? v.value(Bool.self, forProperty: "real")) == false { var x = c; x.title = ""; return x }
         var x = c
-        if let d = try? v.value(String.self, forProperty: "date"), day(d) != nil { x.date = d }
         if let t = try? v.value(String.self, forProperty: "start") { x.start = t.trimmingCharacters(in: .whitespaces) }
         return x
     }

@@ -756,7 +756,7 @@ enum LauncherPinTest {
     }
 }
 
-// MARK: - Self-test (debug): ONYX_TOURTEST=<file> plays the feature tour in a corner window for 13 s, without taking focus,
+// MARK: - Self-test (debug): ONYX_TOURTEST=<file> plays the feature tour in an invisible corner window for 13 s, without taking focus,
 // starting at slide ONYX_TOURTEST_STEP (0), and logs how far it got (it should advance twice) and the CPU it used.
 private final class TourTestBox: ObservableObject { @Published var step = 0 }
 private struct TourTestHost: View {
@@ -772,6 +772,7 @@ enum TourTest {
         let w = NSWindow(contentRect: NSRect(x: 20, y: 20, width: 520, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
         w.contentView = NSHostingView(rootView: TourTestHost(box: box))
         w.level = .floating; w.orderFrontRegardless()   // on top, so macOS doesn't throttle a covered window's timers
+        w.alphaValue = 0; w.ignoresMouseEvents = true   // invisible and click-through: nothing shows on your screen
         _ = ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "Tour test")
         var times: [String] = []
         let t0 = Date()
@@ -1883,6 +1884,7 @@ enum SchoolTest {
         mlog = await mock("log")
         check("a wrong saved password: typed once, never again until you save it again (\(said), tries \(once ?? -1) then \(mlog["pwtries"] ?? ""))",
               once == 1 && mlog["pwtries"] as? Int == 1 && said.contains("didn't accept") && school.status?.contains("didn't accept") == true)
+        check("can't sign in: the menu bar alert is on", school.signedOut)
         await own.load(URL(string: "http://127.0.0.1:8767/lincoln/students/login")!)
         let there = try? await own.web.evaluateJavaScript(SchoolJS.signIn("sam@school.org", password: "correct-horse", origin: own.googleOrigin, path: own.googlePath)) as? String
         let field = try? await own.web.evaluateJavaScript("document.querySelector('input[type=password]').value") as? String
@@ -1895,6 +1897,7 @@ enum SchoolTest {
         mlog = await mock("log")
         check("its own browser, Google asking which account: names your school account up front and signs in (\(school.status ?? ""), \(mlog["picked"] ?? ""))",
               mlog["picked"] as? String == "school" && school.status?.contains("Watching") == true)
+        check("signed in again: the menu bar alert is gone", !school.signedOut)
         finish()
     }
 }
